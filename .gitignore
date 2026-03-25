@@ -1,0 +1,59 @@
+# =========================
+# KiCad 8.x
+# =========================
+# Backup files
+*-bak
+*.bak
+*~
+*.tmp
+
+# Autosave
+\#auto_saved_files\#
+_autosave-*
+
+# Footprint cache
+fp-info-cache
+
+# KiCad lock files
+*.lck
+
+# Netlist files (regenerated)
+*.net
+
+# KiCad build outputs (we keep fab/ exports tracked separately)
+*-backups/
+
+# =========================
+# Python / Pi firmware dev
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+env/
+.env
+*.egg
+
+# =========================
+# Node (tooling)
+# =========================
+node_modules/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
