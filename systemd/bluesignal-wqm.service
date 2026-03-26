@@ -1,0 +1,19 @@
+[Unit]
+Description=BlueSignal WQM-1 Water Quality Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/bluesignal/src
+ExecStart=/usr/bin/python3 -m main
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONPATH=/opt/bluesignal/src
+
+[Install]
+WantedBy=multi-user.target

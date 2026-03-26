@@ -1,0 +1,10 @@
+limits:
+  max_on_minutes_per_hour: 10
+  cooldown_seconds: 120
+  max_temp_c: 50.0
+schedule:
+  enabled: true
+  start: "07:00"
+  end: "21:00"
+manual:
+  override: false
