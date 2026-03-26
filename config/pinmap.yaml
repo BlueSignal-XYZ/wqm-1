@@ -1,0 +1,20 @@
+i2c:
+  sda: 2
+  scl: 3
+ads1115:
+  address: 0x48
+  channels:
+    turbidity: 0
+    ph: 1
+    tds: 2
+    spare: 3
+ds18b20:
+  gpio: 4
+relay:
+  gpio: 17
+rs485:
+  port: /dev/ttyUSB0
+  baud: 9600
+  parity: N
+  stopbits: 1
+  slave: 1

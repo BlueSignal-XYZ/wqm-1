@@ -1,0 +1,8 @@
+RPi.GPIO>=0.7.1
+smbus2>=0.4.3
+spidev>=3.6
+pyserial>=3.5
+w1thermsensor>=2.3.0
+requests>=2.31.0
+pycryptodome>=3.20.0
+pyyaml>=6.0
