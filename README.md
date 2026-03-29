@@ -50,7 +50,6 @@ The dev kit ships with cloud monitoring via [cloud.bluesignal.xyz](https://cloud
 ```
 wqm-1/
 ├── hardware/
-│   ├── kicad/      # KiCad 8.x project files
 │   ├── bom/        # BOM exports
 │   └── fab/        # Gerbers and fab outputs
 ├── firmware/

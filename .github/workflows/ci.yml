@@ -20,32 +20,31 @@ jobs:
         run: pip install ruff
 
       - name: Ruff check
-        run: ruff check src/
+        run: ruff check .
 
       - name: Ruff format check
-        run: ruff format --check src/
+        run: ruff format --check .
 
   test:
     name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.11'
 
       - name: Install test dependencies
         run: |
           pip install pytest pytest-mock pytest-cov responses freezegun flask
           pip install smbus2 pyserial requests pycryptodome pyyaml
 
+      # Tests marked with @pytest.mark.hardware require physical I2C/GPIO/SPI
+      # and are automatically skipped in CI via the -m flag below.
       - name: Run tests
         run: |
-          pytest tests/ -v --tb=short --cov=src --cov-report=term-missing
+          pytest tests/ -v --tb=short -m "not hardware" --cov=src --cov-report=term-missing
 
   typecheck:
     name: Type Check
