@@ -1,0 +1,60 @@
+name: BOM Check
+
+on:
+  push:
+    branches: [main, master]
+    paths: ['hardware/**']
+  pull_request:
+    paths: ['hardware/**']
+
+jobs:
+  validate-bom:
+    name: Validate BOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check BOM CSV files
+        run: |
+          python3 - <<'SCRIPT'
+          import csv
+          import sys
+          from pathlib import Path
+
+          REQUIRED_COLUMNS = {"Reference", "Value", "Footprint", "Quantity"}
+          bom_dir = Path("hardware/bom")
+          csvs = list(bom_dir.glob("*.csv"))
+
+          if not csvs:
+              print("No CSV BOM files found in hardware/bom/ — skipping validation.")
+              sys.exit(0)
+
+          failed = False
+          for csv_path in csvs:
+              print(f"Checking {csv_path} ...")
+              try:
+                  with open(csv_path, newline="") as f:
+                      reader = csv.DictReader(f)
+                      if reader.fieldnames is None:
+                          print(f"  ERROR: {csv_path} is empty or has no header row")
+                          failed = True
+                          continue
+                      headers = {h.strip() for h in reader.fieldnames}
+                      missing = REQUIRED_COLUMNS - headers
+                      if missing:
+                          print(f"  ERROR: missing columns: {', '.join(sorted(missing))}")
+                          failed = True
+                      else:
+                          rows = list(reader)
+                          print(f"  OK — {len(rows)} rows, all required columns present")
+              except Exception as e:
+                  print(f"  ERROR: failed to parse {csv_path}: {e}")
+                  failed = True
+
+          if failed:
+              sys.exit(1)
+          SCRIPT
