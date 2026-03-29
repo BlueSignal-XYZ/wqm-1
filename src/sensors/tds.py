@@ -50,10 +50,7 @@ class TDSSensor:
         actual_voltage = adc_voltage / TDS_DIVIDER_RATIO
 
         # Temperature compensation: adjust for deviation from 25°C
-        if temp_c is not None:
-            comp_coeff = 1.0 + TDS_TEMP_COEFF * (temp_c - 25.0)
-        else:
-            comp_coeff = 1.0
+        comp_coeff = 1.0 + TDS_TEMP_COEFF * (temp_c - 25.0) if temp_c is not None else 1.0
 
         # Avoid division by zero
         if comp_coeff <= 0:

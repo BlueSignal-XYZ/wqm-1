@@ -5,12 +5,14 @@ Raw SPI driver for the LORA1262-915TCXO module via spidev.
 Implements the SX1262 command interface for LoRa packet TX.
 """
 
+import contextlib
 import logging
 import threading
 import time
 
 import RPi.GPIO as GPIO
 import spidev
+
 from utils.config import (
     LORA_BANDWIDTH,
     LORA_BUSY,
@@ -212,10 +214,8 @@ class SX1262:
         self._wait_busy()
 
         # Setup DIO1 interrupt callback
-        try:
+        with contextlib.suppress(Exception):
             GPIO.remove_event_detect(LORA_DIO1)
-        except Exception:
-            pass
         GPIO.add_event_detect(LORA_DIO1, GPIO.RISING, callback=self._on_dio1)
 
         logger.info(
@@ -463,10 +463,8 @@ class SX1262:
 
     def close(self) -> None:
         """Close SPI and release GPIO."""
-        try:
+        with contextlib.suppress(Exception):
             GPIO.remove_event_detect(LORA_DIO1)
-        except Exception:
-            pass
         if self._spi:
             self._spi.close()
             self._spi = None

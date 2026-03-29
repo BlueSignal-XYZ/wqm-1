@@ -7,9 +7,11 @@ Watchdog: BCM2835 hardware watchdog (/dev/watchdog), must be pet
 """
 
 import atexit
+import contextlib
 import logging
 
 import RPi.GPIO as GPIO
+
 from utils.config import FAN_EN
 
 logger = logging.getLogger("wqm1.fan")
@@ -71,10 +73,8 @@ class FanController:
         return self._is_on
 
     def cleanup(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             GPIO.output(FAN_EN, GPIO.LOW)
-        except Exception:
-            pass
         self._is_on = False
 
 
@@ -84,7 +84,7 @@ class HardwareWatchdog:
     def __init__(self):
         self._fd = None
         try:
-            self._fd = open("/dev/watchdog", "wb", buffering=0)
+            self._fd = open("/dev/watchdog", "wb", buffering=0)  # noqa: SIM115
             logger.info("Hardware watchdog enabled")
         except Exception as e:
             logger.info("Hardware watchdog not available: %s", e)
@@ -92,17 +92,13 @@ class HardwareWatchdog:
     def pet(self) -> None:
         """Write to watchdog to prevent reboot."""
         if self._fd:
-            try:
+            with contextlib.suppress(Exception):
                 self._fd.write(b"\x00")
-            except Exception:
-                pass
 
     def close(self) -> None:
         """Disable watchdog by writing 'V' (magic close)."""
         if self._fd:
-            try:
+            with contextlib.suppress(Exception):
                 self._fd.write(b"V")
                 self._fd.close()
-            except Exception:
-                pass
             self._fd = None

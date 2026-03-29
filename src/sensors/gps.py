@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 import RPi.GPIO as GPIO
 import serial
+
 from utils.config import GPS_BAUD, GPS_EXTINT, GPS_UART_PORT
 
 logger = logging.getLogger("wqm1.gps")

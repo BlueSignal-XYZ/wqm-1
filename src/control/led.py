@@ -9,11 +9,13 @@ Status LED Controller
 """
 
 import atexit
+import contextlib
 import logging
 import threading
 import time
 
 import RPi.GPIO as GPIO
+
 from utils.config import LED_ERROR, LED_GPS_FIX, LED_HEARTBEAT, LED_LORA_TX, LED_PINS
 
 logger = logging.getLogger("wqm1.leds")
@@ -125,8 +127,6 @@ class StatusLEDs:
         """Stop heartbeat and turn all LEDs off."""
         self._heartbeat_running = False
         for pin in LED_PINS:
-            try:
+            with contextlib.suppress(Exception):
                 GPIO.output(pin, GPIO.LOW)
-            except Exception:
-                pass
         logger.info("LED cleanup complete")

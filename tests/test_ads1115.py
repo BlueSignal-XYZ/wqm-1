@@ -1,7 +1,6 @@
 """Tests for firmware/drivers/ads1115.py — ADS1115 ADC driver."""
 
 import pytest
-from unittest.mock import MagicMock
 
 
 class TestADS1115Init:
@@ -9,17 +8,20 @@ class TestADS1115Init:
 
     def test_opens_i2c_bus(self, mock_hardware):
         from sensors.ads1115 import ADS1115
-        adc = ADS1115(bus=1, address=0x48)
+
+        ADS1115(bus=1, address=0x48)
         mock_hardware["smbus2"].SMBus.assert_called_once_with(1)
 
     def test_verifies_device_present(self, mock_hardware):
         from sensors.ads1115 import ADS1115
-        adc = ADS1115()
+
+        ADS1115()
         mock_hardware["bus"].read_word_data.assert_called_once_with(0x48, 0x01)
 
     def test_raises_on_bus_failure(self, mock_hardware):
         mock_hardware["smbus2"].SMBus.side_effect = OSError("Bus error")
         from sensors.ads1115 import ADS1115
+
         with pytest.raises(RuntimeError, match="ADS1115 init failed"):
             ADS1115()
 
@@ -34,6 +36,7 @@ class TestADS1115Read:
             [0x40, 0x00],  # conversion: 16384 = 2.048V
         ]
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         voltage = adc.read_voltage(0)
         assert abs(voltage - 2.048) < 0.001
@@ -44,6 +47,7 @@ class TestADS1115Read:
             [0xFF, 0x00],  # raw = 0xFF00 = -256 (signed)
         ]
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         raw = adc.read_raw(0)
         assert raw == -256
@@ -54,11 +58,13 @@ class TestADS1115Read:
             [0x00, 0x00],
         ]
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         assert adc.read_voltage(0) == 0.0
 
     def test_invalid_channel_raises(self, mock_hardware):
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         with pytest.raises(ValueError):
             adc.read_voltage(5)
@@ -68,12 +74,17 @@ class TestADS1115Read:
     def test_read_all_returns_4_channels(self, mock_hardware):
         # Each channel: done + conversion
         mock_hardware["bus"].read_i2c_block_data.side_effect = [
-            [0x80, 0x00], [0x40, 0x00],  # ch0
-            [0x80, 0x00], [0x40, 0x00],  # ch1
-            [0x80, 0x00], [0x40, 0x00],  # ch2
-            [0x80, 0x00], [0x40, 0x00],  # ch3
+            [0x80, 0x00],
+            [0x40, 0x00],  # ch0
+            [0x80, 0x00],
+            [0x40, 0x00],  # ch1
+            [0x80, 0x00],
+            [0x40, 0x00],  # ch2
+            [0x80, 0x00],
+            [0x40, 0x00],  # ch3
         ]
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         result = adc.read_all()
         assert len(result) == 4
@@ -81,9 +92,11 @@ class TestADS1115Read:
 
     def test_config_register_sets_correct_channel(self, mock_hardware):
         mock_hardware["bus"].read_i2c_block_data.side_effect = [
-            [0x80, 0x00], [0x40, 0x00],
+            [0x80, 0x00],
+            [0x40, 0x00],
         ]
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         adc.read_voltage(2)  # AIN2
         # Verify write_i2c_block_data was called with channel 2 MUX bits
@@ -95,9 +108,9 @@ class TestADS1115Read:
 
 
 class TestADS1115Close:
-
     def test_close_releases_bus(self, mock_hardware):
         from sensors.ads1115 import ADS1115
+
         adc = ADS1115()
         adc.close()
         mock_hardware["bus"].close.assert_called_once()
