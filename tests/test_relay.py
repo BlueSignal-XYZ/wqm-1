@@ -6,6 +6,7 @@ import pytest
 class TestRelayInit:
     def test_all_relays_off_at_init(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         # Should call GPIO.setup for each pin with initial=LOW
         assert mock_hardware["gpio"].setup.call_count == 4
@@ -15,6 +16,7 @@ class TestRelayInit:
 class TestRelayControl:
     def test_set_relay_on(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         rc.set(1, True)
         mock_hardware["gpio"].output.assert_called_with(17, 1)  # GPIO17, HIGH
@@ -22,6 +24,7 @@ class TestRelayControl:
 
     def test_set_relay_off(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         rc.set(1, True)
         rc.set(1, False)
@@ -29,6 +32,7 @@ class TestRelayControl:
 
     def test_invalid_channel_raises(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         with pytest.raises(ValueError):
             rc.set(0, True)
@@ -37,6 +41,7 @@ class TestRelayControl:
 
     def test_all_off(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         rc.set(1, True)
         rc.set(3, True)
@@ -45,6 +50,7 @@ class TestRelayControl:
 
     def test_state_bitmask(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         rc.set(1, True)  # bit 0
         rc.set(3, True)  # bit 2
@@ -52,6 +58,7 @@ class TestRelayControl:
 
     def test_cleanup_turns_all_off(self, mock_hardware):
         from control.relay import RelayController
+
         rc = RelayController()
         rc.set(2, True)
         rc.cleanup()

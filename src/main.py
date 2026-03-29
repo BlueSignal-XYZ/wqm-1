@@ -9,6 +9,7 @@ Designed for Raspberry Pi Zero 2W + WQM-1 HAT (PCBA rev Fin_3).
 """
 
 import atexit
+import contextlib
 import logging
 import signal
 import sys
@@ -393,10 +394,8 @@ class WQM1App:
             ("leds", self._leds, "cleanup"),
         ]:
             if obj:
-                try:
+                with contextlib.suppress(Exception):
                     getattr(obj, method)()
-                except Exception:
-                    pass
         logger.info("Shutdown complete")
 
 

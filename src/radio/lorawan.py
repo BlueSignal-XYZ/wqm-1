@@ -159,7 +159,7 @@ class LoRaWANMAC:
             decrypted += cipher.encrypt(encrypted_padded[i : i + 16])
         decrypted = bytes(decrypted[: len(encrypted)])
 
-        # Parse: AppNonce(3) + NetID(3) + DevAddr(4) + DLSettings(1) + RxDelay(1) [+ CFList] + MIC(4)
+        # Parse: AppNonce(3)+NetID(3)+DevAddr(4)+DLSettings(1)+RxDelay(1) [+CFList]+MIC(4)
         if len(decrypted) < 12:
             logger.error("Decrypted JoinAccept too short")
             return False

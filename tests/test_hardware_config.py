@@ -1,24 +1,40 @@
 """Tests for firmware/config/hardware.py — pin map and constants."""
 
 from utils.config import (
-    # I2C
-    I2C_BUS, ADS1115_ADDR, ADS1115_ALERT_RDY,
+    ADC_CH_ORP,
     # ADC channels
-    ADC_CH_PH, ADC_CH_TDS, ADC_CH_TURBIDITY, ADC_CH_ORP,
-    # SPI / LoRa
-    SPI_BUS, SPI_CS, LORA_RST, LORA_BUSY, LORA_DIO1,
-    LORA_FREQUENCY, LORA_SYNC_WORD,
-    # UART / GPS
-    GPS_BAUD, GPS_EXTINT,
-    # Relays
-    RELAY_PINS, RELAY_1, RELAY_2, RELAY_3, RELAY_4,
-    # LEDs
-    LED_PINS, LED_HEARTBEAT, LED_LORA_TX, LED_GPS_FIX, LED_ERROR,
+    ADC_CH_PH,
+    ADC_CH_TDS,
+    ADC_CH_TURBIDITY,
+    ADS1115_ADDR,
+    ADS1115_ALERT_RDY,
     # Fan
     FAN_EN,
+    # UART / GPS
+    GPS_BAUD,
+    GPS_EXTINT,
+    # I2C
+    I2C_BUS,
+    LED_ERROR,
+    LED_GPS_FIX,
+    LED_HEARTBEAT,
+    LED_LORA_TX,
+    LED_PINS,
+    LORA_BUSY,
+    LORA_DIO1,
+    LORA_FREQUENCY,
+    LORA_RST,
+    LORA_SYNC_WORD,
     # Analog constants
-    NERNST_SLOPE_25C, PH_VREF, TDS_DIVIDER_RATIO,
-    TURB_V_CLEAR, TURB_NTU_MAX,
+    NERNST_SLOPE_25C,
+    PH_VREF,
+    # Relays
+    RELAY_PINS,
+    # SPI / LoRa
+    SPI_CS,
+    TDS_DIVIDER_RATIO,
+    TURB_NTU_MAX,
+    TURB_V_CLEAR,
 )
 
 
@@ -62,10 +78,19 @@ class TestPinAssignments:
 
     def test_no_pin_collisions(self):
         """All GPIO pins must be unique."""
-        all_pins = list(RELAY_PINS) + list(LED_PINS) + [
-            FAN_EN, SPI_CS, LORA_RST, LORA_BUSY, LORA_DIO1,
-            GPS_EXTINT, ADS1115_ALERT_RDY,
-        ]
+        all_pins = (
+            list(RELAY_PINS)
+            + list(LED_PINS)
+            + [
+                FAN_EN,
+                SPI_CS,
+                LORA_RST,
+                LORA_BUSY,
+                LORA_DIO1,
+                GPS_EXTINT,
+                ADS1115_ALERT_RDY,
+            ]
+        )
         assert len(all_pins) == len(set(all_pins))
 
 

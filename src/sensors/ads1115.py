@@ -9,6 +9,7 @@ import logging
 import time
 
 import smbus2
+
 from utils.config import ADS1115_ADDR, I2C_BUS
 
 logger = logging.getLogger("wqm1.adc")

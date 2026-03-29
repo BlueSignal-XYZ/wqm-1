@@ -200,7 +200,8 @@ class WQM1Database:
     def load_session(self) -> dict[str, Any] | None:
         """Load LoRaWAN session state."""
         cur = self._conn.execute(
-            "SELECT dev_addr, nwk_skey, app_skey, fcnt_up, fcnt_down, joined FROM lorawan_session WHERE id=1"
+            "SELECT dev_addr, nwk_skey, app_skey, fcnt_up, fcnt_down, joined"
+            " FROM lorawan_session WHERE id=1"
         )
         row = cur.fetchone()
         return dict(row) if row else None

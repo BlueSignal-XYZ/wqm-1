@@ -6,9 +6,11 @@ All relays are forced OFF at init and on cleanup via atexit.
 """
 
 import atexit
+import contextlib
 import logging
 
 import RPi.GPIO as GPIO
+
 from utils.config import RELAY_PINS
 
 logger = logging.getLogger("wqm1.relay")
@@ -66,13 +68,9 @@ class RelayController:
 
     def cleanup(self) -> None:
         """Force all relays off and release GPIO."""
-        try:
+        with contextlib.suppress(Exception):
             for pin in self._pins:
-                try:
+                with contextlib.suppress(Exception):
                     GPIO.output(pin, GPIO.LOW)
-                except Exception:
-                    pass
             self._state = 0
-        except Exception:
-            pass
         logger.info("Relay cleanup complete")
