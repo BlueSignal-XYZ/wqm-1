@@ -26,11 +26,11 @@ I2C_SCL = 3
 ADS1115_ADDR = 0x48
 ADS1115_ALERT_RDY = 5
 
-# ADC channel assignments
-ADC_CH_PH = 0
-ADC_CH_TDS = 1
-ADC_CH_TURBIDITY = 2
-ADC_CH_ORP = 3
+# ADC channel assignments (match PCBA Fin_3 schematic, BST.ADC.SchDoc)
+ADC_CH_TDS = 0          # AIN0 = VIN0, CD4060 + LM324 TDS chain, 0-2.3 V
+ADC_CH_TURBIDITY = 1    # AIN1 = VIN1, LMV321 turbidity buffer, 0-4.5 V
+ADC_CH_PH = 2           # AIN2 = PH_INP, LMP91200 pH AFE via R12
+ADC_CH_ORP = 3          # AIN3 = PH_INN / spare (no ORP hardware on Fin_3)
 
 # SPI0 — SX1262 LoRa
 SPI_BUS = 0

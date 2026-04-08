@@ -156,6 +156,7 @@ class WQM1App:
         self._tds = TDSSensor(self._adc)
         self._turbidity = TurbiditySensor(self._adc)
         self._orp = ORPSensor(self._adc)
+        logger.warning("ORP reads AIN3 (spare/PH_INN) — no ORP hardware on PCBA Fin_3")
 
         # Apply calibration to sensors
         cal = self._cal.data

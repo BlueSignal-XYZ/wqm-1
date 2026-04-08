@@ -1,7 +1,7 @@
 """
 pH Sensor Module
 
-Reads pH from ADS1115 AIN0 through the LMP91200 instrumentation amplifier
+Reads pH from ADS1115 AIN2 (PH_INP) through the LMP91200 instrumentation amplifier
 and LM324 signal conditioning chain. Uses two-point calibration (pH 4.0 / 7.0)
 with Nernst equation and temperature compensation.
 """

@@ -1,7 +1,7 @@
 """
 TDS (Total Dissolved Solids) Sensor Module
 
-Reads TDS from ADS1115 AIN1 through CD4060 AC excitation and LM324
+Reads TDS from ADS1115 AIN0 (VIN0) through CD4060 AC excitation and LM324
 conditioning with R57/R58 voltage divider (ratio 0.3125).
 Temperature compensation applied per reading.
 """

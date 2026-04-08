@@ -1,9 +1,9 @@
 """
 ORP (Oxidation-Reduction Potential) Sensor Module
 
-Reads ORP from ADS1115 AIN3 through LM324 conditioning and
-diode clamping (D18-D22, 1N4148). Direct millivolt reading with
-offset calibration.
+Reads ORP from ADS1115 AIN3. On PCBA Fin_3, AIN3 is wired to PH_INN
+(LMP91200 reference via R13) — no ORP conditioning circuit or connector
+is present. ORP readings are non-functional on Fin_3 hardware.
 """
 
 import logging
