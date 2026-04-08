@@ -107,9 +107,11 @@ class TestScheduleWindow:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "schedule": {"enabled": True, "start": "00:00", "end": "23:59"},
-        })
+        engine.load_policies(
+            {
+                "schedule": {"enabled": True, "start": "00:00", "end": "23:59"},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         actions = engine.evaluate({"ph": 9.0})
@@ -136,9 +138,11 @@ class TestScheduleWindow:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "schedule": {"enabled": False},
-        })
+        engine.load_policies(
+            {
+                "schedule": {"enabled": False},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         actions = engine.evaluate({"ph": 9.0})
@@ -150,9 +154,11 @@ class TestCooldown:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {"cooldown_seconds": 120},
-        })
+        engine.load_policies(
+            {
+                "limits": {"cooldown_seconds": 120},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate a recent OFF event
@@ -167,9 +173,11 @@ class TestCooldown:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {"cooldown_seconds": 5},
-        })
+        engine.load_policies(
+            {
+                "limits": {"cooldown_seconds": 5},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate an old OFF event (well past cooldown)
@@ -195,9 +203,11 @@ class TestMaxOnTime:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {"max_on_minutes_per_hour": 10},
-        })
+        engine.load_policies(
+            {
+                "limits": {"max_on_minutes_per_hour": 10},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate relay 1 already used 11 minutes this hour
@@ -214,9 +224,11 @@ class TestMaxOnTime:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {"max_on_minutes_per_hour": 10},
-        })
+        engine.load_policies(
+            {
+                "limits": {"max_on_minutes_per_hour": 10},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate relay 1 used only 2 minutes this hour
@@ -232,9 +244,11 @@ class TestMaxOnTime:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {"max_on_minutes_per_hour": 10},
-        })
+        engine.load_policies(
+            {
+                "limits": {"max_on_minutes_per_hour": 10},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Old hour data (different hour than now)
@@ -249,9 +263,11 @@ class TestManualOverride:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "manual": {"override": True},
-        })
+        engine.load_policies(
+            {
+                "manual": {"override": True},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         actions = engine.evaluate({"ph": 9.0})
@@ -261,9 +277,11 @@ class TestManualOverride:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "manual": {"override": False},
-        })
+        engine.load_policies(
+            {
+                "manual": {"override": False},
+            }
+        )
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         actions = engine.evaluate({"ph": 9.0})
@@ -275,18 +293,20 @@ class TestLoadPolicies:
         from control.rules import RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {
-                "max_on_minutes_per_hour": 10,
-                "cooldown_seconds": 120,
-            },
-            "schedule": {
-                "enabled": True,
-                "start": "07:00",
-                "end": "21:00",
-            },
-            "manual": {"override": False},
-        })
+        engine.load_policies(
+            {
+                "limits": {
+                    "max_on_minutes_per_hour": 10,
+                    "cooldown_seconds": 120,
+                },
+                "schedule": {
+                    "enabled": True,
+                    "start": "07:00",
+                    "end": "21:00",
+                },
+                "manual": {"override": False},
+            }
+        )
 
         assert engine._cooldown_s == 120
         assert engine._max_on_s_per_hour == 600  # 10 * 60
@@ -309,9 +329,11 @@ class TestLoadPolicies:
         from control.rules import RulesEngine
 
         engine = RulesEngine()
-        engine.load_policies({
-            "limits": {"cooldown_seconds": 60},
-        })
+        engine.load_policies(
+            {
+                "limits": {"cooldown_seconds": 60},
+            }
+        )
 
         assert engine._cooldown_s == 60
         assert engine._max_on_s_per_hour == 0
@@ -322,10 +344,16 @@ class TestMultipleRules:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.add_rule(Rule(
-            sensor="ph", operator=">", threshold=8.5,
-            relay=1, action="on", duration_s=30,
-        ))
+        engine.add_rule(
+            Rule(
+                sensor="ph",
+                operator=">",
+                threshold=8.5,
+                relay=1,
+                action="on",
+                duration_s=30,
+            )
+        )
         engine.add_rule(Rule(sensor="temp_c", operator=">", threshold=45.0, relay=1, action="off"))
 
         # Both conditions met: high pH and high temp
@@ -341,10 +369,15 @@ class TestMultipleRules:
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.5, relay=1, action="on"))
         engine.add_rule(Rule(sensor="tds_ppm", operator=">", threshold=2000, relay=4, action="on"))
         engine.add_rule(Rule(sensor="orp_mv", operator="<", threshold=200, relay=3, action="on"))
-        engine.add_rule(Rule(
-            sensor="turbidity_ntu", operator=">",
-            threshold=500, relay=3, action="on",
-        ))
+        engine.add_rule(
+            Rule(
+                sensor="turbidity_ntu",
+                operator=">",
+                threshold=500,
+                relay=3,
+                action="on",
+            )
+        )
         engine.add_rule(Rule(sensor="temp_c", operator=">", threshold=35, relay=4, action="on"))
 
         reading = {
