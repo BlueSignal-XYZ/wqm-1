@@ -201,9 +201,7 @@ class RulesEngine:
                 if state:
                     # --- Guard: cooldown ---
                     if self._is_in_cooldown(rule.relay):
-                        logger.debug(
-                            "Relay %d in cooldown, skipping ON", rule.relay
-                        )
+                        logger.debug("Relay %d in cooldown, skipping ON", rule.relay)
                         continue
 
                     # --- Guard: max on-time budget ---
