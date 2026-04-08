@@ -322,7 +322,10 @@ class TestMultipleRules:
         from control.rules import Rule, RulesEngine
 
         engine = RulesEngine()
-        engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.5, relay=1, action="on", duration_s=30))
+        engine.add_rule(Rule(
+            sensor="ph", operator=">", threshold=8.5,
+            relay=1, action="on", duration_s=30,
+        ))
         engine.add_rule(Rule(sensor="temp_c", operator=">", threshold=45.0, relay=1, action="off"))
 
         # Both conditions met: high pH and high temp
@@ -338,7 +341,10 @@ class TestMultipleRules:
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.5, relay=1, action="on"))
         engine.add_rule(Rule(sensor="tds_ppm", operator=">", threshold=2000, relay=4, action="on"))
         engine.add_rule(Rule(sensor="orp_mv", operator="<", threshold=200, relay=3, action="on"))
-        engine.add_rule(Rule(sensor="turbidity_ntu", operator=">", threshold=500, relay=3, action="on"))
+        engine.add_rule(Rule(
+            sensor="turbidity_ntu", operator=">",
+            threshold=500, relay=3, action="on",
+        ))
         engine.add_rule(Rule(sensor="temp_c", operator=">", threshold=35, relay=4, action="on"))
 
         reading = {

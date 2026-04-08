@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+import yaml
+
 from calibration.calibrate import CalibrationManager
 from control.led import StatusLEDs
 from control.relay import RelayController
@@ -37,8 +39,6 @@ from utils.config import get_settings
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.watchdog import FanController
-
-import yaml
 
 logger = logging.getLogger("wqm1")
 
