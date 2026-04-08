@@ -38,6 +38,8 @@ from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.watchdog import FanController
 
+import yaml
+
 logger = logging.getLogger("wqm1")
 
 
@@ -204,6 +206,7 @@ class WQM1App:
 
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
+        self._load_policies()
         if self._settings.rules:
             self._rules.load_rules(self._settings.rules)
 
@@ -216,6 +219,29 @@ class WQM1App:
         atexit.register(self._shutdown)
 
         logger.info("All subsystems initialised")
+
+    _POLICIES_PATHS = [
+        "/opt/bluesignal/config/policies.yaml",
+        Path(__file__).parent.parent / "config" / "policies.yaml",
+    ]
+
+    def _load_policies(self) -> None:
+        """Load relay automation policies from policies.yaml."""
+        for p in self._POLICIES_PATHS:
+            path = Path(p)
+            if path.exists():
+                try:
+                    with open(path) as f:
+                        policies = yaml.safe_load(f) or {}
+                    self._rules.load_policies(policies)
+                    # Also load rules from policies if config rules are empty
+                    if not self._settings.rules and policies.get("rules"):
+                        self._rules.load_rules(policies["rules"])
+                    logger.info("Policies loaded from %s", path)
+                    return
+                except Exception as e:
+                    logger.warning("Failed to load policies from %s: %s", path, e)
+        logger.info("No policies.yaml found, using defaults")
 
     def _otaa_join(self) -> None:
         """Attempt OTAA join with backoff."""

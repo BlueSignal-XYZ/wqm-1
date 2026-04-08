@@ -1,10 +1,186 @@
+# ---------------------------------------------------------------
+# WQM-1 Relay Automation Policies
+# ---------------------------------------------------------------
+# This file configures safety limits and schedule windows for the
+# rules engine, plus a default set of water quality automation rules.
+#
+# Loaded by the firmware at startup from:
+#   /opt/bluesignal/config/policies.yaml
+#
+# Rules format:
+#   sensor:      ph | tds_ppm | turbidity_ntu | orp_mv | temp_c
+#   operator:    > | < | >= | <= | ==
+#   threshold:   numeric trigger value
+#   relay:       1-4 (which relay channel to control)
+#   action:      on | off
+#   duration_s:  auto-shutoff after N seconds (0 = stay until cleared)
+# ---------------------------------------------------------------
+
+# --- Safety limits ---
 limits:
-  max_on_minutes_per_hour: 10
-  cooldown_seconds: 120
-  max_temp_c: 50.0
+  max_on_minutes_per_hour: 10    # Max cumulative relay ON time per hour
+  cooldown_seconds: 120          # Min seconds between relay OFF → ON
+  max_temp_c: 50.0               # Reference limit (informational)
+
+# --- Schedule window ---
+# Rules only fire within this time window. Outside = relays stay off.
 schedule:
   enabled: true
   start: "07:00"
   end: "21:00"
+
+# --- Manual override ---
+# Set to true to suspend all automatic rules (e.g. during maintenance).
 manual:
   override: false
+
+# ---------------------------------------------------------------
+# Automation Rules
+# ---------------------------------------------------------------
+# Relay assignments (customise for your installation):
+#   Relay 1 — Acid dosing pump (lower pH)
+#   Relay 2 — Base / alkalinity dosing pump (raise pH)
+#   Relay 3 — Aerator / air pump (raise ORP / dissolved oxygen)
+#   Relay 4 — Circulation pump / flush valve
+# ---------------------------------------------------------------
+
+rules:
+
+  # =================================================================
+  # Relay 1 — Acid dosing pump
+  # =================================================================
+
+  # High pH: dose acid for 30 seconds
+  - sensor: ph
+    operator: ">"
+    threshold: 8.5
+    relay: 1
+    action: "on"
+    duration_s: 30
+
+  # pH back in safe range: stop dosing
+  - sensor: ph
+    operator: "<="
+    threshold: 7.5
+    relay: 1
+    action: "off"
+    duration_s: 0
+
+  # =================================================================
+  # Relay 2 — Base / alkalinity dosing pump
+  # =================================================================
+
+  # Low pH: dose base for 30 seconds
+  - sensor: ph
+    operator: "<"
+    threshold: 6.0
+    relay: 2
+    action: "on"
+    duration_s: 30
+
+  # pH recovered: stop dosing
+  - sensor: ph
+    operator: ">="
+    threshold: 6.8
+    relay: 2
+    action: "off"
+    duration_s: 0
+
+  # =================================================================
+  # Relay 3 — Aerator / air pump
+  # =================================================================
+
+  # Low ORP (poor oxidation): turn on aerator
+  - sensor: orp_mv
+    operator: "<"
+    threshold: 200.0
+    relay: 3
+    action: "on"
+    duration_s: 0
+
+  # ORP recovered: turn off aerator
+  - sensor: orp_mv
+    operator: ">="
+    threshold: 300.0
+    relay: 3
+    action: "off"
+    duration_s: 0
+
+  # High turbidity: aerate to assist settling
+  - sensor: turbidity_ntu
+    operator: ">"
+    threshold: 500.0
+    relay: 3
+    action: "on"
+    duration_s: 300
+
+  # Low dissolved solids may indicate low oxygen — aerate
+  - sensor: tds_ppm
+    operator: "<"
+    threshold: 50.0
+    relay: 3
+    action: "on"
+    duration_s: 180
+
+  # =================================================================
+  # Relay 4 — Circulation pump / flush valve
+  # =================================================================
+
+  # Very high TDS: flush/dilute for 2 minutes
+  - sensor: tds_ppm
+    operator: ">"
+    threshold: 2000.0
+    relay: 4
+    action: "on"
+    duration_s: 120
+
+  # TDS back in range: stop flushing
+  - sensor: tds_ppm
+    operator: "<="
+    threshold: 1500.0
+    relay: 4
+    action: "off"
+    duration_s: 0
+
+  # High water temperature: circulate to cool
+  - sensor: temp_c
+    operator: ">"
+    threshold: 35.0
+    relay: 4
+    action: "on"
+    duration_s: 0
+
+  # Temperature back to normal: stop circulation
+  - sensor: temp_c
+    operator: "<="
+    threshold: 30.0
+    relay: 4
+    action: "off"
+    duration_s: 0
+
+  # Extreme turbidity: circulate to prevent stratification
+  - sensor: turbidity_ntu
+    operator: ">"
+    threshold: 1000.0
+    relay: 4
+    action: "on"
+    duration_s: 60
+
+  # =================================================================
+  # Safety — Emergency shutoffs
+  # =================================================================
+
+  # Very high temperature: shut off all dosing pumps (thermal safety)
+  - sensor: temp_c
+    operator: ">"
+    threshold: 45.0
+    relay: 1
+    action: "off"
+    duration_s: 0
+
+  - sensor: temp_c
+    operator: ">"
+    threshold: 45.0
+    relay: 2
+    action: "off"
+    duration_s: 0

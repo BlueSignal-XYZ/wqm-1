@@ -140,44 +140,44 @@ effect:
 sudo reboot
 ```
 
-After the Pi comes back up, SSH in again and verify each hardware
-interface:
-
-**I2C — ADS1115 ADC:**
+After the Pi comes back up (~60 seconds), SSH in again and run the
+**diagnostics script** to verify all hardware at once:
 
 ```bash
-i2cdetect -y 1
+sudo bash /opt/bluesignal/scripts/diagnostics.sh
 ```
 
-You should see a device at address `0x48`. If the row/column
-intersection for `48` shows `48`, the ADC is detected.
+Example output:
 
-**1-Wire — DS18B20 temperature sensor:**
+```
+=== WQM-1 Hardware Diagnostics ===
 
-```bash
-ls /sys/bus/w1/devices/
+[PASS] I2C:     ADS1115 found at 0x48
+[PASS] 1-Wire:  DS18B20 28-0300a279f2e8
+[PASS] GPS:     NMEA data on /dev/serial0
+[PASS] SPI:     /dev/spidev0.0
+[PASS] Config:  /etc/bluesignal/config.yaml (valid YAML)
+[WARN] LoRaWAN: app_key is default (LoRa will not connect)
+[PASS] Policies: /opt/bluesignal/config/policies.yaml (17 rules loaded)
+[PASS] Service: bluesignal-wqm enabled (not yet started)
+[INFO] Disk:    2.1 GB free on /var/lib/bluesignal
+[INFO] CPU:     42.3°C
+
+=== 7 passed, 1 warning(s), 0 failed ===
 ```
 
-You should see a directory starting with `28-` (e.g. `28-0300a279f2e8`).
+All items should show **PASS**. Warnings (like an unconfigured AppKey)
+are non-fatal. Fix any **FAIL** items before starting the service — see
+the [Troubleshooting](#troubleshooting) section.
 
-**UART — GPS module:**
+You can also verify individual interfaces manually:
 
-```bash
-cat /dev/serial0
-```
-
-You should see NMEA sentences streaming (lines starting with `$GNGGA`,
-`$GNRMC`, etc.). Press `Ctrl+C` to stop. If the GPS doesn't have a fix
-yet, you'll still see sentences — just with empty coordinate fields.
-
-**SPI — LoRa radio:**
-
-```bash
-ls /dev/spidev0.0
-```
-
-The file should exist. The LoRa radio itself is verified at firmware
-startup via register reads.
+| Interface | Command | Expected |
+|-----------|---------|----------|
+| I2C | `i2cdetect -y 1` | `0x48` (ADS1115) |
+| 1-Wire | `ls /sys/bus/w1/devices/` | `28-*` directory |
+| GPS | `cat /dev/serial0` | NMEA sentences (`$GNGGA`, `$GNRMC`) |
+| SPI | `ls /dev/spidev0.0` | File exists |
 
 ---
 
