@@ -1,7 +1,7 @@
 """
 Turbidity Sensor Module
 
-Reads turbidity from ADS1115 AIN2. Linear mapping:
+Reads turbidity from ADS1115 AIN1 (VIN1) via LMV321 buffer. Linear mapping:
 4.1V = 0 NTU (clear water), 0.5V ≈ 3000 NTU.
 """
 

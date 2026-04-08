@@ -155,14 +155,18 @@ class WQM1App:
         self._ph = PHSensor(self._adc)
         self._tds = TDSSensor(self._adc)
         self._turbidity = TurbiditySensor(self._adc)
-        self._orp = ORPSensor(self._adc)
+        if self._settings.orp_enabled:
+            self._orp = ORPSensor(self._adc)
+        else:
+            logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
 
         # Apply calibration to sensors
         cal = self._cal.data
         self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
         self._tds.set_calibration(cal.tds_k)
         self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
-        self._orp.set_offset(cal.orp_offset_mv, 0.0)
+        if self._orp:
+            self._orp.set_offset(cal.orp_offset_mv, 0.0)
 
         # --- Database ---
         self._db = WQM1Database()
@@ -309,7 +313,7 @@ class WQM1App:
         ph = self._safe_read("pH", lambda: self._ph.read(temp_c=temp_c))
         tds = self._safe_read("TDS", lambda: self._tds.read(temp_c=temp_c))
         turb = self._safe_read("Turbidity", lambda: self._turbidity.read())
-        orp = self._safe_read("ORP", lambda: self._orp.read())
+        orp = self._safe_read("ORP", lambda: self._orp.read()) if self._orp else None
 
         reading = {
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
