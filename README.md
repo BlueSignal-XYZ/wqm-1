@@ -49,21 +49,338 @@ The dev kit ships with cloud monitoring via [cloud.bluesignal.xyz](https://cloud
 
 ```
 wqm-1/
+├── src/                # Firmware source (Python)
+│   ├── main.py         # Entry point
+│   ├── sensors/        # Sensor drivers (ADS1115, GPS, pH, TDS, etc.)
+│   ├── radio/          # LoRaWAN + SX1262 driver
+│   ├── control/        # Relays, LEDs, automation rules
+│   ├── storage/        # SQLite database
+│   ├── calibration/    # Sensor calibration
+│   └── utils/          # Config, health, identity, watchdog
+├── config/             # Example configs (pinmap, policies, config.yaml)
 ├── hardware/
-│   ├── bom/        # BOM exports
-│   └── fab/        # Gerbers and fab outputs
-├── firmware/
-│   ├── src/        # Firmware source
-│   ├── lib/        # Shared libraries (ADS1115, SX1262, etc.)
-│   └── config/     # Example config files (no real keys)
-├── docs/           # Project documentation
-├── images/         # Board photos and diagrams
-└── .github/        # Issue templates
+│   ├── bom/            # Bill of Materials
+│   └── fab/            # Gerbers and schematics
+├── tests/              # Test suite
+├── systemd/            # systemd service file
+├── docs/               # Project documentation
+├── setup.sh            # Automated Pi setup script
+└── .github/            # CI workflows
 ```
 
 ## Getting Started
 
-See [docs/getting-started.md](docs/getting-started.md) for build and setup instructions.
+Full instructions for deploying the WQM-1 firmware onto a Raspberry Pi
+Zero 2W with the WQM-1 HAT attached.
+
+### Prerequisites
+
+**Hardware:**
+
+- Raspberry Pi Zero 2W
+- WQM-1 HAT (PCBA revision Fin\_3), attached to the Pi's 40-pin GPIO
+  header
+- microSD card (16 GB or larger recommended)
+- USB-C power supply (5 V / 2.5 A minimum)
+- A computer with an SD card reader for flashing
+
+**Software (on your computer):**
+
+- [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+- An SSH client (built into macOS and Linux; use
+  [PuTTY](https://www.putty.org/) on Windows)
+
+**Network:**
+
+- WiFi network name (SSID) and password — the Pi Zero 2W has built-in
+  WiFi
+
+**Optional:**
+
+- A LoRaWAN network server account
+  ([The Things Network](https://www.thethingsnetwork.org/) or
+  [ChirpStack](https://www.chirpstack.io/)) if you plan to use LoRa
+  uplink
+
+---
+
+### Step 1 — Flash Raspberry Pi OS Lite
+
+1. Open **Raspberry Pi Imager** on your computer.
+2. Click **Choose Device** → select **Raspberry Pi Zero 2W**.
+3. Click **Choose OS** → **Raspberry Pi OS (other)** →
+   **Raspberry Pi OS Lite (64-bit)** (Bookworm or later).
+   > **Important:** Choose the **Lite** image, not Desktop. The WQM-1
+   > runs headless — no monitor or keyboard needed.
+4. Insert your microSD card and click **Choose Storage** to select it.
+5. Click **Next**, then click **Edit Settings** to pre-configure the OS:
+   - **General** tab:
+     - Set hostname: `wqm1`
+     - Set username: `pi` and choose a strong password
+     - Configure wireless LAN: enter your WiFi SSID, password, and
+       country code
+     - Set locale and timezone
+   - **Services** tab:
+     - Enable SSH with **password authentication**
+6. Click **Save**, then **Yes** to apply OS customisation, then **Yes**
+   to write the image.
+7. Wait for the write and verification to complete, then eject the card.
+
+---
+
+### Step 2 — First Boot & SSH
+
+1. Insert the microSD card into the Pi Zero 2W (with the WQM-1 HAT
+   already attached).
+2. Connect the USB-C power supply. The green activity LED will blink
+   during boot.
+3. Wait **60–90 seconds** for the first boot to finish (the Pi expands
+   the filesystem and applies your WiFi/SSH settings).
+4. Find the Pi on your network:
+   ```bash
+   ping wqm1.local
+   ```
+   If mDNS does not work on your network, check your router's DHCP
+   lease table for the Pi's IP address.
+5. SSH into the Pi:
+   ```bash
+   ssh pi@wqm1.local
+   ```
+
+---
+
+### Step 3 — Install the Firmware
+
+Once connected via SSH, install Git, clone the repository, and run the
+automated setup script:
+
+```bash
+sudo apt-get update && sudo apt-get install -y git
+git clone https://github.com/bluesignal-xyz/wqm-1.git
+cd wqm-1
+sudo bash setup.sh
+```
+
+The setup script runs **7 stages** automatically:
+
+| Stage | What it does |
+|-------|-------------|
+| 1/7 | Installs system packages (`i2c-tools`, `python3-pip`, `python3-venv`, `libgpiod2`) |
+| 2/7 | Installs Python dependencies from `requirements.txt` |
+| 3/7 | Configures `/boot/config.txt` device-tree overlays (I2C, SPI, UART, 1-Wire, disable Bluetooth, reduce GPU memory) |
+| 4/7 | Creates directories (`/opt/bluesignal`, `/var/lib/bluesignal`, `/var/log/bluesignal`, `/etc/bluesignal`) |
+| 5/7 | Copies firmware source to `/opt/bluesignal/src/` and installs default config to `/etc/bluesignal/config.yaml` |
+| 6/7 | Installs and enables the `bluesignal-wqm` systemd service |
+| 7/7 | Prints next steps |
+
+---
+
+### Step 4 — Configure
+
+Edit the configuration file that the setup script installed:
+
+```bash
+sudo nano /etc/bluesignal/config.yaml
+```
+
+At minimum, set your **LoRaWAN AppKey** if you plan to transmit data
+over LoRa:
+
+```yaml
+app_key: "your-32-character-hex-appkey-here"
+```
+
+Where to find your AppKey:
+
+- **TTN Console:** Applications → your app → End Devices → your device
+  → Overview → AppKey
+- **ChirpStack:** Applications → your app → Devices → your device →
+  Keys (OTAA)
+
+Key settings you may want to adjust:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `sensor_read_s` | `60` | How often to read all sensors (seconds) |
+| `lora_tx_s` | `300` | How often to transmit via LoRaWAN (seconds) |
+| `gps_fix_s` | `600` | How often to attempt a GPS fix (seconds) |
+| `gps_fix_timeout_s` | `60` | Max seconds to wait for GPS lock |
+| `db_max_rows` | `100000` | Max SQLite rows before automatic rotation |
+| `fan_on_temp_c` | `60.0` | CPU temperature threshold to turn fan on |
+| `fan_off_temp_c` | `55.0` | CPU temperature threshold to turn fan off |
+
+See [`config/config.yaml.example`](config/config.yaml.example) for the
+full list of fields with comments.
+
+---
+
+### Step 5 — Reboot & Verify Hardware
+
+A reboot is **required** for the `/boot/config.txt` overlay changes
+(I2C, SPI, UART, 1-Wire) to take effect:
+
+```bash
+sudo reboot
+```
+
+After the Pi comes back up (~60 seconds), SSH in again and verify each
+hardware interface:
+
+**I2C — ADS1115 ADC:**
+
+```bash
+i2cdetect -y 1
+```
+
+Expected: a device at address **`0x48`**. If the row/column intersection
+for 48 shows `48`, the ADC is detected.
+
+**1-Wire — DS18B20 temperature sensor:**
+
+```bash
+ls /sys/bus/w1/devices/
+```
+
+Expected: a directory starting with `28-` (e.g. `28-0300a279f2e8`).
+
+**UART — GPS module:**
+
+```bash
+cat /dev/serial0
+```
+
+Expected: NMEA sentences streaming (lines starting with `$GNGGA`,
+`$GNRMC`, etc.). Press **Ctrl+C** to stop. If the GPS module does not
+have a satellite fix yet, you will still see sentences — the coordinate
+fields will just be empty.
+
+**SPI — LoRa radio:**
+
+```bash
+ls /dev/spidev0.0
+```
+
+Expected: the file exists. The LoRa radio registers are verified by the
+firmware itself at startup.
+
+---
+
+### Step 6 — Start the Service
+
+Start the WQM-1 firmware:
+
+```bash
+sudo systemctl start bluesignal-wqm
+```
+
+Check the status:
+
+```bash
+sudo systemctl status bluesignal-wqm
+```
+
+It should show **`active (running)`**. Watch the live logs:
+
+```bash
+journalctl -u bluesignal-wqm -f
+```
+
+What you should see in the logs:
+
+- Firmware version and device ID on startup
+- Sensor readings every 60 seconds (by default)
+- LoRaWAN join attempts (if `app_key` is configured)
+- GPS fix attempts every 10 minutes
+
+The service is already **enabled** (from `setup.sh`), so it will
+auto-start on every boot. To stop the service:
+
+```bash
+sudo systemctl stop bluesignal-wqm
+```
+
+---
+
+### Troubleshooting
+
+<details>
+<summary><strong><code>i2cdetect</code> shows no devices</strong></summary>
+
+- Make sure the WQM-1 HAT is firmly seated on the GPIO header.
+- Verify `/boot/config.txt` (or `/boot/firmware/config.txt` on
+  Bookworm) contains `dtparam=i2c_arm=on`.
+- Reboot after any `config.txt` changes.
+
+</details>
+
+<details>
+<summary><strong>No 1-Wire devices in <code>/sys/bus/w1/devices/</code></strong></summary>
+
+- Verify `dtoverlay=w1-gpio,gpiopin=4` is in `config.txt`.
+- Check that the DS18B20 sensor is wired correctly to GPIO 4.
+- Reboot after `config.txt` changes.
+
+</details>
+
+<details>
+<summary><strong>GPS shows no data on <code>/dev/serial0</code></strong></summary>
+
+- Verify both `enable_uart=1` and `dtoverlay=disable-bt` are in
+  `config.txt`. The `disable-bt` overlay frees the PL011 UART for GPS.
+- Reboot after `config.txt` changes.
+- The GPS module may need several minutes to acquire a first fix
+  outdoors.
+
+</details>
+
+<details>
+<summary><strong>Service fails to start</strong></summary>
+
+Check the error:
+
+```bash
+journalctl -u bluesignal-wqm -e
+```
+
+Common causes:
+
+- **YAML syntax error** in `/etc/bluesignal/config.yaml` — validate
+  with:
+  ```bash
+  python3 -c "import yaml; yaml.safe_load(open('/etc/bluesignal/config.yaml'))"
+  ```
+- **Missing Python package** — re-run:
+  ```bash
+  sudo pip3 install --break-system-packages -r /opt/bluesignal/requirements.txt
+  ```
+- **Permission denied** — ensure directories are owned by `pi`:
+  ```bash
+  sudo chown -R pi:pi /opt/bluesignal /var/lib/bluesignal /var/log/bluesignal
+  ```
+
+</details>
+
+<details>
+<summary><strong>LoRaWAN join fails</strong></summary>
+
+- Verify the `app_key` in `config.yaml` matches your network server
+  **exactly** (32 hex characters, no spaces or dashes).
+- Make sure the LoRa antenna is connected to the WQM-1 HAT's U.FL
+  connector.
+- Confirm you are within range of a LoRaWAN gateway.
+- Check the logs for join-request / join-accept messages.
+
+</details>
+
+<details>
+<summary><strong>"No config at /etc/bluesignal/config.yaml, using defaults"</strong></summary>
+
+This is informational, not an error. The firmware runs fine with
+built-in defaults. However, you must set `app_key` for LoRaWAN to work.
+
+</details>
+
+For more detail, see [docs/getting-started.md](docs/getting-started.md).
 
 ## Contributing
 
