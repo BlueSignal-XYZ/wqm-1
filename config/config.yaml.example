@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------
+# WQM-1 Configuration — /etc/bluesignal/config.yaml
+# ---------------------------------------------------------------
+# This file is loaded at startup by the WQM-1 firmware.
+# Any field omitted here falls back to its built-in default.
+# See src/utils/config.py for the full list of fields.
+# ---------------------------------------------------------------
+
+# --- Timing (seconds) ---
+sensor_read_s: 60            # How often to read all sensors
+lora_tx_s: 300               # How often to transmit via LoRaWAN
+gps_fix_s: 600               # How often to attempt a GPS fix
+gps_fix_timeout_s: 60        # Max seconds to wait for GPS lock
+
+# --- LoRaWAN ---
+# 32-character hex string — your AppKey from TTN or ChirpStack.
+# Replace the placeholder below with your actual key.
+app_key: "00000000000000000000000000000000"
+
+# --- Cloud sync (optional) ---
+api_endpoint: "https://your-cloud-endpoint.example.com/api/v1/readings"
+api_key: ""
+batch_size: 50
+sync_interval_s: 300
+max_retries: 3
+retry_delays: [5, 15, 30]
+
+# --- Storage ---
+db_path: "/var/lib/bluesignal/wqm1.db"
+log_path: "/var/log/bluesignal/wqm1.log"
+log_max_bytes: 10485760      # 10 MB
+log_backup_count: 5
+db_max_rows: 100000
+
+# --- Thermal management ---
+fan_on_temp_c: 60.0          # Turn fan on above this CPU temp
+fan_off_temp_c: 55.0         # Turn fan off below this CPU temp
+
+# --- Automation rules (optional) ---
+# List of rule dicts; see config/policies.yaml for format.
+rules: []
