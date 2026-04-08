@@ -71,13 +71,31 @@ sudo chmod +x "$INSTALL_DIR/scripts/diagnostics.sh"
 
 sudo chown -R pi:pi "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal
 
-# --- systemd service ---
-echo "[6/7] Installing systemd service..."
+# --- systemd services ---
+echo "[6/8] Installing systemd services..."
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-wqm.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-service-window.service" /etc/systemd/system/
+if [ -f "$SCRIPT_DIR/systemd/bluesignal-provision.service" ]; then
+    sudo cp "$SCRIPT_DIR/systemd/bluesignal-provision.service" /etc/systemd/system/
+fi
 sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
+sudo systemctl enable bluesignal-service-window.service
 
-echo "[7/7] Setup complete!"
+# --- Service window + provisioning ---
+echo "[7/8] Installing service window and provisioning tools..."
+sudo mkdir -p "$INSTALL_DIR/scripts"
+sudo mkdir -p /var/run/bluesignal
+if [ -f "$SCRIPT_DIR/scripts/provision.py" ]; then
+    sudo cp "$SCRIPT_DIR/scripts/provision.py" "$INSTALL_DIR/scripts/"
+fi
+if [ -f "$SCRIPT_DIR/scripts/first-boot-check.sh" ]; then
+    sudo cp "$SCRIPT_DIR/scripts/first-boot-check.sh" "$INSTALL_DIR/scripts/"
+    sudo chmod +x "$INSTALL_DIR/scripts/first-boot-check.sh"
+fi
+sudo chown -R pi:pi /var/run/bluesignal
+
+echo "[8/8] Setup complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Edit config:      sudo nano /etc/bluesignal/config.yaml"
@@ -87,3 +105,11 @@ echo "  4. Reboot:           sudo reboot"
 echo "  5. Run diagnostics:  sudo bash /opt/bluesignal/scripts/diagnostics.sh"
 echo "  6. Start service:    sudo systemctl start bluesignal-wqm"
 echo "  7. View logs:        journalctl -u bluesignal-wqm -f"
+echo ""
+echo "Service Window:"
+echo "  Web UI:              http://$(hostname).local:8080"
+echo "  Default PIN:         1234 (change in /etc/bluesignal/config.yaml)"
+echo ""
+echo "Provisioning:"
+echo "  CLI wizard:          sudo python3 /opt/bluesignal/scripts/provision.py"
+echo "  Web wizard:          http://$(hostname).local:8080/provision"

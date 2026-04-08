@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Relays{% endblock %}
+{% block content %}
+<h1>Relay Manual Control</h1>
+
+<p>Manual relay override. The firmware automation rules will resume control on the next evaluation cycle.</p>
+
+<div class="grid">
+    {% for ch in range(1, 5) %}
+    <div class="card">
+        <div class="card-label">Relay {{ ch }}</div>
+        <div class="card-value">
+            <span id="relay-{{ ch }}-status">--</span>
+        </div>
+        <div class="relay-controls">
+            <button class="btn btn-on" onclick="setRelay({{ ch }}, true)">ON</button>
+            <button class="btn btn-off" onclick="setRelay({{ ch }}, false)">OFF</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<noscript>
+<h2>Manual Controls (no JavaScript)</h2>
+{% for ch in range(1, 5) %}
+<form method="post" action="{{ url_for('relays.set_relay') }}" style="display:inline">
+    <input type="hidden" name="channel" value="{{ ch }}">
+    <input type="hidden" name="state" value="on">
+    <button type="submit" class="btn">Relay {{ ch }} ON</button>
+</form>
+<form method="post" action="{{ url_for('relays.set_relay') }}" style="display:inline">
+    <input type="hidden" name="channel" value="{{ ch }}">
+    <input type="hidden" name="state" value="off">
+    <button type="submit" class="btn">Relay {{ ch }} OFF</button>
+</form>
+<br>
+{% endfor %}
+</noscript>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function setRelay(ch, state) {
+    fetch('{{ url_for("relays.api_set_relay") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({channel: ch, state: state})
+    })
+    .then(r => r.json())
+    .then(data => {
+        const el = document.getElementById('relay-' + ch + '-status');
+        if (data.ok) {
+            el.textContent = state ? 'ON' : 'OFF';
+            el.className = state ? 'relay-on' : 'relay-off';
+        } else {
+            el.textContent = 'Error: ' + (data.error || 'unknown');
+        }
+    })
+    .catch(() => {
+        document.getElementById('relay-' + ch + '-status').textContent = 'Connection error';
+    });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}LoRaWAN{% endblock %}
+{% block content %}
+<h1>LoRaWAN Configuration</h1>
+
+{% if session %}
+<div class="grid">
+    <div class="card">
+        <div class="card-label">Status</div>
+        <div class="card-value">{{ 'Joined' if session.joined else 'Not joined' }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Frame Counter (up)</div>
+        <div class="card-value">{{ session.fcnt_up }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Frame Counter (down)</div>
+        <div class="card-value">{{ session.fcnt_down }}</div>
+    </div>
+</div>
+{% endif %}
+
+<h2>AppKey</h2>
+{% if is_default_key %}
+<div class="flash error">AppKey is not configured. Enter your key from TTN or ChirpStack.</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('lora.set_appkey') }}">
+    <label>AppKey (32 hex characters):
+        <input type="text" name="app_key" value="{{ app_key }}"
+               pattern="[0-9a-fA-F]{32}" maxlength="32"
+               placeholder="00000000000000000000000000000000" required>
+    </label>
+    <button type="submit" class="btn">Save AppKey</button>
+</form>
+<p><small>After saving, restart the firmware service for changes to take effect.</small></p>
+{% endblock %}

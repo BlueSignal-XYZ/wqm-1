@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Sensors{% endblock %}
+{% block content %}
+<h1>Sensor History</h1>
+
+<div id="charts">
+    <canvas id="chart-ph" height="200"></canvas>
+    <canvas id="chart-tds" height="200"></canvas>
+    <canvas id="chart-turbidity" height="200"></canvas>
+    <canvas id="chart-temp" height="200"></canvas>
+</div>
+
+<h2>Recent Readings</h2>
+<div class="table-wrap">
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>pH</th>
+            <th>TDS (ppm)</th>
+            <th>Turb (NTU)</th>
+            <th>ORP (mV)</th>
+            <th>Temp (&deg;C)</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in readings %}
+        <tr>
+            <td>{{ r.timestamp }}</td>
+            <td>{{ "%.2f"|format(r.ph) if r.ph is not none else "-" }}</td>
+            <td>{{ "%.1f"|format(r.tds_ppm) if r.tds_ppm is not none else "-" }}</td>
+            <td>{{ "%.1f"|format(r.turbidity_ntu) if r.turbidity_ntu is not none else "-" }}</td>
+            <td>{{ "%.1f"|format(r.orp_mv) if r.orp_mv is not none else "-" }}</td>
+            <td>{{ "%.1f"|format(r.temp_c) if r.temp_c is not none else "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Load chart data from JSON endpoint
+fetch('{{ url_for("sensors.data_json") }}')
+    .then(r => r.json())
+    .then(data => {
+        const labels = data.map(r => r.timestamp.split('T')[1] || r.timestamp);
+        const opts = (label, color) => ({
+            labels: labels,
+            datasets: [{label, data: data.map(r => r[label.toLowerCase().replace(/[^a-z_]/g,'')]), borderColor: color, fill: false, tension: 0.3}]
+        });
+        if (typeof Chart !== 'undefined') {
+            new Chart('chart-ph', {type:'line', data: {labels, datasets:[{label:'pH', data:data.map(r=>r.ph), borderColor:'#e74c3c', fill:false, tension:0.3}]}});
+            new Chart('chart-tds', {type:'line', data: {labels, datasets:[{label:'TDS', data:data.map(r=>r.tds_ppm), borderColor:'#3498db', fill:false, tension:0.3}]}});
+            new Chart('chart-turbidity', {type:'line', data: {labels, datasets:[{label:'Turbidity', data:data.map(r=>r.turbidity_ntu), borderColor:'#f39c12', fill:false, tension:0.3}]}});
+            new Chart('chart-temp', {type:'line', data: {labels, datasets:[{label:'Temp', data:data.map(r=>r.temp_c), borderColor:'#2ecc71', fill:false, tension:0.3}]}});
+        }
+    });
+</script>
+{% endblock %}

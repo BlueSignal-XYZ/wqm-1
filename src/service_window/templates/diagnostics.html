@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Diagnostics{% endblock %}
+{% block content %}
+<h1>Hardware Diagnostics</h1>
+
+<a href="{{ url_for('diagnostics.run_diagnostics') }}" class="btn">Run Diagnostics</a>
+
+{% if output is defined %}
+<h2>Diagnostics Output</h2>
+<pre class="output">{{ output }}</pre>
+{% endif %}
+
+{% if logs is defined and logs %}
+<h2>Recent Firmware Logs</h2>
+<pre class="output log-output">{{ logs }}</pre>
+{% endif %}
+{% endblock %}

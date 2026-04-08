@@ -1,0 +1,14 @@
+# Firmware core
+/src/                  @BlueSignal-XYZ/firmware
+/tests/                @BlueSignal-XYZ/firmware
+
+# Hardware
+/hardware/             @BlueSignal-XYZ/hardware
+
+# CI/CD
+/.github/              @BlueSignal-XYZ/firmware
+
+# Security-sensitive
+/src/radio/lorawan.py  @BlueSignal-XYZ/firmware
+/src/radio/sx1262.py   @BlueSignal-XYZ/firmware
+SECURITY.md            @BlueSignal-XYZ/firmware

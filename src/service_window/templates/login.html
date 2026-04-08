@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login — WQM-1 Service Window</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+    <div class="login-box">
+        <h1>WQM-1</h1>
+        <p>Service Window</p>
+        {% if error %}
+        <div class="flash error">{{ error }}</div>
+        {% endif %}
+        <form method="post">
+            <input type="password" name="pin" placeholder="Enter PIN" autofocus
+                   inputmode="numeric" pattern="[0-9]*" required>
+            <button type="submit">Unlock</button>
+        </form>
+    </div>
+</body>
+</html>

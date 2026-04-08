@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="info-bar">
+    <span>Firmware v{{ fw_version }}</span>
+    <span>Host: {{ hostname }}</span>
+    <span>Readings: {{ reading_count }}</span>
+    <span>LoRa: {{ 'Joined' if lora_joined else 'Not joined' }} (fcnt={{ lora_fcnt }})</span>
+</div>
+
+{% if reading %}
+<div class="grid">
+    <div class="card">
+        <div class="card-label">pH</div>
+        <div class="card-value">{{ "%.2f"|format(reading.ph) if reading.ph is not none else "N/A" }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">TDS</div>
+        <div class="card-value">{{ "%.1f"|format(reading.tds_ppm) if reading.tds_ppm is not none else "N/A" }} ppm</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Turbidity</div>
+        <div class="card-value">{{ "%.1f"|format(reading.turbidity_ntu) if reading.turbidity_ntu is not none else "N/A" }} NTU</div>
+    </div>
+    <div class="card">
+        <div class="card-label">ORP</div>
+        <div class="card-value">{{ "%.1f"|format(reading.orp_mv) if reading.orp_mv is not none else "N/A" }} mV</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Temperature</div>
+        <div class="card-value">{{ "%.1f"|format(reading.temp_c) if reading.temp_c is not none else "N/A" }}&deg;C</div>
+    </div>
+    <div class="card">
+        <div class="card-label">GPS</div>
+        <div class="card-value">
+            {% if reading.lat is not none %}
+            {{ "%.6f"|format(reading.lat) }}, {{ "%.6f"|format(reading.lon) }}
+            {% else %}
+            No fix
+            {% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-label">Relays</div>
+        <div class="card-value">0x{{ "%02X"|format(reading.relay_state or 0) }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Last Reading</div>
+        <div class="card-value card-value-sm">{{ reading.timestamp }}</div>
+    </div>
+</div>
+{% else %}
+<p>No sensor data yet.</p>
+{% endif %}
+{% endblock %}

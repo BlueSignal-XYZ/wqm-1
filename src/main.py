@@ -10,9 +10,12 @@ Designed for Raspberry Pi Zero 2W + WQM-1 HAT (PCBA rev Fin_3).
 
 import atexit
 import contextlib
+import json
 import logging
 import signal
+import socket
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
@@ -214,6 +217,11 @@ class WQM1App:
         if self._settings.rules:
             self._rules.load_rules(self._settings.rules)
 
+        # --- Command listener (for service window) ---
+        self._cmd_sock = None
+        self._cmd_thread = None
+        self._start_cmd_listener()
+
         # --- Heartbeat LED ---
         self._leds.heartbeat_start()
 
@@ -223,6 +231,64 @@ class WQM1App:
         atexit.register(self._shutdown)
 
         logger.info("All subsystems initialised")
+
+    _CMD_SOCK_PATH = "/var/run/bluesignal/cmd.sock"
+
+    def _start_cmd_listener(self) -> None:
+        """Start Unix domain socket listener for service window commands."""
+        sock_path = Path(self._CMD_SOCK_PATH)
+        try:
+            sock_path.parent.mkdir(parents=True, exist_ok=True)
+            if sock_path.exists():
+                sock_path.unlink()
+            self._cmd_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._cmd_sock.bind(str(sock_path))
+            self._cmd_sock.listen(2)
+            self._cmd_sock.settimeout(1.0)
+            self._cmd_thread = threading.Thread(target=self._cmd_listener_loop, daemon=True)
+            self._cmd_thread.start()
+            logger.info("Command listener started on %s", sock_path)
+        except Exception as e:
+            logger.warning("Could not start command listener: %s", e)
+
+    def _cmd_listener_loop(self) -> None:
+        """Accept connections and handle commands."""
+        while self._running:
+            try:
+                conn, _ = self._cmd_sock.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            try:
+                data = conn.recv(4096)
+                if data:
+                    response = self._handle_cmd(json.loads(data.decode()))
+                    conn.sendall(json.dumps(response).encode())
+            except Exception as e:
+                with contextlib.suppress(Exception):
+                    conn.sendall(json.dumps({"ok": False, "error": str(e)}).encode())
+            finally:
+                conn.close()
+
+    def _handle_cmd(self, cmd: dict) -> dict:
+        """Dispatch a command from the service window."""
+        action = cmd.get("action")
+        if action == "relay_set":
+            channel = cmd.get("channel")
+            state = cmd.get("state")
+            if not isinstance(channel, int) or channel < 1 or channel > 4:
+                return {"ok": False, "error": "channel must be 1-4"}
+            if not isinstance(state, bool):
+                return {"ok": False, "error": "state must be boolean"}
+            if self._relays:
+                if state:
+                    self._relays.on(channel)
+                else:
+                    self._relays.off(channel)
+                return {"ok": True, "channel": channel, "state": state}
+            return {"ok": False, "error": "relays not initialised"}
+        return {"ok": False, "error": f"unknown action: {action}"}
 
     _POLICIES_PATHS = [
         "/opt/bluesignal/config/policies.yaml",
@@ -413,6 +479,14 @@ class WQM1App:
 
     def _shutdown(self) -> None:
         logger.info("Shutting down...")
+        # Close command socket
+        if self._cmd_sock:
+            with contextlib.suppress(Exception):
+                self._cmd_sock.close()
+            sock_path = Path(self._CMD_SOCK_PATH)
+            if sock_path.exists():
+                with contextlib.suppress(Exception):
+                    sock_path.unlink()
         for _name, obj, method in [
             ("cloud", self._cloud, "stop"),
             ("heartbeat", self._leds, "heartbeat_stop"),

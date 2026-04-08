@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}pH Calibration{% endblock %}
+{% block content %}
+<h1>pH Two-Point Calibration</h1>
+
+<div class="wizard">
+    <p>1. Place the probe in <strong>pH 4.0 buffer</strong>, wait 60 seconds for stability, read the voltage.</p>
+    <p>2. Place the probe in <strong>pH 7.0 buffer</strong>, wait 60 seconds, read the voltage.</p>
+    <p>3. Enter both voltages below.</p>
+
+    <form method="post">
+        <label>Voltage at pH 4.0 (V):
+            <input type="number" name="v_ph4" step="0.001" value="{{ cal.get('ph_v_at_4', 1.04) }}" required>
+        </label>
+        <label>Voltage at pH 7.0 (V):
+            <input type="number" name="v_ph7" step="0.001" value="{{ cal.get('ph_v_at_7', 1.50) }}" required>
+        </label>
+        <button type="submit" class="btn">Save Calibration</button>
+    </form>
+</div>
+
+<a href="{{ url_for('calibration.index') }}">&larr; Back</a>
+{% endblock %}
