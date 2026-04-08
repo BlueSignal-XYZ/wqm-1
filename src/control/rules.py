@@ -13,7 +13,8 @@ Safety features (loaded from policies.yaml):
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time
+from datetime import datetime
+from datetime import time as dt_time
 
 logger = logging.getLogger("wqm1.rules")
 
