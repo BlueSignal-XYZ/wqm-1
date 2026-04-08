@@ -129,6 +129,9 @@ class Settings:
     log_backup_count: int = 5
     db_max_rows: int = 100_000
 
+    # Sensors
+    orp_enabled: bool = False  # No ORP hardware on PCBA Fin_3; enable when connected
+
     # Thermal
     fan_on_temp_c: float = 60.0
     fan_off_temp_c: float = 55.0
