@@ -47,7 +47,7 @@ done
 
 # --- Create directories ---
 echo "[4/7] Creating directories..."
-sudo mkdir -p "$INSTALL_DIR"/{src,config}
+sudo mkdir -p "$INSTALL_DIR"/{src,config,scripts}
 sudo mkdir -p /var/lib/bluesignal
 sudo mkdir -p /var/log/bluesignal
 sudo mkdir -p /etc/bluesignal
@@ -64,6 +64,11 @@ if [ ! -f /etc/bluesignal/config.yaml ]; then
     echo "  Installed default config to /etc/bluesignal/config.yaml"
 fi
 
+# Install policies and diagnostics
+sudo cp "$SCRIPT_DIR/config/policies.yaml" "$INSTALL_DIR/config/"
+sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$INSTALL_DIR/scripts/"
+sudo chmod +x "$INSTALL_DIR/scripts/diagnostics.sh"
+
 sudo chown -R pi:pi "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal
 
 # --- systemd service ---
@@ -75,12 +80,10 @@ sudo systemctl enable bluesignal-wqm.service
 echo "[7/7] Setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Edit config:    sudo nano /etc/bluesignal/config.yaml"
-echo "  2. Set LoRaWAN key: app_key field (from TTN/Chirpstack)"
-echo "  3. Reboot:         sudo reboot"
-echo "  4. After reboot, verify hardware:"
-echo "     - I2C:  i2cdetect -y 1  (should show 0x48)"
-echo "     - 1W:   ls /sys/bus/w1/devices/"
-echo "     - GPS:  cat /dev/serial0"
-echo "  5. Start service:  sudo systemctl start bluesignal-wqm"
-echo "  6. View logs:      journalctl -u bluesignal-wqm -f"
+echo "  1. Edit config:      sudo nano /etc/bluesignal/config.yaml"
+echo "  2. Set LoRaWAN key:  app_key field (from TTN/Chirpstack)"
+echo "  3. Review policies:  sudo nano /opt/bluesignal/config/policies.yaml"
+echo "  4. Reboot:           sudo reboot"
+echo "  5. Run diagnostics:  sudo bash /opt/bluesignal/scripts/diagnostics.sh"
+echo "  6. Start service:    sudo systemctl start bluesignal-wqm"
+echo "  7. View logs:        journalctl -u bluesignal-wqm -f"

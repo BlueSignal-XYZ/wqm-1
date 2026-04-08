@@ -37,5 +37,122 @@ fan_on_temp_c: 60.0          # Turn fan on above this CPU temp
 fan_off_temp_c: 55.0         # Turn fan off below this CPU temp
 
 # --- Automation rules (optional) ---
-# List of rule dicts; see config/policies.yaml for format.
-rules: []
+# Threshold-based relay automation. Each rule evaluates a sensor value
+# against a threshold and triggers a relay action.
+#
+# Fields:
+#   sensor:      ph | tds_ppm | turbidity_ntu | orp_mv | temp_c
+#   operator:    > | < | >= | <= | ==
+#   threshold:   numeric trigger value
+#   relay:       1-4
+#   action:      on | off
+#   duration_s:  auto-shutoff seconds (0 = stay until another rule clears)
+#
+# Safety policies (schedule, cooldown, max on-time) are configured
+# separately in config/policies.yaml.
+#
+# Default relay assignments:
+#   Relay 1 — Acid dosing pump
+#   Relay 2 — Base dosing pump
+#   Relay 3 — Aerator / air pump
+#   Relay 4 — Circulation pump / flush valve
+rules:
+  # Relay 1 — Acid dosing (high pH correction)
+  - sensor: ph
+    operator: ">"
+    threshold: 8.5
+    relay: 1
+    action: "on"
+    duration_s: 30
+  - sensor: ph
+    operator: "<="
+    threshold: 7.5
+    relay: 1
+    action: "off"
+    duration_s: 0
+
+  # Relay 2 — Base dosing (low pH correction)
+  - sensor: ph
+    operator: "<"
+    threshold: 6.0
+    relay: 2
+    action: "on"
+    duration_s: 30
+  - sensor: ph
+    operator: ">="
+    threshold: 6.8
+    relay: 2
+    action: "off"
+    duration_s: 0
+
+  # Relay 3 — Aerator (low ORP / high turbidity)
+  - sensor: orp_mv
+    operator: "<"
+    threshold: 200.0
+    relay: 3
+    action: "on"
+    duration_s: 0
+  - sensor: orp_mv
+    operator: ">="
+    threshold: 300.0
+    relay: 3
+    action: "off"
+    duration_s: 0
+  - sensor: turbidity_ntu
+    operator: ">"
+    threshold: 500.0
+    relay: 3
+    action: "on"
+    duration_s: 300
+  - sensor: tds_ppm
+    operator: "<"
+    threshold: 50.0
+    relay: 3
+    action: "on"
+    duration_s: 180
+
+  # Relay 4 — Circulation / flush (high TDS, high temp, extreme turbidity)
+  - sensor: tds_ppm
+    operator: ">"
+    threshold: 2000.0
+    relay: 4
+    action: "on"
+    duration_s: 120
+  - sensor: tds_ppm
+    operator: "<="
+    threshold: 1500.0
+    relay: 4
+    action: "off"
+    duration_s: 0
+  - sensor: temp_c
+    operator: ">"
+    threshold: 35.0
+    relay: 4
+    action: "on"
+    duration_s: 0
+  - sensor: temp_c
+    operator: "<="
+    threshold: 30.0
+    relay: 4
+    action: "off"
+    duration_s: 0
+  - sensor: turbidity_ntu
+    operator: ">"
+    threshold: 1000.0
+    relay: 4
+    action: "on"
+    duration_s: 60
+
+  # Safety — emergency shutoffs at extreme temperature
+  - sensor: temp_c
+    operator: ">"
+    threshold: 45.0
+    relay: 1
+    action: "off"
+    duration_s: 0
+  - sensor: temp_c
+    operator: ">"
+    threshold: 45.0
+    relay: 2
+    action: "off"
+    duration_s: 0
