@@ -54,10 +54,10 @@ class TestPinAssignments:
 
     def test_adc_channel_assignments(self):
         """Verify ADC channels match PCBA Fin_3 schematic (BST.ADC.SchDoc)."""
-        assert ADC_CH_TDS == 0         # AIN0 = VIN0
-        assert ADC_CH_TURBIDITY == 1   # AIN1 = VIN1
-        assert ADC_CH_PH == 2          # AIN2 = PH_INP
-        assert ADC_CH_ORP == 3         # AIN3 = spare
+        assert ADC_CH_TDS == 0  # AIN0 = VIN0
+        assert ADC_CH_TURBIDITY == 1  # AIN1 = VIN1
+        assert ADC_CH_PH == 2  # AIN2 = PH_INP
+        assert ADC_CH_ORP == 3  # AIN3 = spare
 
     def test_relay_pins(self):
         assert RELAY_PINS == (17, 27, 22, 23)
