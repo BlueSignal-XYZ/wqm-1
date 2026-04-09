@@ -56,7 +56,7 @@ INSERT OR IGNORE INTO lorawan_session (id) VALUES (1);
 class WQM1Database:
     """SQLite database for WQM-1 readings with WAL mode."""
 
-    def __init__(self, path: str = None):
+    def __init__(self, path: str | None = None):
         self._path = path or get_settings().db_path
 
         # Ensure parent directory exists
@@ -100,7 +100,7 @@ class WQM1Database:
                     data.get("relay_state", 0),
                 ),
             )
-            return cur.lastrowid
+            return cur.lastrowid or 0
 
     def get_unsynced(self, limit: int = 50) -> list[dict[str, Any]]:
         """Get unsynced readings ordered by timestamp."""
@@ -134,7 +134,7 @@ class WQM1Database:
             )
         return cur.fetchone()[0]
 
-    def rotate(self, max_rows: int = None) -> int:
+    def rotate(self, max_rows: int | None = None) -> int:
         """
         Delete oldest synced rows if total exceeds max_rows.
 
@@ -217,5 +217,5 @@ class WQM1Database:
         """Close database connection."""
         if self._conn:
             self._conn.close()
-            self._conn = None
+            self._conn = None  # type: ignore[assignment]
             logger.info("Database closed")

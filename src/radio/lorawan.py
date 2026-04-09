@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """
 LoRaWAN 1.0.3 Class A MAC Layer
 

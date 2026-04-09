@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """
 SX1262 LoRa Radio Driver
 

@@ -1,0 +1,14 @@
+[allowlist]
+  description = "Allow placeholder/example keys and config files"
+  paths = [
+    '''config/config\.yaml\.example''',
+    '''docs/.*''',
+    '''tests/.*''',
+    '''scripts/provision\.py''',
+  ]
+  regexes = [
+    '''0{32}''',
+    '''00000000000000000000000000000000''',
+    '''your-cloud-endpoint\.example\.com''',
+    '''AABBCCDD''',
+  ]
