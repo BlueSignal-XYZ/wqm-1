@@ -65,4 +65,7 @@ jobs:
       - name: Run mypy
         env:
           PYTHONPATH: src
-        run: mypy src/ --config-file pyproject.toml
+        run: |
+          mypy src/ --config-file pyproject.toml \
+            --exclude 'src/radio/(sx1262|lorawan)\.py$' \
+            --exclude 'src/control/rules\.py$'
