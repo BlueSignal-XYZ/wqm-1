@@ -21,11 +21,6 @@ ignore_missing_imports = true
 no_implicit_optional = false
 check_untyped_defs = false
 disable_error_code = ["import-untyped"]
-exclude = [
-    "src/radio/sx1262\\.py$",
-    "src/radio/lorawan\\.py$",
-    "src/control/rules\\.py$",
-]
 
 [tool.bandit]
 exclude_dirs = ["tests"]

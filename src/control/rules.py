@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """
 Threshold-Based Relay Automation Rules Engine
 
