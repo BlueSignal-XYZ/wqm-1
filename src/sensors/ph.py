@@ -26,7 +26,7 @@ class PHSensor:
 
     def __init__(self, adc: ADS1115):
         self._adc = adc
-        self._window = []
+        self._window: list[float] = []
         self._window_size = 5
 
         # Default calibration (overridden by CalibrationManager via set_calibration)

@@ -136,6 +136,8 @@ class WQM1App:
         self._health = None
         self._cal = None
         self._rules = None
+        self._cmd_sock: socket.socket | None = None
+        self._cmd_thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Initialise all hardware and start background threads."""
@@ -253,6 +255,7 @@ class WQM1App:
 
     def _cmd_listener_loop(self) -> None:
         """Accept connections and handle commands."""
+        assert self._cmd_sock is not None
         while self._running:
             try:
                 conn, _ = self._cmd_sock.accept()
@@ -290,7 +293,7 @@ class WQM1App:
             return {"ok": False, "error": "relays not initialised"}
         return {"ok": False, "error": f"unknown action: {action}"}
 
-    _POLICIES_PATHS = [
+    _POLICIES_PATHS: list[str | Path] = [
         "/opt/bluesignal/config/policies.yaml",
         Path(__file__).parent.parent / "config" / "policies.yaml",
     ]

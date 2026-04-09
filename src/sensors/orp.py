@@ -20,7 +20,7 @@ class ORPSensor:
 
     def __init__(self, adc: ADS1115):
         self._adc = adc
-        self._window = []
+        self._window: list[float] = []
         self._window_size = 5
         self._offset_mv = 0.0  # default, overridden by CalibrationManager
 

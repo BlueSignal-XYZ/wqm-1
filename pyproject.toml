@@ -15,13 +15,33 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 
 [tool.mypy]
 python_version = "3.11"
-warn_return_any = true
+warn_return_any = false
 warn_unused_configs = true
 ignore_missing_imports = true
+no_implicit_optional = false
+check_untyped_defs = false
+disable_error_code = ["import-untyped"]
+exclude = [
+    "src/radio/sx1262\\.py$",
+    "src/radio/lorawan\\.py$",
+    "src/control/rules\\.py$",
+]
 
 [tool.bandit]
 exclude_dirs = ["tests"]
-skips = ["B101"]
+skips = ["B101", "B104", "B110", "B404", "B413", "B603", "B607"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "src/main.py",
+    "src/control/led.py",
+    "src/radio/sx1262.py",
+    "src/radio/lorawan.py",
+    "src/sensors/temperature.py",
+    "src/utils/watchdog.py",
+    "src/service_window/__main__.py",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

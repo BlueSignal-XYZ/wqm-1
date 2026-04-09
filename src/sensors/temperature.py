@@ -36,7 +36,7 @@ class DS18B20:
         """Check if a DS18B20 sensor is present."""
         return self._sensor is not None
 
-    def read_temp_c(self) -> float:
+    def read_temp_c(self) -> float | None:
         """
         Read temperature in °C.
 

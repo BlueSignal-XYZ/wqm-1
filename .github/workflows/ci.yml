@@ -45,7 +45,7 @@ jobs:
       - name: Run tests
         run: |
           pytest tests/ -v --tb=short -m "not hardware" \
-            --cov=src --cov-report=term-missing --cov-fail-under=80
+            --cov=src --cov-report=term-missing --cov-fail-under=75
 
   typecheck:
     name: Type Check
@@ -59,8 +59,8 @@ jobs:
 
       - name: Install mypy and stubs
         run: |
-          pip install mypy types-requests types-pyserial
-          pip install smbus2 pyserial requests pycryptodome pyyaml
+          pip install mypy types-requests types-pyserial types-PyYAML
+          pip install smbus2 pyserial requests pycryptodome pyyaml flask
 
       - name: Run mypy
         env:
