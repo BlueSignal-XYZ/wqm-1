@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Provisioning{% endblock %}
+{% block content %}
+<h1>Device Provisioning</h1>
+
+<div class="grid">
+    <div class="card">
+        <div class="card-label">Device ID</div>
+        <div class="card-value card-value-sm">{{ identity.device_id }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">DevEUI</div>
+        <div class="card-value card-value-sm">{{ identity.dev_eui }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">BLE Name</div>
+        <div class="card-value card-value-sm">{{ identity.ble_name }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Status</div>
+        <div class="card-value">{{ 'Provisioned' if is_provisioned else 'Needs setup' }}</div>
+    </div>
+</div>
+
+<h2>Step 1: Set LoRaWAN AppKey</h2>
+<form method="post" action="{{ url_for('provision.set_appkey') }}">
+    <label>AppKey (32 hex characters):
+        <input type="text" name="app_key" pattern="[0-9a-fA-F]{32}" maxlength="32"
+               placeholder="Paste your AppKey from TTN/ChirpStack" required>
+    </label>
+    <button type="submit" class="btn">Save AppKey</button>
+</form>
+
+<h2>Step 2: Verify Hardware</h2>
+<a href="{{ url_for('provision.verify') }}" class="btn">Run Hardware Diagnostics</a>
+
+<h2>Step 3: Device Label</h2>
+<a href="{{ url_for('provision.identity') }}" class="btn">View Identity &amp; QR Code</a>
+<a href="{{ url_for('provision.report') }}" class="btn">Download Identity Report</a>
+{% endblock %}

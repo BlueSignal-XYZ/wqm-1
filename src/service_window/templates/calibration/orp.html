@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}ORP Calibration{% endblock %}
+{% block content %}
+<h1>ORP Offset Calibration</h1>
+
+<div class="wizard">
+    <p>1. Place the probe in a <strong>known ORP solution</strong> (e.g. 225 mV).</p>
+    <p>2. Read the measured value from the sensor.</p>
+
+    <form method="post">
+        <label>Known ORP (mV):
+            <input type="number" name="known_mv" step="0.1" required>
+        </label>
+        <label>Measured ORP (mV):
+            <input type="number" name="measured_mv" step="0.1" required>
+        </label>
+        <button type="submit" class="btn">Save Calibration</button>
+    </form>
+</div>
+
+<a href="{{ url_for('calibration.index') }}">&larr; Back</a>
+{% endblock %}

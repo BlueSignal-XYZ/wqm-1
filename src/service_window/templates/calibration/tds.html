@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}TDS Calibration{% endblock %}
+{% block content %}
+<h1>TDS Single-Point Calibration</h1>
+
+<div class="wizard">
+    <p>1. Place the probe in a <strong>known TDS solution</strong> (e.g. 500 ppm).</p>
+    <p>2. Wait 60 seconds and note the voltage reading.</p>
+
+    <form method="post">
+        <label>Known TDS (ppm):
+            <input type="number" name="known_ppm" step="0.1" required>
+        </label>
+        <label>Measured voltage (V):
+            <input type="number" name="measured_v" step="0.001" required>
+        </label>
+        <button type="submit" class="btn">Save Calibration</button>
+    </form>
+</div>
+
+<a href="{{ url_for('calibration.index') }}">&larr; Back</a>
+{% endblock %}

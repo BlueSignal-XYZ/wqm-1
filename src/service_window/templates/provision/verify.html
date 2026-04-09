@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Verify Hardware{% endblock %}
+{% block content %}
+<h1>Hardware Verification</h1>
+
+<pre class="output">{{ output }}</pre>
+
+<a href="{{ url_for('provision.index') }}">&larr; Back to Provisioning</a>
+{% endblock %}

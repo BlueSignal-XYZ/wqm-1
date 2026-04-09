@@ -1,0 +1,13 @@
+[Unit]
+Description=BlueSignal WQM-1 First-Boot Provisioning Check
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/etc/bluesignal/.provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/opt/bluesignal/scripts/first-boot-check.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

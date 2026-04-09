@@ -36,6 +36,12 @@ db_max_rows: 100000
 fan_on_temp_c: 60.0          # Turn fan on above this CPU temp
 fan_off_temp_c: 55.0         # Turn fan off below this CPU temp
 
+# --- Service window (local web UI) ---
+service_window:
+  enabled: true
+  port: 8080
+  pin: "1234"               # Change on first use
+
 # --- Automation rules (optional) ---
 # Threshold-based relay automation. Each rule evaluates a sensor value
 # against a threshold and triggers a relay action.

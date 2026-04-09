@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Turbidity Calibration{% endblock %}
+{% block content %}
+<h1>Turbidity Zero-Point Calibration</h1>
+
+<div class="wizard">
+    <p>1. Place the sensor in <strong>clear distilled water</strong> (0 NTU).</p>
+    <p>2. Wait 30 seconds for the reading to stabilize.</p>
+    <p>3. Enter the voltage below.</p>
+
+    <form method="post">
+        <label>Clear water voltage (V):
+            <input type="number" name="clear_v" step="0.001"
+                   value="{{ cal.get('turbidity_v_clear', 4.1) }}" required>
+        </label>
+        <button type="submit" class="btn">Save Calibration</button>
+    </form>
+</div>
+
+<a href="{{ url_for('calibration.index') }}">&larr; Back</a>
+{% endblock %}

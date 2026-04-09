@@ -1,0 +1,15 @@
+[Unit]
+Description=BlueSignal WQM-1 Service Window
+After=network.target bluesignal-wqm.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/bluesignal/src
+ExecStart=/usr/bin/python3 -m service_window
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONPATH=/opt/bluesignal/src
+
+[Install]
+WantedBy=multi-user.target
