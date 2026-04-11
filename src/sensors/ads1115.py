@@ -114,7 +114,7 @@ class ADS1115:
         raw = self.read_raw(channel)
         return raw * _LSB_V
 
-    def read_all(self) -> dict:
+    def read_all(self) -> dict[int, float]:
         """
         Read voltage from all 4 channels.
 
@@ -123,7 +123,7 @@ class ADS1115:
         """
         return {ch: self.read_voltage(ch) for ch in range(4)}
 
-    def close(self):
+    def close(self) -> None:
         """Release I2C bus."""
         if self._bus:
             self._bus.close()

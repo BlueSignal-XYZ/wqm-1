@@ -24,7 +24,7 @@ provision_bp = Blueprint("provision", __name__, url_prefix="/provision")
 _HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
 
-def _get_identity() -> dict:
+def _get_identity() -> dict[str, str]:
     """Generate device identity info."""
     try:
         from utils.identity import get_ble_name, get_dev_eui, get_device_id

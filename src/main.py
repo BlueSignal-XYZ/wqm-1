@@ -17,6 +17,8 @@ import socket
 import sys
 import threading
 import time
+import types
+from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -414,7 +416,7 @@ class WQM1App:
             logger.error("DB insert failed: %s", e)
             self._leds.error_pattern(3)
 
-    def _safe_read(self, name: str, fn) -> float | None:
+    def _safe_read(self, name: str, fn: Callable[[], float | None]) -> float | None:
         try:
             return fn()
         except Exception as e:
@@ -470,7 +472,7 @@ class WQM1App:
         finally:
             self._leds.lora_tx_off()
 
-    def _handle_signal(self, signum, frame) -> None:
+    def _handle_signal(self, signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
 
@@ -500,7 +502,7 @@ class WQM1App:
         logger.info("Shutdown complete")
 
 
-def main():
+def main() -> None:
     _setup_logging()
     app = WQM1App()
     try:
