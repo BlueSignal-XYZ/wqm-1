@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 """
 LoRaWAN 1.0.3 Class A MAC Layer
 
@@ -155,10 +154,10 @@ class LoRaWANMAC:
         # Pad to 16-byte blocks
         padded_len = ((len(encrypted) + 15) // 16) * 16
         encrypted_padded = encrypted.ljust(padded_len, b"\x00")
-        decrypted = bytearray()
+        decrypted_buf = bytearray()
         for i in range(0, padded_len, 16):
-            decrypted += cipher.encrypt(encrypted_padded[i : i + 16])
-        decrypted = bytes(decrypted[: len(encrypted)])
+            decrypted_buf += cipher.encrypt(encrypted_padded[i : i + 16])
+        decrypted = bytes(decrypted_buf[: len(encrypted)])
 
         # Parse: AppNonce(3)+NetID(3)+DevAddr(4)+DLSettings(1)+RxDelay(1) [+CFList]+MIC(4)
         if len(decrypted) < 12:

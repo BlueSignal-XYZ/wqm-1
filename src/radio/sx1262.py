@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 """
 SX1262 LoRa Radio Driver
 
@@ -322,8 +321,8 @@ class SX1262:
                 return
             time.sleep(0.0001)
 
-    def _cmd(self, opcode: int, params: list = None) -> list:
-        """Send SPI command and return response bytes."""
+    def _cmd(self, opcode: int, params: list[int] | None = None) -> None:
+        """Send SPI command."""
         tx = [opcode] + (params or [])
         self._spi.xfer2(tx)
         self._wait_busy()

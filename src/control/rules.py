@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 """
 Threshold-Based Relay Automation Rules Engine
 
@@ -119,6 +118,8 @@ class RulesEngine:
         """Check if the current time is within the schedule window."""
         if not self._schedule_enabled:
             return True
+        if self._schedule_start is None or self._schedule_end is None:
+            return True
         now = datetime.now().time()
         if self._schedule_start <= self._schedule_end:
             return self._schedule_start <= now <= self._schedule_end
@@ -167,7 +168,7 @@ class RulesEngine:
         Returns:
             List of (relay_channel, state) actions to take.
         """
-        actions = []
+        actions: list[tuple[int, bool]] = []
 
         # --- Guard: schedule window ---
         if not self._is_in_schedule():

@@ -484,15 +484,15 @@ class WQM1App:
             if sock_path.exists():
                 with contextlib.suppress(Exception):
                     sock_path.unlink()
-        for _name, obj, method in [
-            ("cloud", self._cloud, "stop"),
-            ("heartbeat", self._leds, "heartbeat_stop"),
-            ("relays", self._relays, "all_off"),
-            ("radio", self._radio, "close"),
-            ("gps", self._gps, "close"),
-            ("adc", self._adc, "close"),
-            ("db", self._db, "close"),
-            ("leds", self._leds, "cleanup"),
+        for obj, method in [
+            (self._cloud, "stop"),
+            (self._leds, "heartbeat_stop"),
+            (self._relays, "all_off"),
+            (self._radio, "close"),
+            (self._gps, "close"),
+            (self._adc, "close"),
+            (self._db, "close"),
+            (self._leds, "cleanup"),
         ]:
             if obj:
                 with contextlib.suppress(Exception):
