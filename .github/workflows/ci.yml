@@ -38,7 +38,7 @@ jobs:
       - name: Install test dependencies
         run: |
           pip install pytest pytest-mock pytest-cov responses freezegun flask
-          pip install smbus2 pyserial requests pycryptodome pyyaml qrcode
+          pip install smbus2 pyserial pycryptodome pyyaml qrcode
 
       # Tests marked with @pytest.mark.hardware require physical I2C/GPIO/SPI
       # and are automatically skipped in CI via the -m flag below.
@@ -59,8 +59,8 @@ jobs:
 
       - name: Install mypy and stubs
         run: |
-          pip install mypy types-requests types-pyserial types-PyYAML
-          pip install smbus2 pyserial requests pycryptodome pyyaml flask
+          pip install mypy types-pyserial types-PyYAML
+          pip install smbus2 pyserial pycryptodome pyyaml flask
 
       - name: Run mypy
         env:

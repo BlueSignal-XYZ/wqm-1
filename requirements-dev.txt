@@ -7,7 +7,6 @@ responses>=0.25
 freezegun>=1.4
 ruff>=0.4
 mypy>=1.10
-types-requests>=2.31
 types-pyserial>=3.5
 bandit[toml]>=1.7
 pip-audit>=2.7
