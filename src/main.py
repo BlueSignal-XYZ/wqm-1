@@ -209,9 +209,8 @@ class WQM1App:
         except Exception as e:
             logger.warning("LoRa init failed: %s", e)
 
-        # --- Cloud sync ---
-        self._cloud = None  # Cloud sync removed for open-source release
-        pass  # Cloud sync disabled
+        # --- Cloud sync (removed for open-source release) ---
+        self._cloud = None
 
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
@@ -220,8 +219,6 @@ class WQM1App:
             self._rules.load_rules(self._settings.rules)
 
         # --- Command listener (for service window) ---
-        self._cmd_sock = None
-        self._cmd_thread = None
         self._start_cmd_listener()
 
         # --- Heartbeat LED ---
@@ -285,10 +282,7 @@ class WQM1App:
             if not isinstance(state, bool):
                 return {"ok": False, "error": "state must be boolean"}
             if self._relays:
-                if state:
-                    self._relays.on(channel)
-                else:
-                    self._relays.off(channel)
+                self._relays.set(channel, state)
                 return {"ok": True, "channel": channel, "state": state}
             return {"ok": False, "error": "relays not initialised"}
         return {"ok": False, "error": f"unknown action: {action}"}

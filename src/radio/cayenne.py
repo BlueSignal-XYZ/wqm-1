@@ -95,7 +95,7 @@ def decode(payload: bytes) -> dict[str, Any]:
 
     Useful for parsing downlink commands or testing.
     """
-    result = {}
+    result: dict[str, Any] = {}
     i = 0
     while i < len(payload) - 1:
         channel = payload[i]
