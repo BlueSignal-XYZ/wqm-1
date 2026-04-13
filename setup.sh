@@ -118,7 +118,13 @@ if [ -f "$SCRIPT_DIR/scripts/first-boot-check.sh" ]; then
 fi
 sudo chown -R "$INSTALL_USER:$INSTALL_USER" /var/run/bluesignal
 
+# GPS UART (/dev/serial0) requires dialout group membership.
+sudo usermod -aG dialout "$INSTALL_USER"
+
 echo "[8/8] Setup complete!"
+echo ""
+echo "Note: $INSTALL_USER was added to the 'dialout' group for GPS UART access."
+echo "      A reboot (or re-login) is required for the group change to take effect."
 echo ""
 echo "Next steps:"
 echo "  1. Edit config:      sudo nano /etc/bluesignal/config.yaml"
