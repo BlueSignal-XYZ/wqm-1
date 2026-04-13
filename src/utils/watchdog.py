@@ -41,7 +41,7 @@ class FanController:
         atexit.register(self.cleanup)
         logger.info("Fan controller initialised (on=%.0f°C, off=%.0f°C)", on_temp, off_temp)
 
-    def update(self, cpu_temp: float = None) -> bool:
+    def update(self, cpu_temp: float | None = None) -> bool:
         """
         Update fan state based on temperature. Uses CPU temp if not provided.
 

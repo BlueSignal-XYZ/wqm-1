@@ -101,3 +101,83 @@ class TestInt24:
         if val >= (1 << 23):
             val -= 1 << 24
         assert val == -977430
+
+    def test_from_int24_roundtrip(self, mock_hardware):
+        from radio.cayenne import _from_int24, _int24
+
+        for val in (0, 1, -1, 302670, -977430, (1 << 23) - 1, -(1 << 23)):
+            assert _from_int24(_int24(val)) == val
+
+
+class TestCayenneLPPDecoding:
+    """Test Cayenne LPP binary decoding."""
+
+    def test_decode_temperature(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        payload = encode({"temp_c": 22.5})
+        result = decode(payload)
+        assert abs(result["temp_c"] - 22.5) < 0.01
+
+    def test_decode_ph(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        payload = encode({"ph": 7.25})
+        result = decode(payload)
+        assert abs(result["ph"] - 7.25) < 0.01
+
+    def test_decode_gps(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        payload = encode({"lat": 30.267, "lon": -97.743, "alt_m": 150.0})
+        result = decode(payload)
+        # 0.0001° lat/lon resolution, 0.01m alt
+        assert abs(result["lat"] - 30.267) < 0.0001
+        assert abs(result["lon"] - (-97.743)) < 0.0001
+        assert abs(result["alt_m"] - 150.0) < 0.01
+
+    def test_decode_roundtrip_full_reading(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        data = {
+            "temp_c": 22.5,
+            "ph": 7.2,
+            "tds_ppm": 250.0,
+            "turbidity_ntu": 120.0,
+            "orp_mv": 250.0,
+            "lat": 30.267,
+            "lon": -97.743,
+            "alt_m": 150.0,
+        }
+        result = decode(encode(data))
+        for k in ("temp_c", "ph", "turbidity_ntu", "orp_mv"):
+            assert abs(result[k] - data[k]) < 0.1, k
+        # TDS 250 * 100 = 25000 < int16 max, roundtrips exactly
+        assert abs(result["tds_ppm"] - 250.0) < 0.1
+
+    def test_decode_empty_payload(self, mock_hardware):
+        from radio.cayenne import decode
+
+        assert decode(b"") == {}
+
+    def test_decode_unknown_type_stops(self, mock_hardware):
+        from radio.cayenne import decode
+
+        # Valid temperature, then unknown type — decoder should stop, not crash
+        payload = bytes([1, 0x67, 0x00, 0xE1, 2, 0xFF, 0x12, 0x34])
+        result = decode(payload)
+        assert "temp_c" in result
+        # No key for unknown type
+        assert all(not k.startswith("ch2") or k == "temp_c" for k in result)
+
+    def test_decode_truncated_frame_does_not_crash(self, mock_hardware):
+        from radio.cayenne import decode
+
+        # Temperature header claims 2 bytes but only 1 byte follows
+        assert decode(bytes([1, 0x67, 0x00])) == {}
+
+    def test_negative_temperature_roundtrip(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        result = decode(encode({"temp_c": -12.3}))
+        assert abs(result["temp_c"] - (-12.3)) < 0.01

@@ -141,3 +141,71 @@ class TestRotation:
         assert db.get_count(synced=False) == 1
         assert db.get_count() == 2
         db.close()
+
+
+class TestLoRaWANSession:
+    def test_initial_session_row_exists(self, tmp_path, mock_hardware):
+        """Schema should pre-populate a single session row (id=1)."""
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        session = db.load_session()
+        assert session is not None
+        assert session["fcnt_up"] == 0
+        assert session["joined"] == 0
+        db.close()
+
+    def test_save_and_load_session_roundtrip(self, tmp_path, mock_hardware):
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        dev_addr = b"\x01\x02\x03\x04"
+        nwk_skey = b"\x11" * 16
+        app_skey = b"\x22" * 16
+        db.save_session(dev_addr, nwk_skey, app_skey, fcnt_up=7, fcnt_down=3, joined=True)
+
+        session = db.load_session()
+        assert bytes(session["dev_addr"]) == dev_addr
+        assert bytes(session["nwk_skey"]) == nwk_skey
+        assert bytes(session["app_skey"]) == app_skey
+        assert session["fcnt_up"] == 7
+        assert session["fcnt_down"] == 3
+        assert session["joined"] == 1
+        db.close()
+
+    def test_session_persists_across_reopen(self, tmp_path, mock_hardware):
+        """Session should survive closing and reopening the DB (WAL commit)."""
+        from storage.database import WQM1Database
+
+        path = str(tmp_path / "test.db")
+        db = WQM1Database(path=path)
+        db.save_session(b"\xaa\xbb\xcc\xdd", b"\x33" * 16, b"\x44" * 16, 11, 2, True)
+        db.close()
+
+        db2 = WQM1Database(path=path)
+        session = db2.load_session()
+        assert session["fcnt_up"] == 11
+        assert session["joined"] == 1
+        db2.close()
+
+    def test_increment_fcnt(self, tmp_path, mock_hardware):
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        db.save_session(
+            b"\x00" * 4, b"\x00" * 16, b"\x00" * 16, fcnt_up=5, fcnt_down=0, joined=True
+        )
+        assert db.increment_fcnt() == 6
+        assert db.increment_fcnt() == 7
+        db.close()
+
+
+class TestWALPragma:
+    def test_busy_timeout_configured(self, tmp_path, mock_hardware):
+        """Busy timeout PRAGMA from _SCHEMA should apply to the connection."""
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        cur = db._conn.execute("PRAGMA busy_timeout")
+        assert cur.fetchone()[0] == 5000
+        db.close()
