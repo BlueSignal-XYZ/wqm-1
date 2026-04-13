@@ -1,7 +1,5 @@
 """Tests for Cayenne LPP decode and encode/decode roundtrip."""
 
-import struct
-
 
 class TestCayenneLPPDecode:
     """Test Cayenne LPP binary decoding."""

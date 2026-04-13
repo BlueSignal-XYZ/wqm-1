@@ -1,7 +1,5 @@
 """Extended GPS tests — coordinate parsing edge cases and driver behavior."""
 
-from unittest.mock import MagicMock
-
 
 class TestGPSCoordinateParsing:
     """Test NMEA lat/lon parsing edge cases."""

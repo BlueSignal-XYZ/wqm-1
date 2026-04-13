@@ -37,7 +37,7 @@ class TestUplinkFrame:
         mock_radio.send.return_value = True
         mock_radio.receive.return_value = None
 
-        dev_addr = b"\xAA\xBB\xCC\xDD"
+        dev_addr = b"\xaa\xbb\xcc\xdd"
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
         mac.restore_session(
             LoRaWANSession(
@@ -107,7 +107,7 @@ class TestSessionRestore:
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
 
         session = LoRaWANSession(
-            dev_addr=b"\xDE\xAD\xBE\xEF",
+            dev_addr=b"\xde\xad\xbe\xef",
             nwk_skey=b"\x11" * 16,
             app_skey=b"\x22" * 16,
             fcnt_up=100,
@@ -116,7 +116,7 @@ class TestSessionRestore:
         )
         mac.restore_session(session)
 
-        assert mac.session.dev_addr == b"\xDE\xAD\xBE\xEF"
+        assert mac.session.dev_addr == b"\xde\xad\xbe\xef"
         assert mac.session.fcnt_up == 100
         assert mac.session.joined is True
 
@@ -170,5 +170,5 @@ class TestMICExtended:
         frame = b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\x00"
 
         mic1 = _compute_uplink_mic(b"\x00" * 16, dev_addr, 0, frame)
-        mic2 = _compute_uplink_mic(b"\xFF" * 16, dev_addr, 0, frame)
+        mic2 = _compute_uplink_mic(b"\xff" * 16, dev_addr, 0, frame)
         assert mic1 != mic2

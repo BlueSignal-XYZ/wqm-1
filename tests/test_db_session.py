@@ -7,8 +7,8 @@ class TestLoRaWANSession:
 
         db = WQM1Database(path=str(tmp_path / "test.db"))
         dev_addr = b"\x01\x02\x03\x04"
-        nwk_skey = b"\xAA" * 16
-        app_skey = b"\xBB" * 16
+        nwk_skey = b"\xaa" * 16
+        app_skey = b"\xbb" * 16
 
         db.save_session(dev_addr, nwk_skey, app_skey, fcnt_up=42, fcnt_down=7, joined=True)
 
@@ -26,8 +26,8 @@ class TestLoRaWANSession:
         from storage.database import WQM1Database
 
         db = WQM1Database(path=str(tmp_path / "test.db"))
-        db.save_session(b"\x01" * 4, b"\xAA" * 16, b"\xBB" * 16, 10, 5, True)
-        db.save_session(b"\x02" * 4, b"\xCC" * 16, b"\xDD" * 16, 20, 10, True)
+        db.save_session(b"\x01" * 4, b"\xaa" * 16, b"\xbb" * 16, 10, 5, True)
+        db.save_session(b"\x02" * 4, b"\xcc" * 16, b"\xdd" * 16, 20, 10, True)
 
         session = db.load_session()
         assert session["fcnt_up"] == 20
@@ -47,7 +47,7 @@ class TestLoRaWANSession:
         from storage.database import WQM1Database
 
         db = WQM1Database(path=str(tmp_path / "test.db"))
-        db.save_session(b"\x01" * 4, b"\xAA" * 16, b"\xBB" * 16, 0, 0, True)
+        db.save_session(b"\x01" * 4, b"\xaa" * 16, b"\xbb" * 16, 0, 0, True)
 
         fcnt1 = db.increment_fcnt()
         assert fcnt1 == 1
@@ -62,7 +62,7 @@ class TestLoRaWANSession:
         from storage.database import WQM1Database
 
         db = WQM1Database(path=str(tmp_path / "test.db"))
-        db.save_session(b"\x01" * 4, b"\xAA" * 16, b"\xBB" * 16, 100, 0, True)
+        db.save_session(b"\x01" * 4, b"\xaa" * 16, b"\xbb" * 16, 100, 0, True)
 
         fcnt = db.increment_fcnt()
         assert fcnt == 101
