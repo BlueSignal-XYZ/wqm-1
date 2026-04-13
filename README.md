@@ -8,15 +8,15 @@
 
 ## What It Is
 
-The WQM-1 is a Raspberry Pi Zero 2W HAT (65 × 56.5 mm) designed for continuous, autonomous water quality monitoring. It combines precision analog sensing with long-range wireless connectivity in a compact, field-deployable package.
+The WQM-1 is a Raspberry Pi Zero 2W carrier board (120 × 105 mm) designed for continuous, autonomous water quality monitoring. It combines precision analog sensing with long-range wireless connectivity in a field-deployable package.
 
 **Key hardware:**
 
-- **Dual ADS1115** 16-bit ADCs (I²C) — six differential analog channels
+- **ADS1115** 16-bit ADC (I²C) — four analog channels
 - **SX1262 LoRa radio** — up to 15 km range via LoRaWAN
 - **u-blox GPS** — georeferenced readings out of the box
-- **MP1584EN buck converter** — wide-input power supply (7–28 V)
-- **10 A relay output** — control dosing pumps, aerators, or valves
+- **LMR51450 buck converter** — wide-input 24 V DC power (screw terminal)
+- **4× G5Q-14 optoisolated relays** — control dosing pumps, aerators, and valves
 
 **Monitored parameters:**
 
@@ -29,7 +29,11 @@ The WQM-1 is a Raspberry Pi Zero 2W HAT (65 × 56.5 mm) designed for continuous,
 
 **Data pipeline:**
 
-Sensors → ADS1115 (I²C) → Pi Zero 2W → SQLite WAL buffer → LoRaWAN (Cayenne LPP, AES-128 encrypted)
+Sensors → ADS1115 (I²C) → Pi Zero 2W → SQLite WAL buffer → LoRaWAN (SX1262, Cayenne LPP, AES-128)
+
+**Supported platforms:**
+
+Tested on Debian Trixie (13), kernel 6.12, Pi Zero 2W (aarch64). `setup.sh` handles Bookworm and Trixie automatically.
 
 ## Applications
 
@@ -49,24 +53,29 @@ The dev kit ships with cloud monitoring via [cloud.bluesignal.xyz](https://cloud
 
 ```
 wqm-1/
-├── src/                # Firmware source (Python)
-│   ├── main.py         # Entry point
-│   ├── sensors/        # Sensor drivers (ADS1115, GPS, pH, TDS, etc.)
-│   ├── radio/          # LoRaWAN + SX1262 driver
-│   ├── control/        # Relays, LEDs, automation rules
-│   ├── storage/        # SQLite database
-│   ├── calibration/    # Sensor calibration
-│   └── utils/          # Config, health, identity, watchdog
-├── config/             # Example configs (pinmap, policies, config.yaml)
+├── src/                   # Firmware source (Python)
+│   ├── main.py            # Entry point
+│   ├── sensors/           # Sensor drivers (ADS1115, GPS, pH, TDS, etc.)
+│   ├── radio/             # LoRaWAN + SX1262 driver
+│   ├── control/           # Relays, LEDs, automation rules
+│   ├── storage/           # SQLite database
+│   ├── calibration/       # Sensor calibration
+│   └── utils/             # Config, health, identity, watchdog
+├── config/                # Example configs (pinmap, policies, config.yaml)
 ├── hardware/
-│   ├── bom/            # Bill of Materials
-│   └── fab/            # Gerbers and schematics
-├── tests/              # Test suite
-├── systemd/            # systemd service file
-├── scripts/            # Diagnostics and utility scripts
-├── docs/               # Project documentation
-├── setup.sh            # Automated Pi setup script
-└── .github/            # CI workflows
+│   ├── bom/               # Bill of Materials
+│   └── fab/               # Gerbers and schematics
+├── firmware/              # Pre-built firmware artefacts
+├── images/                # README and docs images
+├── tests/                 # Test suite
+├── systemd/               # systemd service unit files
+├── scripts/               # Diagnostics and utility scripts
+├── docs/                  # Project documentation
+├── setup.sh               # Automated Pi setup script
+├── requirements.txt       # Runtime Python dependencies
+├── requirements-dev.txt   # Dev/test dependencies
+├── pyproject.toml         # Python project metadata & tool config
+└── .github/               # CI workflows
 ```
 
 ## Getting Started
