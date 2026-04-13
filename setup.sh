@@ -5,6 +5,10 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/bluesignal"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The user who invoked sudo (or the login user if run directly). Falls back to
+# "pi" only if neither SUDO_USER nor logname resolve — e.g. when running in a
+# non-interactive environment on a system without a "pi" user.
+INSTALL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 
 echo "=== BlueSignal WQM-1 Setup ==="
 
@@ -77,7 +81,7 @@ sudo cp "$SCRIPT_DIR/config/policies.yaml" "$INSTALL_DIR/config/"
 sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$INSTALL_DIR/scripts/"
 sudo chmod +x "$INSTALL_DIR/scripts/diagnostics.sh"
 
-sudo chown -R pi:pi "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal
+sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal
 
 # --- systemd services ---
 echo "[6/8] Installing systemd services..."
@@ -101,7 +105,7 @@ if [ -f "$SCRIPT_DIR/scripts/first-boot-check.sh" ]; then
     sudo cp "$SCRIPT_DIR/scripts/first-boot-check.sh" "$INSTALL_DIR/scripts/"
     sudo chmod +x "$INSTALL_DIR/scripts/first-boot-check.sh"
 fi
-sudo chown -R pi:pi /var/run/bluesignal
+sudo chown -R "$INSTALL_USER:$INSTALL_USER" /var/run/bluesignal
 
 echo "[8/8] Setup complete!"
 echo ""
