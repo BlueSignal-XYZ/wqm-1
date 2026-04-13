@@ -78,6 +78,15 @@ wqm-1/
 └── .github/               # CI workflows
 ```
 
+## Prerequisites
+
+The base **Raspberry Pi OS Lite (Trixie)** image does not ship with `git`. Before cloning this repository on a fresh Pi, install it:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+```
+
 ## Getting Started
 
 Full instructions for deploying the WQM-1 firmware onto a Raspberry Pi
