@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 
+import lgpio
 import RPi.GPIO as GPIO
 import spidev
 
@@ -113,12 +114,19 @@ class SX1262:
         self._tx_done_event = threading.Event()
         self._last_rssi = -120
 
+        # lgpio handle + callback for DIO1 edge detection. RPi.GPIO's
+        # add_event_detect() is broken on kernel 6.6+ ("Failed to add edge
+        # detection"), so we use lgpio just for the DIO1 interrupt. CS/RST/BUSY
+        # still go through RPi.GPIO since simple setup/output/input work fine.
+        self._lg_handle = None
+        self._lg_callback = None
+
         # Setup GPIO
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
         GPIO.setup(LORA_RST, GPIO.OUT, initial=GPIO.HIGH)
         GPIO.setup(LORA_BUSY, GPIO.IN)
-        GPIO.setup(LORA_DIO1, GPIO.IN)
+        # LORA_DIO1 is claimed below via lgpio.gpio_claim_alert() in init().
 
         # Open SPI
         self._spi = spidev.SpiDev()
@@ -214,10 +222,18 @@ class SX1262:
         )
         self._wait_busy()
 
-        # Setup DIO1 interrupt callback
-        with contextlib.suppress(Exception):
-            GPIO.remove_event_detect(LORA_DIO1)
-        GPIO.add_event_detect(LORA_DIO1, GPIO.RISING, callback=self._on_dio1)
+        # Setup DIO1 interrupt callback via lgpio (RPi.GPIO add_event_detect
+        # is broken on kernel 6.6+).
+        if self._lg_callback is not None:
+            with contextlib.suppress(Exception):
+                self._lg_callback.cancel()
+            self._lg_callback = None
+        if self._lg_handle is None:
+            self._lg_handle = lgpio.gpiochip_open(0)
+        lgpio.gpio_claim_alert(self._lg_handle, LORA_DIO1, lgpio.RISING_EDGE)
+        self._lg_callback = lgpio.callback(
+            self._lg_handle, LORA_DIO1, lgpio.RISING_EDGE, self._on_dio1_lg
+        )
 
         logger.info(
             "SX1262 initialised: %d MHz, SF%d, BW%d, CR4/%d, %d dBm",
@@ -285,6 +301,10 @@ class SX1262:
     def _on_dio1(self, channel) -> None:
         """DIO1 rising edge callback — TxDone or RxDone."""
         self._tx_done_event.set()
+
+    def _on_dio1_lg(self, chip, gpio, level, tick) -> None:
+        """lgpio callback signature wrapper for DIO1."""
+        self._on_dio1(gpio)
 
     def _reset(self) -> None:
         """Hardware reset: pull RST low for 1 ms, then release."""
@@ -464,8 +484,16 @@ class SX1262:
 
     def close(self) -> None:
         """Close SPI and release GPIO."""
-        with contextlib.suppress(Exception):
-            GPIO.remove_event_detect(LORA_DIO1)
+        if self._lg_callback is not None:
+            with contextlib.suppress(Exception):
+                self._lg_callback.cancel()
+            self._lg_callback = None
+        if self._lg_handle is not None:
+            with contextlib.suppress(Exception):
+                lgpio.gpio_free(self._lg_handle, LORA_DIO1)
+            with contextlib.suppress(Exception):
+                lgpio.gpiochip_close(self._lg_handle)
+            self._lg_handle = None
         if self._spi:
             self._spi.close()
             self._spi = None
