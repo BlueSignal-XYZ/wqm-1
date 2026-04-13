@@ -30,7 +30,7 @@ sudo apt-get install -y -qq \
 
 # --- Python dependencies ---
 echo "[2/7] Installing Python packages..."
-sudo pip3 install --break-system-packages -r "$SCRIPT_DIR/requirements.txt"
+sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements.txt"
 
 # --- /boot/config.txt overlays ---
 echo "[3/7] Configuring /boot/config.txt..."
