@@ -404,11 +404,11 @@ class WQM1App:
             logger.info(
                 "Stored id=%d: pH=%s TDS=%s Turb=%s ORP=%s T=%s",
                 row_id,
-                f"{ph:.2f}" if ph else "N/A",
-                f"{tds:.1f}" if tds else "N/A",
-                f"{turb:.1f}" if turb else "N/A",
-                f"{orp:.1f}" if orp else "N/A",
-                f"{temp_c:.1f}°C" if temp_c else "N/A",
+                f"{ph:.2f}" if ph is not None else "N/A",
+                f"{tds:.1f}" if tds is not None else "N/A",
+                f"{turb:.1f}" if turb is not None else "N/A",
+                f"{orp:.1f}" if orp is not None else "N/A",
+                f"{temp_c:.1f}°C" if temp_c is not None else "N/A",
             )
         except Exception as e:
             logger.error("DB insert failed: %s", e)
