@@ -89,3 +89,61 @@ class TestGPSDriver:
         # Should have HIGH then LOW on EXTINT pin (19)
         extint_calls = [c for c in calls if c[0][0] == 19]
         assert len(extint_calls) >= 2
+
+    def test_close_releases_serial(self, mock_hardware):
+        from sensors.gps import GPS
+
+        gps = GPS()
+        gps.close()
+        mock_hardware["serial"].close.assert_called_once()
+
+    def test_get_fix_returns_last_fix_when_serial_closed(self, mock_hardware):
+        from sensors.gps import GPS, GPSFix
+
+        gps = GPS()
+        cached = GPSFix(latitude=10.0, longitude=20.0)
+        gps._last_fix = cached
+        mock_hardware["serial"].is_open = False
+        assert gps.get_fix(timeout_s=0.05) is cached
+
+    def test_get_fix_parses_streamed_gga(self, mock_hardware):
+        from sensors.gps import GPS
+
+        gga = b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,47.0,M,,*4F\r\n"
+        # Stream one GGA then empty
+        mock_hardware["serial"].readline.side_effect = [gga, b"", b""]
+        gps = GPS()
+        fix = gps.get_fix(timeout_s=1.0)
+        assert fix is not None
+        assert abs(fix.latitude - 48.1173) < 0.001
+
+
+class TestGGAParsingEdgeCases:
+    def test_parse_gga_with_timestamp(self, mock_hardware):
+        from sensors.gps import _parse_gga
+
+        sentence = "$GPGGA,123519.50,4807.038,N,01131.000,E,1,08,0.9,545.4,M,47.0,M,,*4F"
+        fix = _parse_gga(sentence)
+        assert fix is not None
+        assert fix.timestamp is not None
+        assert fix.timestamp.hour == 12
+        assert fix.timestamp.minute == 35
+        assert fix.timestamp.second == 19
+
+    def test_parse_gga_missing_lat_returns_none(self, mock_hardware):
+        from sensors.gps import _parse_gga
+
+        sentence = "$GPGGA,123519,,,01131.000,E,1,08,0.9,545.4,M,47.0,M,,*4F"
+        assert _parse_gga(sentence) is None
+
+    def test_parse_gga_missing_lon_returns_none(self, mock_hardware):
+        from sensors.gps import _parse_gga
+
+        sentence = "$GPGGA,123519,4807.038,N,,,1,08,0.9,545.4,M,47.0,M,,*4F"
+        assert _parse_gga(sentence) is None
+
+    def test_checksum_invalid_hex_returns_false(self, mock_hardware):
+        from sensors.gps import _verify_checksum
+
+        # *XX where XX is not valid hex
+        assert _verify_checksum("$GPGGA,123519*ZZ") is False

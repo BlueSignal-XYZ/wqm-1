@@ -92,3 +92,12 @@ class TestCalibrationManager:
         # Defaults preserved
         assert cm.data.ph_v_at_7 == 1.50
         assert cm.data.tds_k == 500.0
+
+    def test_load_ignores_unknown_keys(self, tmp_path, mock_hardware):
+        from calibration.calibrate import CalibrationManager
+
+        bad = tmp_path / "cal.yaml"
+        bad.write_text("ph_v_at_7: 1.7\nunknown_key: foo\n")
+        cm = CalibrationManager(path=str(bad))
+        assert cm.data.ph_v_at_7 == 1.7
+        assert not hasattr(cm.data, "unknown_key")

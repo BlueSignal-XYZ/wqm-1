@@ -199,6 +199,14 @@ class TestLoRaWANSession:
         assert db.increment_fcnt() == 7
         db.close()
 
+    def test_close_is_idempotent(self, tmp_path, mock_hardware):
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        db.close()
+        # Calling close again must not raise
+        db.close()
+
 
 class TestWALPragma:
     def test_busy_timeout_configured(self, tmp_path, mock_hardware):
@@ -208,4 +216,18 @@ class TestWALPragma:
         db = WQM1Database(path=str(tmp_path / "test.db"))
         cur = db._conn.execute("PRAGMA busy_timeout")
         assert cur.fetchone()[0] == 5000
+        db.close()
+
+
+class TestRotationDefaults:
+    def test_rotate_uses_settings_default(self, tmp_path, mock_hardware):
+        """rotate() with no max_rows reads from settings."""
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        # Insert two rows; default db_max_rows is 100_000 so rotate is a no-op
+        db.insert_reading({"ph": 7.0})
+        db.insert_reading({"ph": 7.1})
+        deleted = db.rotate()
+        assert deleted == 0
         db.close()

@@ -119,6 +119,13 @@ class TestCayenneLPPDecoding:
         result = decode(payload)
         assert abs(result["temp_c"] - 22.5) < 0.01
 
+    def test_decode_temperature_negative(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        payload = encode({"temp_c": -10.3})
+        result = decode(payload)
+        assert abs(result["temp_c"] - -10.3) < 0.01
+
     def test_decode_ph(self, mock_hardware):
         from radio.cayenne import decode, encode
 
@@ -175,6 +182,13 @@ class TestCayenneLPPDecoding:
 
         # Temperature header claims 2 bytes but only 1 byte follows
         assert decode(bytes([1, 0x67, 0x00])) == {}
+
+    def test_decode_truncated_gps(self, mock_hardware):
+        from radio.cayenne import decode
+
+        # Channel + GPS type but only 5 of 9 bytes
+        result = decode(b"\x06\x88\x00\x00\x00\x00\x00")
+        assert "lat" not in result
 
     def test_negative_temperature_roundtrip(self, mock_hardware):
         from radio.cayenne import decode, encode

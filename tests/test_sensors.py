@@ -185,3 +185,112 @@ class TestORPSensor:
         mock_adc.read_voltage = MagicMock(side_effect=RuntimeError("fail"))
         sensor = ORPSensor(mock_adc)
         assert sensor.read() is None
+
+
+class TestPHCalibrationEdgeCases:
+    def test_set_calibration_with_close_voltages_falls_back_to_nernst(
+        self, mock_hardware, mock_adc
+    ):
+        from sensors.ph import PHSensor
+
+        ph = PHSensor(mock_adc)
+        ph.set_calibration(v_ph4=1.5000, v_ph7=1.5005)
+        # Slope falls back to default Nernst slope at 25°C (~0.05916)
+        assert abs(ph._slope - 0.05916) < 1e-6
+
+    def test_temp_compensation_changes_slope(self, mock_hardware, mock_adc):
+        from sensors.ph import PHSensor
+
+        mock_adc.read_voltage = MagicMock(return_value=1.30)
+        ph = PHSensor(mock_adc)
+        ph_25 = ph.read(temp_c=25.0)
+        # Drain the median window so next reads are independent
+        ph._window.clear()
+        ph_50 = ph.read(temp_c=50.0)
+        # Different temperature → different (compensated) pH
+        assert ph_25 != ph_50
+
+    def test_temp_none_uses_no_compensation(self, mock_hardware, mock_adc):
+        from sensors.ph import PHSensor
+
+        mock_adc.read_voltage = MagicMock(return_value=1.50)
+        ph = PHSensor(mock_adc)
+        # Should not raise when temp_c is None
+        result = ph.read(temp_c=None)
+        assert result is not None
+
+
+class TestTDSEdgeCases:
+    def test_temp_none_skips_compensation(self, mock_hardware, mock_adc):
+        from sensors.tds import TDSSensor
+
+        mock_adc.read_voltage = MagicMock(return_value=0.3125)
+        tds = TDSSensor(mock_adc)
+        result = tds.read(temp_c=None)
+        # Should equal uncompensated reading
+        assert result is not None
+        assert abs(result - 500.0) < 5.0
+
+    def test_set_calibration_clears_window(self, mock_hardware, mock_adc):
+        from sensors.tds import TDSSensor
+
+        mock_adc.read_voltage = MagicMock(return_value=0.3125)
+        tds = TDSSensor(mock_adc)
+        tds.read()
+        assert len(tds._window) > 0
+        tds.set_calibration(k=600.0)
+        assert tds._window == []
+        assert tds._k == 600.0
+
+    def test_extreme_negative_compensation_falls_back(self, mock_hardware, mock_adc):
+        """Temperature far below 25°C such that compensation goes <= 0 falls back to 1.0."""
+        from sensors.tds import TDSSensor
+
+        mock_adc.read_voltage = MagicMock(return_value=0.5)
+        tds = TDSSensor(mock_adc)
+        # TDS_TEMP_COEFF = 0.02, compensation = 1 + 0.02*(temp-25)
+        # At temp = -25: 1 + 0.02 * (-50) = 0.0 → falls back to 1.0
+        result = tds.read(temp_c=-25.0)
+        assert result is not None and result > 0
+
+
+class TestTurbidityEdgeCases:
+    def test_set_clear_water_voltage_clears_window(self, mock_hardware, mock_adc):
+        from sensors.turbidity import TurbiditySensor
+
+        mock_adc.read_voltage = MagicMock(return_value=4.1)
+        sensor = TurbiditySensor(mock_adc)
+        sensor.read()
+        assert len(sensor._window) > 0
+        sensor.set_clear_water_voltage(4.0)
+        assert sensor._window == []
+        assert sensor._v_clear == 4.0
+
+    def test_invalid_voltage_range_returns_none(self, mock_hardware, mock_adc):
+        from sensors.turbidity import TurbiditySensor
+
+        mock_adc.read_voltage = MagicMock(return_value=2.0)
+        sensor = TurbiditySensor(mock_adc)
+        # If clear-water voltage gets corrupted to <= TURB_V_MAX (0.5), range invalid
+        sensor._v_clear = 0.3
+        assert sensor.read() is None
+
+    def test_below_max_clamped_to_max(self, mock_hardware, mock_adc):
+        from sensors.turbidity import TurbiditySensor
+
+        mock_adc.read_voltage = MagicMock(return_value=0.0)
+        sensor = TurbiditySensor(mock_adc)
+        ntu = sensor.read()
+        assert ntu == 3000.0  # clamped to TURB_NTU_MAX
+
+
+class TestORPCalibrationEdgeCases:
+    def test_offset_persists_across_reads(self, mock_hardware, mock_adc):
+        from sensors.orp import ORPSensor
+
+        mock_adc.read_voltage = MagicMock(return_value=2.048)
+        sensor = ORPSensor(mock_adc)
+        sensor.set_offset(known_mv=100.0, measured_mv=50.0)
+        # offset = 50.0 mV
+        result = sensor.read()
+        assert abs(result - 50.0) < 1.0
