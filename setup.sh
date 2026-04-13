@@ -28,6 +28,11 @@ sudo apt-get install -y -qq \
     i2c-tools python3-smbus \
     "$GPIOD_PKG"
 
+# Ensure the i2c-dev module loads on boot. On Trixie, i2c_bcm2835 auto-loads
+# but i2c-dev does not, so /dev/i2c-1 never appears.
+echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
+sudo modprobe i2c-dev 2>/dev/null || true
+
 # --- Python dependencies ---
 echo "[2/7] Installing Python packages..."
 sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements.txt"
