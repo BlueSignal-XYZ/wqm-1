@@ -4,6 +4,8 @@ PIN-based authentication for the service window.
 
 import functools
 import time
+from collections.abc import Callable
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -23,11 +25,11 @@ _MAX_ATTEMPTS = 5
 _WINDOW_S = 60.0
 
 
-def login_required(f):
+def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator: redirect to login if session not authenticated."""
 
     @functools.wraps(f)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         if not session.get("pin_verified"):
             return redirect(url_for("auth.login", next=request.path))
         return f(*args, **kwargs)
