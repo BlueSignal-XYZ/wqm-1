@@ -11,10 +11,18 @@ echo "=== BlueSignal WQM-1 Setup ==="
 # --- System packages ---
 echo "[1/7] Installing system packages..."
 sudo apt-get update -qq
+
+# Detect libgpiod version: libgpiod3 on Trixie (13+), libgpiod2 on Bookworm.
+if apt-cache show libgpiod3 &>/dev/null; then
+    GPIOD_PKG="libgpiod3"
+else
+    GPIOD_PKG="libgpiod2"
+fi
+
 sudo apt-get install -y -qq \
     python3-pip python3-venv python3-dev \
     i2c-tools python3-smbus \
-    libgpiod2
+    "$GPIOD_PKG"
 
 # --- Python dependencies ---
 echo "[2/7] Installing Python packages..."
