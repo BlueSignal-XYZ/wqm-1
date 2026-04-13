@@ -49,6 +49,14 @@ class RelayController:
             self._state &= ~(1 << (channel - 1))
         logger.debug("Relay %d %s (GPIO %d)", channel, "ON" if state else "OFF", pin)
 
+    def on(self, channel: int) -> None:
+        """Turn a relay on (convenience wrapper for set)."""
+        self.set(channel, True)
+
+    def off(self, channel: int) -> None:
+        """Turn a relay off (convenience wrapper for set)."""
+        self.set(channel, False)
+
     def get(self, channel: int) -> bool:
         """Check if a relay is currently on."""
         if not 1 <= channel <= 4:
