@@ -26,6 +26,7 @@ fi
 sudo apt-get install -y -qq \
     python3-pip python3-venv python3-dev \
     i2c-tools python3-smbus \
+    swig liblgpio-dev \
     "$GPIOD_PKG"
 
 # Ensure the i2c-dev module loads on boot. On Trixie, i2c_bcm2835 auto-loads
@@ -56,7 +57,19 @@ declare -a OVERLAYS=(
 )
 
 for line in "${OVERLAYS[@]}"; do
-    if ! grep -qF "$line" "$CONFIG"; then
+    # Escape BRE metacharacters so overlay strings can be used safely in
+    # grep/sed patterns (defensive — none of the current overlays contain
+    # special chars, but future additions might).
+    esc=$(printf '%s\n' "$line" | sed 's/[][\.*^$/]/\\&/g')
+
+    if grep -qE "^[[:space:]]*${esc}[[:space:]]*$" "$CONFIG"; then
+        # Already present and uncommented — nothing to do.
+        :
+    elif grep -qE "^[[:space:]]*#+[[:space:]]*${esc}[[:space:]]*$" "$CONFIG"; then
+        # Commented-out version exists — uncomment it in place.
+        sudo sed -i -E "s|^[[:space:]]*#+[[:space:]]*${esc}[[:space:]]*$|${line}|" "$CONFIG"
+        echo "  Uncommented: $line"
+    else
         echo "$line" | sudo tee -a "$CONFIG" > /dev/null
         echo "  Added: $line"
     fi
