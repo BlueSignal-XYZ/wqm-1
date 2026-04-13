@@ -102,6 +102,12 @@ sudo systemctl enable bluesignal-service-window.service
 # --- Service window + provisioning ---
 echo "[7/8] Installing service window and provisioning tools..."
 sudo mkdir -p "$INSTALL_DIR/scripts"
+
+# /var/run is tmpfs and clears on reboot, so install a tmpfiles.d entry
+# that recreates /var/run/bluesignal owned by the install user on every boot.
+sudo tee /etc/tmpfiles.d/bluesignal.conf > /dev/null <<EOF
+d /var/run/bluesignal 0755 $INSTALL_USER $INSTALL_USER -
+EOF
 sudo mkdir -p /var/run/bluesignal
 if [ -f "$SCRIPT_DIR/scripts/provision.py" ]; then
     sudo cp "$SCRIPT_DIR/scripts/provision.py" "$INSTALL_DIR/scripts/"
