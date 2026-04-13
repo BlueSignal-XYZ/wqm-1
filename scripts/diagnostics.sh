@@ -18,6 +18,10 @@ echo ""
 
 # --- I2C: ADS1115 at 0x48 ---
 if command -v i2cdetect &>/dev/null; then
+    # On fresh Trixie boots i2c-dev may not be loaded yet; make sure it is
+    # before probing the bus.
+    sudo modprobe i2c-dev 2>/dev/null || true
+    sleep 0.5
     if i2cdetect -y 1 2>/dev/null | grep -q "48"; then
         pass "I2C:     ADS1115 found at 0x48"
     else

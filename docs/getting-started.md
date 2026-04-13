@@ -8,9 +8,12 @@ Raspberry Pi Zero 2W with the WQM-1 HAT.
 **Hardware:**
 
 - Raspberry Pi Zero 2W
-- WQM-1 HAT (PCBA revision Fin_3), attached to the Pi's GPIO header
+- WQM-1 carrier board, attached to the Pi's GPIO header
 - microSD card (16 GB or larger recommended)
-- USB-C power supply (5 V / 2.5 A minimum)
+- 24 V DC power supply wired to the WQM-1 screw terminal for production
+  deployment. A USB-C 5 V / 2.5 A supply to the Pi is fine for initial
+  dev/debug (flashing, first-boot configuration) but is not the intended
+  field power source.
 - A computer with an SD card reader for flashing
 
 **Software (on your computer):**
@@ -22,6 +25,11 @@ Raspberry Pi Zero 2W with the WQM-1 HAT.
 
 - WiFi network name (SSID) and password — the Pi Zero 2W has built-in
   WiFi
+
+**User account:**
+
+- Any username works. `setup.sh` auto-detects the invoking user via
+  `$SUDO_USER`/`logname`, so you do not need to use `pi` specifically.
 
 **Optional:**
 
@@ -81,6 +89,11 @@ git clone https://github.com/bluesignal-xyz/wqm-1.git
 cd wqm-1
 sudo bash setup.sh
 ```
+
+> On Debian Trixie, `setup.sh` automatically handles package-name
+> differences (`libgpiod3` vs `libgpiod2`) and Debian-managed pip
+> packages (adds `--ignore-installed` so pip doesn't try to uninstall
+> distro-shipped modules without RECORD files).
 
 The setup script runs 7 stages automatically:
 
@@ -223,7 +236,10 @@ sudo systemctl stop bluesignal-wqm
 
 - Make sure the WQM-1 HAT is firmly seated on the GPIO header.
 - Verify `/boot/config.txt` (or `/boot/firmware/config.txt` on
-  Bookworm) contains `dtparam=i2c_arm=on`.
+  Bookworm/Trixie) contains `dtparam=i2c_arm=on`.
+- `setup.sh` creates `/etc/modules-load.d/i2c-dev.conf` to auto-load
+  the `i2c-dev` kernel module on boot. If `/dev/i2c-1` is missing,
+  run `sudo modprobe i2c-dev` manually to load it immediately.
 - Reboot after any config.txt changes.
 
 ### No 1-Wire devices in `/sys/bus/w1/devices/`
@@ -239,6 +255,35 @@ sudo systemctl stop bluesignal-wqm
 - Reboot after config.txt changes.
 - The GPS module may take several minutes to get a first fix outdoors.
 
+### GPS: permission denied on `/dev/serial0`
+
+`/dev/serial0` is owned by `root:dialout`, so the firmware user must be
+a member of `dialout` to read NMEA data. `setup.sh` adds the invoking
+user to `dialout` automatically. If you installed manually or added
+another user later, run:
+
+```bash
+sudo usermod -aG dialout $USER
+sudo reboot
+```
+
+A reboot (or re-login) is required for the group change to take effect.
+
+### LoRa: "Failed to add edge detection"
+
+This error comes from `RPi.GPIO`'s `add_event_detect()` and occurs on
+kernel 6.6+ (including Debian Trixie's 6.12). Firmware v1.1.0+ uses
+`lgpio` for the SX1262 DIO1 interrupt, which works on current kernels.
+If you see this error, pull the latest firmware from the repo and
+reinstall:
+
+```bash
+cd ~/wqm-1
+git pull
+sudo bash setup.sh
+sudo systemctl restart bluesignal-wqm
+```
+
 ### Service fails to start
 
 Check the error:
@@ -253,8 +298,10 @@ Common causes:
   with `python3 -c "import yaml; yaml.safe_load(open('/etc/bluesignal/config.yaml'))"`
 - **Missing Python package** — re-run
   `sudo pip3 install --break-system-packages -r /opt/bluesignal/requirements.txt`
-- **Permission denied** — ensure directories are owned by `pi`:
-  `sudo chown -R pi:pi /opt/bluesignal /var/lib/bluesignal /var/log/bluesignal`
+- **Permission denied** — ensure the install directories are owned by
+  the user `bluesignal-wqm.service` runs as (by default the user who
+  invoked `setup.sh`):
+  `sudo chown -R $USER:$USER /opt/bluesignal /var/lib/bluesignal /var/log/bluesignal`
 
 ### LoRaWAN join fails
 
