@@ -90,8 +90,12 @@ sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /
 
 # --- systemd services ---
 echo "[6/8] Installing systemd services..."
-sudo cp "$SCRIPT_DIR/systemd/bluesignal-wqm.service" /etc/systemd/system/
-sudo cp "$SCRIPT_DIR/systemd/bluesignal-service-window.service" /etc/systemd/system/
+# Substitute the actual install user into the service files at install time.
+# The source files in the repo keep the documented default of User=pi.
+sudo sed "s/^User=pi$/User=$INSTALL_USER/" "$SCRIPT_DIR/systemd/bluesignal-wqm.service" \
+    | sudo tee /etc/systemd/system/bluesignal-wqm.service > /dev/null
+sudo sed "s/^User=pi$/User=$INSTALL_USER/" "$SCRIPT_DIR/systemd/bluesignal-service-window.service" \
+    | sudo tee /etc/systemd/system/bluesignal-service-window.service > /dev/null
 if [ -f "$SCRIPT_DIR/systemd/bluesignal-provision.service" ]; then
     sudo cp "$SCRIPT_DIR/systemd/bluesignal-provision.service" /etc/systemd/system/
 fi
