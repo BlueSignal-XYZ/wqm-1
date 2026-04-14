@@ -53,6 +53,7 @@ class ADS1115:
 
     def __init__(self, bus: int = I2C_BUS, address: int = ADS1115_ADDR):
         self._address = address
+        self._bus: smbus2.SMBus | None = None
         try:
             self._bus = smbus2.SMBus(bus)
             # Verify device is reachable by reading config register
