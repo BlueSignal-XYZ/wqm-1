@@ -100,3 +100,65 @@ class TestCayenneLPPDecode:
         result = decode(payload)
         assert result["lat"] < 0
         assert result["lon"] > 0
+
+
+class TestCayenneLPPEncodeClamp:
+    """Test that out-of-range values are clamped, not allowed to overflow struct."""
+
+    def test_extreme_ph_does_not_crash(self, mock_hardware):
+        # pH 14 → 1400, well within int16 (±32767), no clamp needed
+        # but the guard should still allow unusual values without raising
+        from radio.cayenne import decode, encode
+
+        payload = encode({"ph": 14.0})
+        assert len(payload) == 4  # 1 channel + 1 type + 2 bytes
+        assert decode(payload)["ph"] == 14.0
+
+    def test_extreme_temperature_is_clamped(self, mock_hardware):
+        # 4000°C → 40000 (would overflow int16). Clamp should keep it packable.
+        from radio.cayenne import encode
+
+        payload = encode({"temp_c": 4000.0})
+        # Must not raise; length still 4 bytes for the temp field
+        assert len(payload) == 4
+
+    def test_extreme_negative_temperature_is_clamped(self, mock_hardware):
+        from radio.cayenne import encode
+
+        payload = encode({"temp_c": -5000.0})
+        assert len(payload) == 4
+
+    def test_large_tds_is_clamped(self, mock_hardware):
+        from radio.cayenne import encode
+
+        # 1,000,000 ppm × 100 resolution overflows int16 but must encode
+        payload = encode({"tds_ppm": 1_000_000.0})
+        assert len(payload) == 4
+
+    def test_encode_skips_none_values(self, mock_hardware):
+        from radio.cayenne import encode
+
+        payload = encode({"temp_c": None, "ph": 7.0, "tds_ppm": None})
+        # Only pH field; no temp or TDS entries
+        assert len(payload) == 4
+
+    def test_encode_empty_dict_returns_empty_bytes(self, mock_hardware):
+        from radio.cayenne import encode
+
+        assert encode({}) == b""
+
+    def test_encode_missing_altitude_defaults_to_zero(self, mock_hardware):
+        from radio.cayenne import decode, encode
+
+        payload = encode({"lat": 1.0, "lon": 2.0})  # no alt_m
+        result = decode(payload)
+        assert abs(result["alt_m"]) < 0.01
+
+    def test_encode_gps_requires_both_lat_and_lon(self, mock_hardware):
+        from radio.cayenne import encode
+
+        # lat without lon should skip GPS entirely
+        payload = encode({"lat": 30.0})
+        assert len(payload) == 0
+        payload = encode({"lon": -100.0})
+        assert len(payload) == 0
