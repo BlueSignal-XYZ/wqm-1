@@ -38,7 +38,7 @@ def encode(data: dict[str, Any]) -> bytes:
     # CH1: Temperature (0.1°C resolution, signed)
     temp = data.get("temp_c")
     if temp is not None:
-        val = int(round(temp * 10))
+        val = max(-32768, min(32767, int(round(temp * 10))))
         buf.append(CH_TEMPERATURE)
         buf.append(LPP_TEMPERATURE)
         buf += struct.pack(">h", val)
@@ -46,7 +46,7 @@ def encode(data: dict[str, Any]) -> bytes:
     # CH2: pH (analog input, 0.01 resolution)
     ph = data.get("ph")
     if ph is not None:
-        val = int(round(ph * 100))
+        val = max(-32768, min(32767, int(round(ph * 100))))
         buf.append(CH_PH)
         buf.append(LPP_ANALOG_INPUT)
         buf += struct.pack(">h", val)

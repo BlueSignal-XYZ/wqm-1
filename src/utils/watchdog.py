@@ -9,6 +9,7 @@ Watchdog: BCM2835 hardware watchdog (/dev/watchdog), must be pet
 import atexit
 import contextlib
 import logging
+from typing import IO
 
 import RPi.GPIO as GPIO
 
@@ -81,8 +82,8 @@ class FanController:
 class HardwareWatchdog:
     """BCM2835 hardware watchdog. Pet it or the system reboots."""
 
-    def __init__(self):
-        self._fd = None
+    def __init__(self) -> None:
+        self._fd: IO[bytes] | None = None
         try:
             self._fd = open("/dev/watchdog", "wb", buffering=0)  # noqa: SIM115
             logger.info("Hardware watchdog enabled")

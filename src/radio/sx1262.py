@@ -297,11 +297,11 @@ class SX1262:
 
         return done
 
-    def _on_dio1(self, channel) -> None:
+    def _on_dio1(self, channel: int) -> None:
         """DIO1 rising edge callback — TxDone or RxDone."""
         self._tx_done_event.set()
 
-    def _on_dio1_lg(self, chip, gpio, level, tick) -> None:
+    def _on_dio1_lg(self, chip: int, gpio: int, level: int, tick: int) -> None:
         """lgpio callback signature wrapper for DIO1."""
         self._on_dio1(gpio)
 
