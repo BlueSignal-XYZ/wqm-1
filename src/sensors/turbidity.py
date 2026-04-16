@@ -17,7 +17,7 @@ logger = logging.getLogger("wqm1.turbidity")
 class TurbiditySensor:
     """Turbidity sensor with voltage-to-NTU linear conversion."""
 
-    def __init__(self, adc: ADS1115):
+    def __init__(self, adc: ADS1115) -> None:
         self._adc = adc
         self._window: list[float] = []
         self._window_size = 5

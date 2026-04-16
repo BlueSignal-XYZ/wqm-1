@@ -135,6 +135,49 @@ class TestTDSCalibrationDetailed:
         assert result is not None
         assert result >= 0
 
+    def test_tds_negative_comp_coeff_fallback(self, mock_hardware):
+        """
+        At a sufficiently cold temperature, 1 + TDS_TEMP_COEFF*(T-25) goes
+        non-positive — the code must fall back to comp_coeff=1.0 rather than
+        producing a zero/negative divisor.
+        """
+        from sensors.ads1115 import ADS1115
+        from sensors.tds import TDSSensor
+        from utils.config import TDS_TEMP_COEFF
+
+        adc = ADS1115()
+        adc.read_voltage = MagicMock(return_value=0.3125)
+        tds = TDSSensor(adc)
+
+        # Solve 1 + 0.02*(T-25) <= 0  →  T <= -25. Use a very cold temp.
+        breakdown_temp = -200.0
+        assert 1.0 + TDS_TEMP_COEFF * (breakdown_temp - 25.0) <= 0
+        result = tds.read(temp_c=breakdown_temp)
+        assert result is not None
+        assert result >= 0
+
+    def test_tds_window_caps_at_five(self, mock_hardware):
+        """TDS moving median window must not grow beyond window_size."""
+        from sensors.ads1115 import ADS1115
+        from sensors.tds import TDSSensor
+
+        adc = ADS1115()
+        tds = TDSSensor(adc)
+        for v in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]:
+            adc.read_voltage = MagicMock(return_value=v)
+            tds.read(temp_c=25.0)
+        assert len(tds._window) == 5
+
+    def test_tds_read_adc_failure_returns_none(self, mock_hardware):
+        """ADC read exceptions must return None rather than propagate."""
+        from sensors.ads1115 import ADS1115
+        from sensors.tds import TDSSensor
+
+        adc = ADS1115()
+        adc.read_voltage = MagicMock(side_effect=OSError("I2C bus error"))
+        tds = TDSSensor(adc)
+        assert tds.read(temp_c=25.0) is None
+
 
 class TestTurbidityCalibrationDetailed:
     def test_set_clear_water_voltage(self, mock_hardware):
@@ -161,6 +204,41 @@ class TestTurbidityCalibrationDetailed:
         ntu = sensor.read()
         assert ntu is not None
         assert 1000 < ntu < 2000  # should be roughly mid-range
+
+    def test_turbidity_invalid_voltage_range(self, mock_hardware):
+        """
+        If clear-water voltage is set at or below TURB_V_MAX, the slope
+        inversion guard must return None (not raise a ZeroDivisionError).
+        """
+        from sensors.ads1115 import ADS1115
+        from sensors.turbidity import TurbiditySensor
+        from utils.config import TURB_V_MAX
+
+        adc = ADS1115()
+        adc.read_voltage = MagicMock(return_value=0.3)
+        sensor = TurbiditySensor(adc)
+        sensor.set_clear_water_voltage(TURB_V_MAX)  # equal → range is zero
+        assert sensor.read() is None
+
+    def test_turbidity_adc_failure_returns_none(self, mock_hardware):
+        from sensors.ads1115 import ADS1115
+        from sensors.turbidity import TurbiditySensor
+
+        adc = ADS1115()
+        adc.read_voltage = MagicMock(side_effect=RuntimeError("ADS1115 not available"))
+        sensor = TurbiditySensor(adc)
+        assert sensor.read() is None
+
+    def test_turbidity_window_caps_at_five(self, mock_hardware):
+        from sensors.ads1115 import ADS1115
+        from sensors.turbidity import TurbiditySensor
+
+        adc = ADS1115()
+        sensor = TurbiditySensor(adc)
+        for v in [3.0, 2.8, 2.5, 2.0, 1.5, 1.0, 0.8]:
+            adc.read_voltage = MagicMock(return_value=v)
+            sensor.read()
+        assert len(sensor._window) == 5
 
 
 class TestORPCalibrationDetailed:
@@ -238,3 +316,22 @@ class TestCalibrationManagerEdgeCases:
 
         cm2 = CalibrationManager(path=path)
         assert abs(cm2.data.orp_offset_mv - 20.0) < 0.1
+
+    def test_save_failure_does_not_raise(self, mock_hardware, tmp_path, monkeypatch):
+        """
+        If the atomic save fails (e.g. read-only filesystem), the error must
+        be logged but not raise, so a calibration call still returns its
+        computed value.
+        """
+        from calibration import calibrate as cal_mod
+
+        cm = cal_mod.CalibrationManager(path=str(tmp_path / "cal.yaml"))
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("Read-only filesystem")
+
+        monkeypatch.setattr(cal_mod, "open", _boom, raising=False)
+        # calibrate_turbidity calls _save internally, and must survive
+        cm.calibrate_turbidity(clear_water_v=3.7)
+        # In-memory state still updated
+        assert cm.data.turbidity_v_clear == 3.7

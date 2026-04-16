@@ -22,6 +22,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -101,7 +102,7 @@ def _setup_logging() -> None:
 class WQM1App:
     """Main firmware application."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._running = False
         self._settings = get_settings()
 
@@ -112,32 +113,32 @@ class WQM1App:
         self._last_db_rotate = 0.0
 
         # GPS cache
-        self._gps_lat = None
-        self._gps_lon = None
-        self._gps_alt = None
+        self._gps_lat: float | None = None
+        self._gps_lon: float | None = None
+        self._gps_alt: float | None = None
 
         # Device identity
         self._device_id = get_device_id()
         self._dev_eui = get_dev_eui()
 
-        # Components
-        self._relays = None
-        self._leds = None
-        self._fan = None
-        self._adc = None
-        self._temp = None
-        self._gps = None
-        self._radio = None
-        self._lorawan = None
-        self._ph = None
-        self._tds = None
-        self._turbidity = None
-        self._orp = None
-        self._db = None
-        self._cloud = None
-        self._health = None
-        self._cal = None
-        self._rules = None
+        # Components (typed as Any to allow lazy init in start())
+        self._relays: Any = None
+        self._leds: Any = None
+        self._fan: Any = None
+        self._adc: Any = None
+        self._temp: Any = None
+        self._gps: Any = None
+        self._radio: Any = None
+        self._lorawan: Any = None
+        self._ph: Any = None
+        self._tds: Any = None
+        self._turbidity: Any = None
+        self._orp: Any = None
+        self._db: Any = None
+        self._cloud: Any = None
+        self._health: Any = None
+        self._cal: Any = None
+        self._rules: Any = None
         self._cmd_sock: socket.socket | None = None
         self._cmd_thread: threading.Thread | None = None
 
@@ -406,11 +407,11 @@ class WQM1App:
             logger.info(
                 "Stored id=%d: pH=%s TDS=%s Turb=%s ORP=%s T=%s",
                 row_id,
-                f"{ph:.2f}" if ph else "N/A",
-                f"{tds:.1f}" if tds else "N/A",
-                f"{turb:.1f}" if turb else "N/A",
-                f"{orp:.1f}" if orp else "N/A",
-                f"{temp_c:.1f}°C" if temp_c else "N/A",
+                f"{ph:.2f}" if ph is not None else "N/A",
+                f"{tds:.1f}" if tds is not None else "N/A",
+                f"{turb:.1f}" if turb is not None else "N/A",
+                f"{orp:.1f}" if orp is not None else "N/A",
+                f"{temp_c:.1f}°C" if temp_c is not None else "N/A",
             )
         except Exception as e:
             logger.error("DB insert failed: %s", e)

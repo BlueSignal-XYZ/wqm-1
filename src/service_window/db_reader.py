@@ -12,7 +12,7 @@ from typing import Any
 class DBReader:
     """Read-only interface to the WQM-1 SQLite database."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str) -> None:
         self._path = db_path
 
     def _connect(self) -> sqlite3.Connection:
