@@ -30,13 +30,10 @@ _REG_CONFIG = 0x01
 # [1:0]   COMP_QUE : 11 = disable comparator
 
 _OS_START = 0x8000
-_MUX_BASE = 0x4000  # AIN0 vs GND; add channel << 12
 _PGA_4096 = 0x0200  # ±4.096V (LSB = 125 µV)
 _MODE_SINGLE = 0x0100
 _DR_128 = 0x0080
 _COMP_DISABLE = 0x0003
-
-_BASE_CONFIG = _OS_START | _PGA_4096 | _MODE_SINGLE | _DR_128 | _COMP_DISABLE
 
 # Full-scale voltage for PGA ±4.096V
 _FSR = 4.096
@@ -51,7 +48,7 @@ _POLL_INTERVAL_S = 0.001
 class ADS1115:
     """ADS1115 16-bit ADC over I2C (smbus2)."""
 
-    def __init__(self, bus: int = I2C_BUS, address: int = ADS1115_ADDR):
+    def __init__(self, bus: int = I2C_BUS, address: int = ADS1115_ADDR) -> None:
         self._address = address
         self._bus: smbus2.SMBus | None = None
         try:

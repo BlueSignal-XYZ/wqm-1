@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as dt_time
+from typing import Any
 
 logger = logging.getLogger("wqm1.rules")
 
@@ -43,7 +44,7 @@ _OPERATORS = {
 class RulesEngine:
     """Evaluates rules against sensor readings and controls relays."""
 
-    def __init__(self, relay_controller=None):
+    def __init__(self, relay_controller: Any = None) -> None:
         self._rules: list[Rule] = []
         self._relay = relay_controller
         # Track auto-shutoff timers: {relay_channel: shutoff_time}

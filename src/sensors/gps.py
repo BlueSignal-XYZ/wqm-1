@@ -159,7 +159,7 @@ def _parse_gga(sentence: str) -> GPSFix | None:
 
     Format: $G?GGA,HHMMSS.ss,DDMM.mmm,N/S,DDDMM.mmm,E/W,Q,SS,HDOP,ALT,M,...
     """
-    if not (sentence.startswith("$GPGGA") or sentence.startswith("$GNGGA")):
+    if not sentence.startswith(("$GPGGA", "$GNGGA")):
         return None
 
     # Strip checksum for splitting

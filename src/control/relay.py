@@ -19,7 +19,7 @@ logger = logging.getLogger("wqm1.relay")
 class RelayController:
     """Controls 4 relays on the WQM-1 HAT."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._pins = RELAY_PINS
         self._state = 0  # 4-bit bitmask (bit 0 = relay 1)
 

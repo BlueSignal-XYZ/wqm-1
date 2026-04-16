@@ -24,13 +24,13 @@ logger = logging.getLogger("wqm1.leds")
 class StatusLEDs:
     """Controls 4 status LEDs on the WQM-1 HAT."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
         for pin in LED_PINS:
             GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
 
-        self._heartbeat_thread = None
+        self._heartbeat_thread: threading.Thread | None = None
         self._heartbeat_running = False
 
         atexit.register(self.cleanup)
