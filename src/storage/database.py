@@ -56,7 +56,7 @@ INSERT OR IGNORE INTO lorawan_session (id) VALUES (1);
 class WQM1Database:
     """SQLite database for WQM-1 readings with WAL mode."""
 
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None) -> None:
         self._path = path or get_settings().db_path
 
         # Ensure parent directory exists

@@ -42,7 +42,7 @@ class CalibrationData:
 class CalibrationManager:
     """Manages sensor calibration coefficients with persistent storage."""
 
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None) -> None:
         self._path = Path(path or _DEFAULT_CAL_PATH)
         self._data = CalibrationData()
         self._load()

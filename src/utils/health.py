@@ -14,7 +14,7 @@ logger = logging.getLogger("wqm1.health")
 class HealthReporter:
     """Collects and reports device health telemetry."""
 
-    def __init__(self, firmware_version: str = "1.0.0"):
+    def __init__(self, firmware_version: str = "1.0.0") -> None:
         self._firmware_version = firmware_version
         self._last_rssi: int | None = None
         self._last_seen: int = 0

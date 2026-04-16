@@ -30,7 +30,7 @@ def get_cpu_temp() -> float:
 class FanController:
     """On/off fan with temperature hysteresis."""
 
-    def __init__(self, on_temp: float = 60.0, off_temp: float = 55.0):
+    def __init__(self, on_temp: float = 60.0, off_temp: float = 55.0) -> None:
         self._on_temp = on_temp
         self._off_temp = off_temp
         self._is_on = False

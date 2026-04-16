@@ -35,7 +35,7 @@ class GPSFix:
 class GPS:
     """MAX-M10S GPS receiver over UART with NMEA parsing."""
 
-    def __init__(self, port: str = GPS_UART_PORT, baud: int = GPS_BAUD):
+    def __init__(self, port: str = GPS_UART_PORT, baud: int = GPS_BAUD) -> None:
         self._port_name = port
         self._baud = baud
         self._serial = None

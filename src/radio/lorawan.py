@@ -10,6 +10,7 @@ import os
 import struct
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from Crypto.Cipher import AES
 from Crypto.Hash import CMAC
@@ -53,7 +54,7 @@ class LoRaWANSession:
 class LoRaWANMAC:
     """LoRaWAN 1.0.3 Class A MAC layer."""
 
-    def __init__(self, radio, dev_eui: bytes, app_eui: bytes, app_key: bytes):
+    def __init__(self, radio: Any, dev_eui: bytes, app_eui: bytes, app_key: bytes) -> None:
         """
         Args:
             radio: SX1262 driver instance

@@ -21,7 +21,7 @@ except ImportError:
 class DS18B20:
     """DS18B20 temperature probe on 1-Wire bus."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._sensor = None
         if _W1_AVAILABLE:
             try:
