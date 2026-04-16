@@ -111,3 +111,25 @@ class TestGPSDriverExtended:
         gps = GPS()
         fix = gps.get_fix(timeout_s=1.0)
         assert fix is not None  # should have parsed the valid one
+
+    def test_get_fix_handles_readline_exception(self, mock_hardware):
+        """
+        A UART I/O exception during readline() must not propagate; it should
+        exit the loop and return None (or last cached fix).
+        """
+        from sensors.gps import GPS
+
+        mock_hardware["serial"].is_open = True
+        mock_hardware["serial"].readline.side_effect = OSError("UART read failed")
+
+        gps = GPS()
+        result = gps.get_fix(timeout_s=0.1)
+        assert result is None
+
+    def test_parse_gga_wrong_sentence_type(self, mock_hardware):
+        """_parse_gga should return None for non-GGA NMEA sentences."""
+        from sensors.gps import _parse_gga
+
+        # A valid RMC sentence — must be rejected by the GGA parser
+        rmc = "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A"
+        assert _parse_gga(rmc) is None

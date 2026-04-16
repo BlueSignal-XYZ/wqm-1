@@ -131,3 +131,45 @@ class TestDatabaseWALBuffering:
         latest = db.get_latest()
         assert latest["timestamp"] == "2025-01-15T12:00:00Z"
         db.close()
+
+    def test_rotate_ignores_unsynced_rows(self, tmp_path, mock_hardware):
+        """
+        rotate() must only delete rows marked synced=1, so the WAL buffer
+        never loses an unsent reading even when max_rows is exceeded.
+        """
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        for _ in range(20):
+            db.insert_reading({"ph": 7.0})
+        # Mark none as synced
+        deleted = db.rotate(max_rows=5)
+        assert deleted == 0
+        assert db.get_count() == 20
+        db.close()
+
+    def test_insert_preserves_zero_valued_fields(self, tmp_path, mock_hardware):
+        """
+        Regression: 0.0 values must round-trip as 0.0 (not be treated as
+        falsy/NULL) — important because pure water TDS, perfectly clear
+        turbidity, and neutral pH shift are all legitimate zero readings.
+        """
+        from storage.database import WQM1Database
+
+        db = WQM1Database(path=str(tmp_path / "test.db"))
+        db.insert_reading(
+            {
+                "ph": 0.0,
+                "tds_ppm": 0.0,
+                "turbidity_ntu": 0.0,
+                "orp_mv": 0.0,
+                "temp_c": 0.0,
+            }
+        )
+        latest = db.get_latest()
+        assert latest["ph"] == 0.0
+        assert latest["tds_ppm"] == 0.0
+        assert latest["turbidity_ntu"] == 0.0
+        assert latest["orp_mv"] == 0.0
+        assert latest["temp_c"] == 0.0
+        db.close()
