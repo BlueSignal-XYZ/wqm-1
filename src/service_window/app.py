@@ -57,6 +57,8 @@ def create_app(config: dict | None = None) -> Flask:
 
 def _load_sw_config() -> dict:
     """Load service_window section from /etc/bluesignal/config.yaml."""
+    import logging
+
     try:
         from pathlib import Path
 
@@ -67,6 +69,6 @@ def _load_sw_config() -> dict:
             with open(path) as f:
                 raw = yaml.safe_load(f) or {}
             return raw.get("service_window", {})
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger("wqm1.service_window").debug("Could not load SW config: %s", e)
     return {}

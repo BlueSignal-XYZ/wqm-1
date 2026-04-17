@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import re
 import subprocess
 
@@ -32,7 +33,8 @@ def _get_identity() -> dict[str, str]:
         device_id = get_device_id()
         dev_eui = get_dev_eui().hex().upper()
         ble_name = get_ble_name(device_id)
-    except Exception:
+    except Exception as e:
+        logging.getLogger("wqm1.provision").debug("Identity generation failed: %s", e)
         device_id = "BS-WQM1-unknown"
         dev_eui = "0000000000000000"
         ble_name = "BlueSignal-0000"
@@ -160,5 +162,5 @@ def _read_version() -> str:
             if path.exists():
                 return path.read_text().strip()
     except Exception:
-        pass
+        logging.getLogger("wqm1.provision").debug("Could not read VERSION file")
     return "unknown"
