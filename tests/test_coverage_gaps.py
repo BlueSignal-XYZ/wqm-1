@@ -1,7 +1,6 @@
 """Tests targeting specific uncovered lines to raise coverage."""
 
-import time
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -105,9 +104,7 @@ class TestGPSSerialOpenFailure:
         from sensors.gps import _parse_gga
 
         sentence = "$GPGGA,BAD,4807.038,N,01131.000,E,1,08,0.9,545.4,M,47.0,M,,*00"
-        result = _parse_gga(sentence)
-        # May or may not parse depending on whether other fields are valid
-        # The key is it doesn't crash
+        _parse_gga(sentence)
 
 
 class TestConfigEditorErrorPath:
@@ -118,9 +115,11 @@ class TestConfigEditorErrorPath:
         from service_window.config_editor import _atomic_yaml_write
 
         target = str(tmp_path / "config.yaml")
-        with patch("pathlib.Path.replace", side_effect=OSError("cross-device")):
-            with pytest.raises(OSError):
-                _atomic_yaml_write(target, {"key": "val"})
+        with (
+            patch("pathlib.Path.replace", side_effect=OSError("cross-device")),
+            pytest.raises(OSError),
+        ):
+            _atomic_yaml_write(target, {"key": "val"})
 
         # .tmp file should have been cleaned up
         tmp_file = tmp_path / "config.tmp"
@@ -321,8 +320,6 @@ class TestDownlinkProcessing:
 
     def test_downlink_wrong_devaddr_returns_none(self, mock_hardware):
         """Downlink with mismatched DevAddr must be ignored."""
-        import struct
-
         from radio.lorawan import LoRaWANMAC, LoRaWANSession
 
         mock_radio = MagicMock()
@@ -368,8 +365,6 @@ class TestAuthRateLimiting:
 
     def test_rate_limiting_blocks_after_max_attempts(self, mock_hardware):
         """After _MAX_ATTEMPTS failed logins from same IP, further attempts are blocked."""
-        import sqlite3
-
         from service_window.app import create_app
         from service_window.auth import _attempts
 
