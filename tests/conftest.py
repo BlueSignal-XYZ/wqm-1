@@ -83,6 +83,7 @@ def mock_hardware():
     _serial_inst.reset_mock()
     _serial_inst.is_open = True
     _serial_inst.readline.return_value = b""
+    _serial_mod.Serial.side_effect = None
     _serial_mod.Serial.return_value = _serial_inst
     _serial_mod.EIGHTBITS = 8
     _serial_mod.PARITY_NONE = "N"

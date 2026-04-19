@@ -1,5 +1,6 @@
 """Dashboard / status page."""
 
+import logging
 import platform
 import time
 
@@ -22,7 +23,7 @@ def _read_version() -> str:
             if path.exists():
                 return path.read_text().strip()
     except Exception:
-        pass
+        logging.getLogger("wqm1.service_window").debug("Could not read VERSION file")
     return "unknown"
 
 
