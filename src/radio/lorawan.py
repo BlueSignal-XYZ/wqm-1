@@ -168,9 +168,6 @@ class LoRaWANMAC:
         app_nonce = decrypted[0:3]
         net_id = decrypted[3:6]
         dev_addr = decrypted[6:10]
-        # dl_settings = decrypted[10]
-        # rx_delay = decrypted[11]
-        # mic = decrypted[-4:]  # MIC verification omitted for brevity
 
         # Derive session keys
         nwk_skey = _derive_key(self._app_key, 0x01, app_nonce, net_id, self._dev_nonce)
@@ -309,7 +306,6 @@ class LoRaWANMAC:
 
         fport = data[header_len]
         enc_payload = data[header_len + 1 : -4]
-        # mic = data[-4:]  # MIC verification
 
         # Decrypt payload
         key = self._session.nwk_skey if fport == 0 else self._session.app_skey

@@ -1,30 +1,17 @@
 """Dashboard / status page."""
 
-import logging
 import platform
 import time
 
 from flask import Blueprint, current_app, render_template
 
+from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.db_reader import DBReader
 
 status_bp = Blueprint("status", __name__)
 
 _START_TIME = time.monotonic()
-
-
-def _read_version() -> str:
-    try:
-        from pathlib import Path
-
-        for p in ["/opt/bluesignal/VERSION", str(Path(__file__).parents[3] / "VERSION")]:
-            path = Path(p)
-            if path.exists():
-                return path.read_text().strip()
-    except Exception:
-        logging.getLogger("wqm1.service_window").debug("Could not read VERSION file")
-    return "unknown"
 
 
 @status_bp.route("/")
@@ -44,7 +31,7 @@ def index():
         reading_count=count,
         lora_joined=lora_joined,
         lora_fcnt=lora_fcnt,
-        fw_version=_read_version(),
+        fw_version=read_firmware_version(),
         hostname=platform.node(),
         uptime_s=int(time.monotonic() - _START_TIME),
     )

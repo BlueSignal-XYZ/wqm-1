@@ -4,6 +4,7 @@ Service Window — Flask application factory.
 Lightweight local web UI for WQM-1 commissioning, calibration, and diagnostics.
 """
 
+import logging
 import os
 import secrets
 
@@ -57,8 +58,6 @@ def create_app(config: dict | None = None) -> Flask:
 
 def _load_sw_config() -> dict:
     """Load service_window section from /etc/bluesignal/config.yaml."""
-    import logging
-
     try:
         from pathlib import Path
 
