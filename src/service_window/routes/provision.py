@@ -17,6 +17,7 @@ from flask import (
     url_for,
 )
 
+from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.config_editor import read_config, update_config
 
@@ -119,7 +120,7 @@ def report():
     report_data = {
         **identity,
         "app_key_set": config.get("app_key", "") != "00000000000000000000000000000000",
-        "firmware_version": _read_version(),
+        "firmware_version": read_firmware_version(),
     }
     return Response(
         json.dumps(report_data, indent=2),
@@ -153,14 +154,3 @@ def qr_svg():
         )
 
 
-def _read_version() -> str:
-    try:
-        from pathlib import Path
-
-        for p in ["/opt/bluesignal/VERSION", str(Path(__file__).parents[3] / "VERSION")]:
-            path = Path(p)
-            if path.exists():
-                return path.read_text().strip()
-    except Exception:
-        logging.getLogger("wqm1.provision").debug("Could not read VERSION file")
-    return "unknown"

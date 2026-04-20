@@ -250,6 +250,13 @@ class TestProvisionEdgeCases:
         assert resp.status_code == 200
         assert b"Error" in resp.data
 
+    def test_verify_script_not_found(self, authed, mock_hardware):
+        """verify() reports not found when diagnostics.sh does not exist."""
+        with patch.object(Path, "exists", return_value=False):
+            resp = authed.get("/provision/verify")
+        assert resp.status_code == 200
+        assert b"not found" in resp.data
+
     def test_qr_without_qrcode_package(self, authed, mock_hardware):
         """QR route gracefully handles missing qrcode package."""
         import sys
@@ -267,11 +274,11 @@ class TestProvisionEdgeCases:
             sys.modules.update(saved_modules)
 
     def test_read_version_exception_returns_unknown(self, mock_hardware):
-        """_read_version() returns 'unknown' when VERSION file can't be read."""
-        from service_window.routes.provision import _read_version
+        """read_firmware_version() returns 'unknown' when VERSION file can't be read."""
+        from service_window import read_firmware_version
 
         with patch.object(Path, "exists", side_effect=RuntimeError("bad")):
-            result = _read_version()
+            result = read_firmware_version()
         assert result == "unknown"
 
 
@@ -339,10 +346,10 @@ class TestRelaySuccessFlash:
 # ---------------------------------------------------------------------------
 class TestStatusVersionFallback:
     def test_read_version_returns_unknown_on_error(self, mock_hardware):
-        from service_window.routes.status import _read_version
+        from service_window import read_firmware_version
 
         with patch.object(Path, "exists", side_effect=RuntimeError("fail")):
-            result = _read_version()
+            result = read_firmware_version()
         assert result == "unknown"
 
 
