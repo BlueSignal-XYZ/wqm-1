@@ -140,7 +140,7 @@ class SX1262:
         """SPI transfer with None guard for mypy."""
         if self._spi is None:
             raise RuntimeError("SPI bus not available (radio closed?)")
-        return self._xfer(data)
+        return self._spi.xfer2(data)
 
     def init(self) -> None:
         """Full initialisation sequence for LoRa TX."""
