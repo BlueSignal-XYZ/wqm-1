@@ -13,7 +13,7 @@ Safety features (loaded from policies.yaml):
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from datetime import time as dt_time
 from typing import Any
 
@@ -121,7 +121,7 @@ class RulesEngine:
             return True
         if self._schedule_start is None or self._schedule_end is None:
             return True
-        now = datetime.now().time()
+        now = datetime.now(UTC).time()
         if self._schedule_start <= self._schedule_end:
             return self._schedule_start <= now <= self._schedule_end
         # Overnight window (e.g. 22:00 – 06:00)
@@ -140,7 +140,7 @@ class RulesEngine:
         """Return True if the relay still has on-time budget this hour."""
         if self._max_on_s_per_hour <= 0:
             return True
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         entry = self._on_time.get(relay)
         if entry is None or entry[0] != current_hour:
             # New hour — reset accumulator
@@ -152,7 +152,7 @@ class RulesEngine:
         """Add seconds to a relay's hourly on-time counter."""
         if self._max_on_s_per_hour <= 0:
             return
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         entry = self._on_time.get(relay)
         if entry is None or entry[0] != current_hour:
             self._on_time[relay] = (current_hour, seconds)

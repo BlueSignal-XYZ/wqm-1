@@ -123,7 +123,7 @@ class LoRaWANMAC:
 
         return self._process_join_accept(accept_data)
 
-    def _receive_join_accept(self, timeout_s: float) -> bytes | None:
+    def _receive_join_accept(self, _timeout_s: float) -> bytes | None:
         """Open RX1 and RX2 windows for JoinAccept."""
         # RX1: 5s after TX (join accept uses different delay)
         time.sleep(5.0)

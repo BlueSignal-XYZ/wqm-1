@@ -108,8 +108,8 @@ _SPI_MAX_SPEED = 2_000_000  # 2 MHz (conservative)
 class SX1262:
     """SX1262 LoRa transceiver via SPI."""
 
-    def __init__(self):
-        self._spi = None
+    def __init__(self) -> None:
+        self._spi: spidev.SpiDev | None = None
         self._tx_done_event = threading.Event()
         self._last_rssi = -120
 
@@ -135,6 +135,12 @@ class SX1262:
         self._spi.no_cs = False
 
         logger.info("SX1262 SPI opened")
+
+    def _xfer(self, data: list[int]) -> list[int]:
+        """SPI transfer with None guard for mypy."""
+        if self._spi is None:
+            raise RuntimeError("SPI bus not available (radio closed?)")
+        return self._xfer(data)
 
     def init(self) -> None:
         """Full initialisation sequence for LoRa TX."""
@@ -273,7 +279,7 @@ class SX1262:
         self._wait_busy()
 
         # Write payload to TX buffer at offset 0
-        self._spi.xfer2([_CMD_WRITE_BUFFER, 0x00] + list(data))
+        self._xfer([_CMD_WRITE_BUFFER, 0x00] + list(data))
         self._wait_busy()
 
         # Clear IRQ flags
@@ -324,12 +330,12 @@ class SX1262:
     def _cmd(self, opcode: int, params: list[int] | None = None) -> None:
         """Send SPI command."""
         tx = [opcode] + (params or [])
-        self._spi.xfer2(tx)
+        self._xfer(tx)
         self._wait_busy()
 
     def _write_register(self, address: int, value: int) -> None:
         """Write a single byte to an SX1262 register."""
-        self._spi.xfer2(
+        self._xfer(
             [
                 _CMD_WRITE_REGISTER,
                 (address >> 8) & 0xFF,
@@ -341,7 +347,7 @@ class SX1262:
 
     def _read_register(self, address: int) -> int:
         """Read a single byte from an SX1262 register."""
-        resp = self._spi.xfer2(
+        resp = self._xfer(
             [
                 _CMD_READ_REGISTER,
                 (address >> 8) & 0xFF,
@@ -425,7 +431,7 @@ class SX1262:
             return None
 
         # Read RX buffer status: [status, payloadLen, bufferOffset]
-        resp = self._spi.xfer2([_CMD_GET_RX_BUFFER_STATUS, 0x00, 0x00, 0x00])
+        resp = self._xfer([_CMD_GET_RX_BUFFER_STATUS, 0x00, 0x00, 0x00])
         self._wait_busy()
         payload_len = resp[2] if len(resp) > 2 else 0
         buffer_offset = resp[3] if len(resp) > 3 else 0
@@ -434,7 +440,7 @@ class SX1262:
             return None
 
         # Read buffer
-        rx_data = self._spi.xfer2([_CMD_READ_BUFFER, buffer_offset, 0x00] + [0x00] * payload_len)
+        rx_data = self._xfer([_CMD_READ_BUFFER, buffer_offset, 0x00] + [0x00] * payload_len)
         self._wait_busy()
 
         # Store RSSI
@@ -452,7 +458,7 @@ class SX1262:
 
     def _read_rssi(self) -> int:
         """Read RSSI of last received packet from radio register."""
-        resp = self._spi.xfer2([_CMD_GET_RSSI_INST, 0x00, 0x00])
+        resp = self._xfer([_CMD_GET_RSSI_INST, 0x00, 0x00])
         self._wait_busy()
         # RSSI = -resp[2] / 2
         raw = resp[2] if len(resp) > 2 else 0
@@ -460,7 +466,7 @@ class SX1262:
 
     def _get_irq_status(self) -> int:
         """Read current IRQ status flags."""
-        resp = self._spi.xfer2([_CMD_GET_IRQ_STATUS, 0x00, 0x00, 0x00])
+        resp = self._xfer([_CMD_GET_IRQ_STATUS, 0x00, 0x00, 0x00])
         self._wait_busy()
         return ((resp[2] if len(resp) > 2 else 0) << 8) | (resp[3] if len(resp) > 3 else 0)
 
