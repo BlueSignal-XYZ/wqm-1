@@ -54,7 +54,8 @@ def _read_version() -> str:
     version_file = Path(__file__).parent.parent / "VERSION"
     try:
         return version_file.read_text().strip()
-    except Exception:
+    except Exception as e:
+        logger.debug("Could not read VERSION file: %s", e)
         return "1.0.0"
 
 
