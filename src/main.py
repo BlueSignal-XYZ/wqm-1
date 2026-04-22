@@ -301,7 +301,7 @@ class WQM1App:
             path = Path(p)
             if path.exists():
                 try:
-                    with open(path) as f:
+                    with path.open() as f:
                         policies = yaml.safe_load(f) or {}
                     self._rules.load_policies(policies)
                     # Also load rules from policies if config rules are empty

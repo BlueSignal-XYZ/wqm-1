@@ -53,7 +53,7 @@ class CalibrationManager:
             logger.info("No calibration file at %s, using defaults", self._path)
             return
         try:
-            with open(self._path) as f:
+            with self._path.open() as f:
                 raw = yaml.safe_load(f) or {}
             for key, val in raw.items():
                 if hasattr(self._data, key):
@@ -67,7 +67,7 @@ class CalibrationManager:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
         try:
-            with open(tmp, "w") as f:
+            with tmp.open("w") as f:
                 yaml.safe_dump(asdict(self._data), f, default_flow_style=False)
             tmp.replace(self._path)
             logger.info("Calibration saved to %s", self._path)
