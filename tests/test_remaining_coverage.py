@@ -72,6 +72,47 @@ class TestAuthRecordAttempt:
 
 
 # ---------------------------------------------------------------------------
+# auth.py — _prune_stale_ips() removes old entries
+# ---------------------------------------------------------------------------
+class TestAuthPruneStaleIps:
+    def test_prune_removes_stale_ips(self, mock_hardware):
+        import time
+
+        from service_window.auth import _attempts, _prune_stale_ips
+
+        _attempts.clear()
+        _attempts["10.0.0.1"] = [time.time() - 120]
+        _attempts["10.0.0.2"] = [time.time()]
+        _prune_stale_ips(time.time())
+        assert "10.0.0.1" not in _attempts
+        assert "10.0.0.2" in _attempts
+        _attempts.clear()
+
+    def test_prune_removes_empty_lists(self, mock_hardware):
+        import time
+
+        from service_window.auth import _attempts, _prune_stale_ips
+
+        _attempts.clear()
+        _attempts["10.0.0.3"] = []
+        _prune_stale_ips(time.time())
+        assert "10.0.0.3" not in _attempts
+        _attempts.clear()
+
+    def test_rate_limited_prunes_on_check(self, mock_hardware):
+        """_is_rate_limited triggers pruning of stale IPs."""
+        import time
+
+        from service_window.auth import _attempts, _is_rate_limited
+
+        _attempts.clear()
+        _attempts["stale.ip"] = [time.time() - 120]
+        _is_rate_limited("fresh.ip")
+        assert "stale.ip" not in _attempts
+        _attempts.clear()
+
+
+# ---------------------------------------------------------------------------
 # diagnostics.py:34,48-51,68-69
 # ---------------------------------------------------------------------------
 class TestDiagnosticsEdgeCases:

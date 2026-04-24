@@ -163,7 +163,7 @@ def _load_settings(path: str) -> Settings:
         return s
 
     try:
-        with open(p) as f:
+        with p.open() as f:
             raw = yaml.safe_load(f) or {}
         for key, val in raw.items():
             if hasattr(s, key):

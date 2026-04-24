@@ -65,7 +65,7 @@ def _load_sw_config() -> dict:
 
         path = Path("/etc/bluesignal/config.yaml")
         if path.exists():
-            with open(path) as f:
+            with path.open() as f:
                 raw = yaml.safe_load(f) or {}
             return raw.get("service_window", {})
     except Exception as e:

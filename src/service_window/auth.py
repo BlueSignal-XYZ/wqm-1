@@ -41,10 +41,20 @@ def _is_rate_limited(ip: str) -> bool:
     """Check if IP has exceeded attempt limit."""
     now = time.time()
     attempts = _attempts.get(ip, [])
-    # Prune old attempts
     attempts = [t for t in attempts if now - t < _WINDOW_S]
-    _attempts[ip] = attempts
+    if attempts:
+        _attempts[ip] = attempts
+    else:
+        _attempts.pop(ip, None)
+    _prune_stale_ips(now)
     return len(attempts) >= _MAX_ATTEMPTS
+
+
+def _prune_stale_ips(now: float) -> None:
+    """Remove IPs with no recent attempts to prevent unbounded dict growth."""
+    stale = [ip for ip, ts in _attempts.items() if not ts or now - ts[-1] >= _WINDOW_S]
+    for ip in stale:
+        del _attempts[ip]
 
 
 def _record_attempt(ip: str) -> None:
