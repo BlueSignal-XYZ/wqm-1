@@ -1,6 +1,6 @@
 """Sensor calibration wizard."""
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Flask, current_app, flash, redirect, render_template, request, url_for
 
 from service_window.auth import login_required
 from service_window.config_editor import read_config, update_config
@@ -8,7 +8,7 @@ from service_window.config_editor import read_config, update_config
 calibration_bp = Blueprint("calibration", __name__, url_prefix="/calibrate")
 
 
-def _load_cal(app) -> dict:
+def _load_cal(app: Flask) -> dict:
     return read_config(app.config["CAL_PATH"])
 
 

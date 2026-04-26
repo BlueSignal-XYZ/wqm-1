@@ -1,5 +1,6 @@
 """Diagnostics page — runs diagnostics.sh and shows logs."""
 
+import logging
 import subprocess
 from pathlib import Path
 
@@ -65,5 +66,6 @@ def _get_recent_logs(lines: int = 100) -> str:
             timeout=10,
         )
         return result.stdout
-    except Exception:
+    except Exception as e:
+        logging.getLogger("wqm1.diagnostics").debug("Could not read journal logs: %s", e)
         return "(Could not read journal logs)"
