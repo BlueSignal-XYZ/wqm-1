@@ -6,9 +6,9 @@ Cayenne LPP int24 boundaries, database WAL verification,
 sensor temperature compensation extremes, and GPS checksum edge cases.
 """
 
-import struct
-from datetime import UTC, datetime, time as dt_time
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from datetime import time as dt_time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -131,14 +131,14 @@ class TestCayenneInt24Boundaries:
         assert abs(result["lon"] - 151.2093) < 0.001
 
     def test_decode_truncated_gps_payload(self, mock_hardware):
-        from radio.cayenne import LPP_GPS, CH_GPS, decode
+        from radio.cayenne import CH_GPS, LPP_GPS, decode
 
         truncated = bytes([CH_GPS, LPP_GPS, 0x00, 0x01, 0x02])
         result = decode(truncated)
         assert "lat" not in result
 
     def test_decode_truncated_analog_payload(self, mock_hardware):
-        from radio.cayenne import LPP_ANALOG_INPUT, CH_PH, decode
+        from radio.cayenne import CH_PH, LPP_ANALOG_INPUT, decode
 
         truncated = bytes([CH_PH, LPP_ANALOG_INPUT, 0x01])
         result = decode(truncated)
@@ -170,7 +170,7 @@ class TestDatabaseWALMode:
         from storage.database import WQM1Database
 
         db = WQM1Database(path=str(tmp_path / "test.db"))
-        for i in range(10):
+        for _ in range(10):
             db.insert_reading({"ph": 7.0})
         db.mark_synced([1, 2, 3, 4, 5])
         deleted = db.rotate(max_rows=7)
