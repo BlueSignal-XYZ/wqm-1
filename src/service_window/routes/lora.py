@@ -15,7 +15,7 @@ _HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
 @lora_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     db = DBReader(current_app.config["DB_PATH"])
     session = db.get_lorawan_session()
     config = read_config(current_app.config["CONFIG_PATH"])
@@ -31,7 +31,7 @@ def index():
 
 @lora_bp.route("/appkey", methods=["POST"])
 @login_required
-def set_appkey():
+def set_appkey() -> str:
     app_key = request.form.get("app_key", "").strip()
     if not _HEX32_RE.match(app_key):
         flash("AppKey must be exactly 32 hex characters.", "error")

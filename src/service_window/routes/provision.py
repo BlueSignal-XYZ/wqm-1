@@ -48,7 +48,7 @@ def _get_identity() -> dict[str, str]:
 
 @provision_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     identity = _get_identity()
     config = read_config(current_app.config["CONFIG_PATH"])
     app_key = config.get("app_key", "")
@@ -62,14 +62,14 @@ def index():
 
 @provision_bp.route("/identity")
 @login_required
-def identity():
+def identity() -> str:
     identity = _get_identity()
     return render_template("provision/identity.html", identity=identity)
 
 
 @provision_bp.route("/appkey", methods=["POST"])
 @login_required
-def set_appkey():
+def set_appkey() -> str:
     app_key = request.form.get("app_key", "").strip()
     if not _HEX32_RE.match(app_key):
         flash("AppKey must be exactly 32 hex characters.", "error")
@@ -82,7 +82,7 @@ def set_appkey():
 
 @provision_bp.route("/verify")
 @login_required
-def verify():
+def verify() -> str:
     from pathlib import Path
 
     script = None
@@ -114,7 +114,7 @@ def verify():
 
 @provision_bp.route("/report")
 @login_required
-def report():
+def report() -> Response:
     identity = _get_identity()
     config = read_config(current_app.config["CONFIG_PATH"])
     report_data = {
@@ -131,7 +131,7 @@ def report():
 
 @provision_bp.route("/qr.svg")
 @login_required
-def qr_svg():
+def qr_svg() -> Response:
     """Generate QR code SVG for device identity."""
     identity = _get_identity()
     qr_data = json.dumps(identity)

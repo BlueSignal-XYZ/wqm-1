@@ -18,13 +18,13 @@ _DIAG_PATHS = [
 
 @diagnostics_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     return render_template("diagnostics.html")
 
 
 @diagnostics_bp.route("/run")
 @login_required
-def run_diagnostics():
+def run_diagnostics() -> str:
     script = None
     for p in _DIAG_PATHS:
         if Path(p).exists():

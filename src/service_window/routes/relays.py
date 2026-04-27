@@ -19,13 +19,13 @@ relays_bp = Blueprint("relays", __name__, url_prefix="/relays")
 
 @relays_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     return render_template("relays.html")
 
 
 @relays_bp.route("/set", methods=["POST"])
 @login_required
-def set_relay():
+def set_relay() -> str:
     try:
         channel = int(request.form["channel"])
         state = request.form["state"] == "on"
@@ -49,7 +49,7 @@ def set_relay():
 
 @relays_bp.route("/api/set", methods=["POST"])
 @login_required
-def api_set_relay():
+def api_set_relay() -> tuple[str, int]:
     """JSON API for relay control (used by JS)."""
     data = request.get_json(silent=True) or {}
     channel = data.get("channel")

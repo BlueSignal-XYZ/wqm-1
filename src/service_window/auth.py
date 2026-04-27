@@ -55,7 +55,7 @@ def _record_attempt(ip: str) -> None:
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
-def login():
+def login() -> str:
     error = None
     if request.method == "POST":
         ip = request.remote_addr or "unknown"
@@ -73,6 +73,6 @@ def login():
 
 
 @auth_bp.route("/logout")
-def logout():
+def logout() -> str:
     session.clear()
     return redirect(url_for("auth.login"))

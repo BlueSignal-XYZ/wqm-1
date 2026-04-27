@@ -16,7 +16,7 @@ _START_TIME = time.monotonic()
 
 @status_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     db = DBReader(current_app.config["DB_PATH"])
     latest = db.get_latest_reading()
     count = db.get_reading_count()
