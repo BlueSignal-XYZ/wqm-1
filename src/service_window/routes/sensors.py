@@ -10,7 +10,7 @@ sensors_bp = Blueprint("sensors", __name__, url_prefix="/sensors")
 
 @sensors_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     db = DBReader(current_app.config["DB_PATH"])
     readings = db.get_readings(limit=50)
     return render_template("sensors.html", readings=readings)
@@ -18,7 +18,7 @@ def index():
 
 @sensors_bp.route("/data.json")
 @login_required
-def data_json():
+def data_json() -> str:
     db = DBReader(current_app.config["DB_PATH"])
     readings = db.get_readings(limit=50)
     # Reverse to chronological order for charts

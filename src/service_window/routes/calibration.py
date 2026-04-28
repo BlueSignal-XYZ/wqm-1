@@ -14,14 +14,14 @@ def _load_cal(app: Flask) -> dict:
 
 @calibration_bp.route("/")
 @login_required
-def index():
+def index() -> str:
     cal = _load_cal(current_app)
     return render_template("calibration/index.html", cal=cal)
 
 
 @calibration_bp.route("/ph", methods=["GET", "POST"])
 @login_required
-def ph():
+def ph() -> str:
     if request.method == "POST":
         try:
             v_ph4 = float(request.form["v_ph4"])
@@ -49,7 +49,7 @@ def ph():
 
 @calibration_bp.route("/tds", methods=["GET", "POST"])
 @login_required
-def tds():
+def tds() -> str:
     if request.method == "POST":
         try:
             known_ppm = float(request.form["known_ppm"])
@@ -69,7 +69,7 @@ def tds():
 
 @calibration_bp.route("/turbidity", methods=["GET", "POST"])
 @login_required
-def turbidity():
+def turbidity() -> str:
     if request.method == "POST":
         try:
             clear_v = float(request.form["clear_v"])
@@ -89,7 +89,7 @@ def turbidity():
 
 @calibration_bp.route("/orp", methods=["GET", "POST"])
 @login_required
-def orp():
+def orp() -> str:
     if request.method == "POST":
         try:
             known_mv = float(request.form["known_mv"])

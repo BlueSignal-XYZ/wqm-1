@@ -122,7 +122,8 @@ class WQM1App:
         self._device_id = get_device_id()
         self._dev_eui = get_dev_eui()
 
-        # Components (typed as Any to allow lazy init in start())
+        # Components (lazy-initialised in start(); typed Any to avoid
+        # union-attr noise — init order is guaranteed by start())
         self._relays: Any = None
         self._leds: Any = None
         self._fan: Any = None
