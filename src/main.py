@@ -186,7 +186,7 @@ class WQM1App:
 
         # --- GPS ---
         try:
-            self._gps = GPS()
+            self._gps = GPS(baud=self._settings.gps_baud)
         except Exception as e:
             logger.warning("GPS init failed: %s", e)
 

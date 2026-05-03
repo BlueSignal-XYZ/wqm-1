@@ -487,6 +487,27 @@ ls -lh /var/log/bluesignal/                            # log files
 - Reboot after `config.txt` changes.
 - The GPS module may need several minutes to acquire a first fix
   outdoors.
+- **Firmware logs `GPS UART opened` but no `GPS fix:` ever appears, and
+  raw bytes look garbled.** This is a baud-rate mismatch. The default
+  is 9600 but some u-blox variants ship at 38400 or 115200 (NEO-M9N is
+  the common offender). Sweep the bauds to identify which one the
+  module is using:
+  ```bash
+  sudo systemctl stop bluesignal-wqm
+  for baud in 38400 115200 19200 57600 4800; do
+    echo "=== $baud ==="
+    sudo stty -F /dev/serial0 $baud raw -echo
+    sudo timeout 2 cat /dev/serial0 | head -c 600
+    echo
+  done
+  sudo systemctl start bluesignal-wqm
+  ```
+  The baud that prints clean `$GNRMC,...,$GNGGA,...` lines is the
+  correct one. Set it in `/etc/bluesignal/config.yaml`:
+  ```yaml
+  gps_baud: 38400
+  ```
+  Then `sudo systemctl restart bluesignal-wqm`.
 
 </details>
 
