@@ -143,13 +143,15 @@ class TestDiagnosticsEdgeCases:
             """
         )
         conn.close()
-        app = create_app({
-            "db_path": db_path,
-            "pin": "1234",
-            "config_path": str(tmp_path / "config.yaml"),
-            "cal_path": str(tmp_path / "cal.yaml"),
-            "cmd_sock": str(tmp_path / "cmd.sock"),
-        })
+        app = create_app(
+            {
+                "db_path": db_path,
+                "pin": "1234",
+                "config_path": str(tmp_path / "config.yaml"),
+                "cal_path": str(tmp_path / "cal.yaml"),
+                "cmd_sock": str(tmp_path / "cmd.sock"),
+            }
+        )
         app.config["TESTING"] = True
         return app
 
@@ -237,13 +239,15 @@ class TestProvisionEdgeCases:
             """
         )
         conn.close()
-        app = create_app({
-            "db_path": db_path,
-            "pin": "1234",
-            "config_path": str(tmp_path / "config.yaml"),
-            "cal_path": str(tmp_path / "cal.yaml"),
-            "cmd_sock": str(tmp_path / "cmd.sock"),
-        })
+        app = create_app(
+            {
+                "db_path": db_path,
+                "pin": "1234",
+                "config_path": str(tmp_path / "config.yaml"),
+                "cal_path": str(tmp_path / "cal.yaml"),
+                "cmd_sock": str(tmp_path / "cmd.sock"),
+            }
+        )
         app.config["TESTING"] = True
         return app
 
@@ -353,13 +357,15 @@ class TestRelaySuccessFlash:
             """
         )
         conn.close()
-        app = create_app({
-            "db_path": db_path,
-            "pin": "1234",
-            "config_path": str(tmp_path / "config.yaml"),
-            "cal_path": str(tmp_path / "cal.yaml"),
-            "cmd_sock": str(tmp_path / "cmd.sock"),
-        })
+        app = create_app(
+            {
+                "db_path": db_path,
+                "pin": "1234",
+                "config_path": str(tmp_path / "config.yaml"),
+                "cal_path": str(tmp_path / "cal.yaml"),
+                "cmd_sock": str(tmp_path / "cmd.sock"),
+            }
+        )
         app.config["TESTING"] = True
         return app
 

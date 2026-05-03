@@ -238,9 +238,7 @@ class TestLoRa:
 
     def test_appkey_valid_is_saved(self, authed_client, tmp_path):
         good_key = "0123456789abcdef0123456789abcdef"
-        resp = authed_client.post(
-            "/lora/appkey", data={"app_key": good_key}, follow_redirects=True
-        )
+        resp = authed_client.post("/lora/appkey", data={"app_key": good_key}, follow_redirects=True)
         assert resp.status_code == 200
         assert b"updated" in resp.data.lower() or b"restart" in resp.data.lower()
 

@@ -10,8 +10,9 @@ from Crypto.Hash import CMAC
 class TestJoinAcceptProcessing:
     """Tests for _process_join_accept and related join flow."""
 
-    def _build_join_accept(self, app_key: bytes, app_nonce: bytes, net_id: bytes,
-                           dev_addr: bytes) -> bytes:
+    def _build_join_accept(
+        self, app_key: bytes, app_nonce: bytes, net_id: bytes, dev_addr: bytes
+    ) -> bytes:
         """Build a valid encrypted JoinAccept frame for testing."""
         # Plaintext: AppNonce(3) + NetID(3) + DevAddr(4) + DLSettings(1) + RxDelay(1) + MIC(4)
         plaintext = app_nonce + net_id + dev_addr + b"\x00\x00"  # DLSettings + RxDelay
@@ -30,8 +31,8 @@ class TestJoinAcceptProcessing:
         padded = plaintext_with_mic.ljust(padded_len, b"\x00")
         encrypted = bytearray()
         for i in range(0, padded_len, 16):
-            encrypted += cipher.decrypt(padded[i:i + 16])
-        encrypted = bytes(encrypted[:len(plaintext_with_mic)])
+            encrypted += cipher.decrypt(padded[i : i + 16])
+        encrypted = bytes(encrypted[: len(plaintext_with_mic)])
 
         return bytes([mhdr]) + encrypted
 
@@ -120,8 +121,9 @@ class TestJoinAcceptProcessing:
         from radio.lorawan import LoRaWANMAC
 
         app_key = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
-        join_accept = self._build_join_accept(app_key, b"\x01\x02\x03", b"\x04\x05\x06",
-                                               b"\xaa\xbb\xcc\xdd")
+        join_accept = self._build_join_accept(
+            app_key, b"\x01\x02\x03", b"\x04\x05\x06", b"\xaa\xbb\xcc\xdd"
+        )
 
         mock_radio = MagicMock()
         mock_radio.send.return_value = True
@@ -138,8 +140,15 @@ class TestJoinAcceptProcessing:
 class TestDownlinkProcessing:
     """Tests for downlink frame parsing and decryption."""
 
-    def _build_downlink(self, dev_addr: bytes, nwk_skey: bytes, app_skey: bytes,
-                        fcnt: int, fport: int, payload: bytes) -> bytes:
+    def _build_downlink(
+        self,
+        dev_addr: bytes,
+        nwk_skey: bytes,
+        app_skey: bytes,
+        fcnt: int,
+        fport: int,
+        payload: bytes,
+    ) -> bytes:
         """Build a valid encrypted downlink frame."""
         from radio.lorawan import _encrypt_payload
 
@@ -176,23 +185,29 @@ class TestDownlinkProcessing:
         nwk_skey = b"\x11" * 16
         app_skey = b"\x22" * 16
 
-        downlink_frame = self._build_downlink(dev_addr, nwk_skey, app_skey,
-                                               fcnt=0, fport=1, payload=b"\xAA\xBB")
+        downlink_frame = self._build_downlink(
+            dev_addr, nwk_skey, app_skey, fcnt=0, fport=1, payload=b"\xaa\xbb"
+        )
 
         mock_radio = MagicMock()
         mock_radio.send.return_value = True
         mock_radio.receive.return_value = downlink_frame
 
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
-        mac.restore_session(LoRaWANSession(
-            dev_addr=dev_addr, nwk_skey=nwk_skey, app_skey=app_skey,
-            fcnt_up=0, joined=True,
-        ))
+        mac.restore_session(
+            LoRaWANSession(
+                dev_addr=dev_addr,
+                nwk_skey=nwk_skey,
+                app_skey=app_skey,
+                fcnt_up=0,
+                joined=True,
+            )
+        )
 
         result = mac.send_uplink(b"test", fport=1)
         assert result is not None
         assert result[0] == 1  # fport prepended
-        assert result[1:] == b"\xAA\xBB"
+        assert result[1:] == b"\xaa\xbb"
 
     def test_downlink_wrong_dev_addr_ignored(self, mock_hardware):
         """Downlink with wrong DevAddr should be ignored."""
@@ -203,18 +218,24 @@ class TestDownlinkProcessing:
         nwk_skey = b"\x11" * 16
         app_skey = b"\x22" * 16
 
-        downlink = self._build_downlink(wrong_addr, nwk_skey, app_skey,
-                                         fcnt=0, fport=1, payload=b"\xAA")
+        downlink = self._build_downlink(
+            wrong_addr, nwk_skey, app_skey, fcnt=0, fport=1, payload=b"\xaa"
+        )
 
         mock_radio = MagicMock()
         mock_radio.send.return_value = True
         mock_radio.receive.return_value = downlink
 
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
-        mac.restore_session(LoRaWANSession(
-            dev_addr=dev_addr, nwk_skey=nwk_skey, app_skey=app_skey,
-            fcnt_up=0, joined=True,
-        ))
+        mac.restore_session(
+            LoRaWANSession(
+                dev_addr=dev_addr,
+                nwk_skey=nwk_skey,
+                app_skey=app_skey,
+                fcnt_up=0,
+                joined=True,
+            )
+        )
 
         result = mac.send_uplink(b"test", fport=1)
         assert result is None
@@ -228,10 +249,15 @@ class TestDownlinkProcessing:
         mock_radio.receive.return_value = b"\x60" + b"\x00" * 5  # too short
 
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
-        mac.restore_session(LoRaWANSession(
-            dev_addr=b"\x00" * 4, nwk_skey=bytes(16), app_skey=bytes(16),
-            fcnt_up=0, joined=True,
-        ))
+        mac.restore_session(
+            LoRaWANSession(
+                dev_addr=b"\x00" * 4,
+                nwk_skey=bytes(16),
+                app_skey=bytes(16),
+                fcnt_up=0,
+                joined=True,
+            )
+        )
 
         result = mac.send_uplink(b"test", fport=1)
         assert result is None
@@ -255,10 +281,15 @@ class TestDownlinkProcessing:
         mock_radio.receive.return_value = bytes(frame)
 
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
-        mac.restore_session(LoRaWANSession(
-            dev_addr=dev_addr, nwk_skey=bytes(16), app_skey=bytes(16),
-            fcnt_up=0, joined=True,
-        ))
+        mac.restore_session(
+            LoRaWANSession(
+                dev_addr=dev_addr,
+                nwk_skey=bytes(16),
+                app_skey=bytes(16),
+                fcnt_up=0,
+                joined=True,
+            )
+        )
 
         result = mac.send_uplink(b"test", fport=1)
         assert result is None
@@ -270,8 +301,9 @@ class TestDownlinkProcessing:
         dev_addr = b"\x01\x02\x03\x04"
         nwk_skey = b"\x11" * 16
         app_skey = b"\x22" * 16
-        downlink = self._build_downlink(dev_addr, nwk_skey, app_skey,
-                                         fcnt=0, fport=100, payload=b"\x01\x01")
+        downlink = self._build_downlink(
+            dev_addr, nwk_skey, app_skey, fcnt=0, fport=100, payload=b"\x01\x01"
+        )
 
         mock_radio = MagicMock()
         mock_radio.send.return_value = True
@@ -279,10 +311,15 @@ class TestDownlinkProcessing:
         mock_radio.receive.side_effect = [None, downlink]
 
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
-        mac.restore_session(LoRaWANSession(
-            dev_addr=dev_addr, nwk_skey=nwk_skey, app_skey=app_skey,
-            fcnt_up=0, joined=True,
-        ))
+        mac.restore_session(
+            LoRaWANSession(
+                dev_addr=dev_addr,
+                nwk_skey=nwk_skey,
+                app_skey=app_skey,
+                fcnt_up=0,
+                joined=True,
+            )
+        )
 
         result = mac.send_uplink(b"test", fport=1)
         assert result is not None
@@ -322,10 +359,15 @@ class TestDownlinkProcessing:
         mock_radio.receive.return_value = bytes(frame)
 
         mac = LoRaWANMAC(mock_radio, bytes(8), bytes(8), bytes(16))
-        mac.restore_session(LoRaWANSession(
-            dev_addr=dev_addr, nwk_skey=nwk_skey, app_skey=app_skey,
-            fcnt_up=0, joined=True,
-        ))
+        mac.restore_session(
+            LoRaWANSession(
+                dev_addr=dev_addr,
+                nwk_skey=nwk_skey,
+                app_skey=app_skey,
+                fcnt_up=0,
+                joined=True,
+            )
+        )
 
         result = mac.send_uplink(b"test", fport=1)
         assert result is not None
