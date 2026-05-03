@@ -111,6 +111,12 @@ class Settings:
     gps_fix_s: int = 600
     gps_fix_timeout_s: int = 60
 
+    # GPS
+    # u-blox modules vary: NEO-6/7/8 default to 9600, NEO-M9N defaults to
+    # 38400, some custom-flashed boards ship at 115200. If GPS reads return
+    # garbled bytes, try the alternative bauds.
+    gps_baud: int = 9600
+
     # LoRaWAN
     app_key: str = "00000000000000000000000000000000"
 

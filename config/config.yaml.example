@@ -12,6 +12,13 @@ lora_tx_s: 300               # How often to transmit via LoRaWAN
 gps_fix_s: 600               # How often to attempt a GPS fix
 gps_fix_timeout_s: 60        # Max seconds to wait for GPS lock
 
+# --- GPS ---
+# u-blox UART baud rate. Default 9600 covers NEO-6/7/8/MAX-M10. NEO-M9N
+# ships at 38400. Some custom modules ship at 115200. If GPS init
+# succeeds but no fix is ever logged AND raw `cat /dev/serial0` shows
+# garbled bytes, try the alternative bauds.
+gps_baud: 9600
+
 # --- LoRaWAN ---
 # 32-character hex string — your AppKey from TTN or ChirpStack.
 # Replace the placeholder below with your actual key.
