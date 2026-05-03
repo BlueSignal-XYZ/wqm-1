@@ -319,6 +319,133 @@ sudo systemctl stop bluesignal-wqm
 
 ---
 
+### Day-2 Operations
+
+Once the firmware is installed and running, here is the everyday command
+reference for inspecting the device over SSH.
+
+#### Service control
+
+```bash
+sudo systemctl status  bluesignal-wqm        # is it alive?
+sudo systemctl restart bluesignal-wqm
+sudo systemctl stop    bluesignal-wqm
+sudo systemctl start   bluesignal-wqm
+sudo systemctl enable  bluesignal-wqm        # auto-start on boot (default)
+journalctl -u bluesignal-wqm -f              # live logs
+journalctl -u bluesignal-wqm -b 0            # logs since current boot
+journalctl -u bluesignal-wqm --since "10 min ago"
+```
+
+#### Hardware sanity checks
+
+```bash
+sudo bash /opt/bluesignal/scripts/diagnostics.sh   # full one-shot probe
+i2cdetect -y 1                                     # ADS1115 → 0x48
+ls /sys/bus/w1/devices/                            # DS18B20 → 28-*
+ls /dev/spidev0.0                                  # SX1262 SPI bus
+vcgencmd measure_temp                              # CPU temp
+```
+
+#### GPS — see what it's reading
+
+```bash
+# Watch fix events as they happen
+journalctl -u bluesignal-wqm -f | grep -i gps
+# Expect every gps_fix_s seconds: "GPS fix: 47.654321, -122.123456"
+
+# Query stored fixes from the SQLite buffer
+sudo sqlite3 /var/lib/bluesignal/wqm1.db \
+  "SELECT timestamp, lat, lon, alt_m FROM readings WHERE lat IS NOT NULL ORDER BY id DESC LIMIT 10;"
+
+# Raw NMEA stream (must stop the service - it holds the port)
+sudo systemctl stop bluesignal-wqm
+sudo stty -F /dev/serial0 9600 raw -echo
+sudo timeout 10 cat /dev/serial0
+sudo systemctl start bluesignal-wqm
+# $...,A,...,A,...  → fix acquired (A = active)
+# $...,V,...,V,...  → no fix yet (V = void)
+```
+
+**How long should the first GPS fix take?** A u-blox cold start
+(no almanac, no time, no ephemeris) is **30–60 seconds with a clear
+view of the sky**. Indoors near a window is typically 2–10 minutes.
+In the centre of a building, often never. The default `gps_fix_s` is
+600s and `gps_fix_timeout_s` is 60s, so the first one or two attempts
+on a fresh power-up may show "GPS fix timeout" before locking — that
+is expected, not a fault. Once the module has an almanac stored,
+warm starts drop to ~25 s and hot starts to a few seconds.
+
+#### LoRa / LoRaWAN — see what's going on
+
+LoRaWAN is a star network: the device only talks to a gateway, which
+forwards everything to a network server (TTN, ChirpStack, etc.). All
+"communication" with the device happens via that server.
+
+```bash
+# Watch radio activity in real time
+journalctl -u bluesignal-wqm -f | grep -iE 'lora|sx1262|join|uplink|tx complete|fcnt'
+# On join:    "Sending JoinRequest" → "JoinAccept received" → "Joined network"
+# On uplink:  "LoRa TX complete (N bytes)" + "FCntUp=N"
+
+# Check current join status from the DB
+sudo sqlite3 /var/lib/bluesignal/wqm1.db \
+  "SELECT joined, fcnt_up, fcnt_down, updated_at FROM lorawan_session;"
+# joined=1 → registered. fcnt_up climbs once per uplink.
+```
+
+**To see uplinks land**, log into your network server console — TTN
+Console → Application → Device → "Live data", or ChirpStack →
+Applications → Device → "LoRaWAN frames".
+
+**To send a downlink to the device**, schedule it from the network
+server (TTN: device page → "Messaging" → "Downlink"). The firmware
+receives it on the next uplink's RX1/RX2 window and applies any
+matching policy from `config/policies.yaml`.
+
+#### Service Window (web UI)
+
+A Flask UI on port `8080` exposes calibration, relay control,
+LoRaWAN AppKey configuration, sensor data, and diagnostics.
+
+```bash
+sudo systemctl status bluesignal-service-window
+sudo systemctl enable --now bluesignal-service-window   # if not running
+```
+
+Then from another machine on the same network:
+
+```
+http://<pi-ip>:8080/                   # dashboard
+http://<pi-ip>:8080/sensors/           # live sensor readings
+http://<pi-ip>:8080/sensors/data.json  # raw JSON
+http://<pi-ip>:8080/lora/              # set AppKey, view join state
+http://<pi-ip>:8080/relays/            # manual relay control
+http://<pi-ip>:8080/calibration/       # pH/TDS/turbidity calibration
+http://<pi-ip>:8080/diagnostics/       # run hardware probe
+```
+
+#### Configuration
+
+```bash
+sudo nano /etc/bluesignal/config.yaml         # main config (AppKey, intervals, fan thresholds)
+sudo nano /opt/bluesignal/config/policies.yaml # relay rules
+sudo systemctl restart bluesignal-wqm          # apply changes
+```
+
+#### Storage
+
+```bash
+ls -lh /var/lib/bluesignal/                            # database files
+sudo sqlite3 /var/lib/bluesignal/wqm1.db '.tables'
+sudo sqlite3 /var/lib/bluesignal/wqm1.db \
+  'SELECT * FROM readings ORDER BY id DESC LIMIT 10;'  # latest readings
+df -h /var/lib/bluesignal                              # disk space
+ls -lh /var/log/bluesignal/                            # log files
+```
+
+---
+
 ### Troubleshooting
 
 <details>
