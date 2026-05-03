@@ -75,6 +75,20 @@ for line in "${OVERLAYS[@]}"; do
     fi
 done
 
+# Free the primary UART for the GPS. enable_uart=1 (above) is necessary but not
+# sufficient: by default Raspberry Pi OS attaches a serial console (getty) to
+# ttyAMA0, which leaves /dev/ttyAMA0 owned root:tty mode 0600. The firmware
+# then can't open /dev/serial0 (a symlink to ttyAMA0) and GPS reads fail with
+# EACCES. Disable the getty and strip console=serial0 / console=ttyAMA0 from
+# the kernel cmdline so the udev rule reclaims the device as root:dialout 0660.
+CMDLINE="/boot/cmdline.txt"
+[ -f "/boot/firmware/cmdline.txt" ] && CMDLINE="/boot/firmware/cmdline.txt"
+if [ -f "$CMDLINE" ]; then
+    sudo cp "$CMDLINE" "${CMDLINE}.bak.$(date +%s)" 2>/dev/null || true
+    sudo sed -i -E 's/[[:space:]]+console=(serial0|ttyAMA0)[^[:space:]]*//g' "$CMDLINE"
+fi
+sudo systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
+
 # --- Create directories ---
 echo "[4/7] Creating directories..."
 sudo mkdir -p "$INSTALL_DIR"/{src,config,scripts}

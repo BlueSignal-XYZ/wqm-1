@@ -345,6 +345,18 @@ sudo systemctl stop bluesignal-wqm
 
 - Verify both `enable_uart=1` and `dtoverlay=disable-bt` are in
   `config.txt`. The `disable-bt` overlay frees the PL011 UART for GPS.
+- If the firmware logs `GPS UART open failed: [Errno 13] ... Permission denied: '/dev/serial0'`,
+  the **serial console is holding the UART**. Check with
+  `ls -lL /dev/serial0` — if you see `root tty` mode `0600`, the console
+  has it. `setup.sh` disables this automatically; if you upgraded from
+  an older install, run:
+  ```bash
+  sudo systemctl disable --now serial-getty@ttyAMA0.service
+  CMDLINE=/boot/firmware/cmdline.txt; [ -f /boot/cmdline.txt ] && CMDLINE=/boot/cmdline.txt
+  sudo sed -i -E 's/[[:space:]]+console=(serial0|ttyAMA0)[^[:space:]]*//g' "$CMDLINE"
+  sudo reboot
+  ```
+  After reboot, `/dev/ttyAMA0` should be `root dialout` mode `0660`.
 - Reboot after `config.txt` changes.
 - The GPS module may need several minutes to acquire a first fix
   outdoors.
@@ -375,6 +387,18 @@ Common causes:
   ```bash
   sudo chown -R pi:pi /opt/bluesignal /var/lib/bluesignal /var/log/bluesignal
   ```
+- **Permission denied on `/dev/gpiochip0`, `/dev/i2c-1`, `/dev/spidev0.0`,
+  or `/var/run/bluesignal`** — the unit is missing
+  `SupplementaryGroups=` and/or `RuntimeDirectory=`. Confirm the
+  installed unit at `/etc/systemd/system/bluesignal-wqm.service`
+  contains:
+  ```ini
+  SupplementaryGroups=dialout gpio i2c spi
+  RuntimeDirectory=bluesignal
+  RuntimeDirectoryMode=0755
+  ```
+  If not, re-run `setup.sh` (it copies the unit from the repo) and then
+  `sudo systemctl daemon-reload && sudo systemctl restart bluesignal-wqm`.
 
 </details>
 
