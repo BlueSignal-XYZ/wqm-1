@@ -95,9 +95,7 @@ class TestStartupTest:
         leds = StatusLEDs()
         with patch("time.sleep"):
             leds.startup_test()
-        on_calls = [
-            c for c in _mock_gpio.output.call_args_list if c[0][1] == _mock_gpio.HIGH
-        ]
+        on_calls = [c for c in _mock_gpio.output.call_args_list if c[0][1] == _mock_gpio.HIGH]
         assert len(on_calls) >= 4
         leds.cleanup()
 
@@ -187,9 +185,7 @@ class TestConvenienceMethods:
         leds = StatusLEDs()
         with patch("time.sleep"):
             leds.error_pattern(3)
-        on_calls = [
-            c for c in _mock_gpio.output.call_args_list if c == call(13, _mock_gpio.HIGH)
-        ]
+        on_calls = [c for c in _mock_gpio.output.call_args_list if c == call(13, _mock_gpio.HIGH)]
         assert len(on_calls) == 3
         leds.cleanup()
 

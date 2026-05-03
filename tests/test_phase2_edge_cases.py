@@ -357,8 +357,8 @@ class TestLoRaWANCrypto:
 
         key = bytes(16)
         dev_addr = b"\x01\x02\x03\x04"
-        mic1 = _compute_uplink_mic(key, dev_addr, 0, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xFF")
-        mic2 = _compute_uplink_mic(key, dev_addr, 1, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xFF")
+        mic1 = _compute_uplink_mic(key, dev_addr, 0, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xff")
+        mic2 = _compute_uplink_mic(key, dev_addr, 1, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xff")
         assert mic1 != mic2
 
 

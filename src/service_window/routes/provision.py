@@ -152,5 +152,3 @@ def qr_svg() -> Response:
             "<svg><text y='20'>qrcode package not installed</text></svg>",
             mimetype="image/svg+xml",
         )
-
-
