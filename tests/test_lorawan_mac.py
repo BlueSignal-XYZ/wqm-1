@@ -141,7 +141,7 @@ class TestDownlinkProcessing:
     def _build_downlink(self, dev_addr: bytes, nwk_skey: bytes, app_skey: bytes,
                         fcnt: int, fport: int, payload: bytes) -> bytes:
         """Build a valid encrypted downlink frame."""
-        from radio.lorawan import _compute_uplink_mic, _encrypt_payload
+        from radio.lorawan import _encrypt_payload
 
         enc_payload = _encrypt_payload(app_skey, dev_addr, fcnt, payload, direction=1)
 
