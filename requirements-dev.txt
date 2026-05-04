@@ -1,6 +1,6 @@
 # Development and CI dependencies
 -r requirements.txt
-pytest>=8.0
+pytest>=9.0.3
 pytest-mock>=3.12
 pytest-cov>=7.1.0
 ruff>=0.15.12
