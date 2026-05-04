@@ -8,5 +8,5 @@ mypy>=1.10
 types-pyserial>=3.5.0.20260408
 bandit[toml]>=1.9.4
 pip-audit>=2.10.0
-pre-commit>=3.7
+pre-commit>=4.6.0
 cyclonedx-bom>=4.0
