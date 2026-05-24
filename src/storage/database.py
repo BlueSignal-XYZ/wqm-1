@@ -132,7 +132,7 @@ class WQM1Database:
                 "SELECT COUNT(*) FROM readings WHERE synced = ?",
                 (1 if synced else 0,),
             )
-        return cur.fetchone()[0]
+        return int(cur.fetchone()[0])
 
     def rotate(self, max_rows: int | None = None) -> int:
         """
@@ -211,7 +211,7 @@ class WQM1Database:
         with self._conn:
             self._conn.execute("UPDATE lorawan_session SET fcnt_up = fcnt_up + 1 WHERE id=1")
         cur = self._conn.execute("SELECT fcnt_up FROM lorawan_session WHERE id=1")
-        return cur.fetchone()[0]
+        return int(cur.fetchone()[0])
 
     def close(self) -> None:
         """Close database connection."""

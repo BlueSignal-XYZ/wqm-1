@@ -10,6 +10,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -143,7 +144,7 @@ class Settings:
     fan_off_temp_c: float = 55.0
 
     # Automation rules
-    rules: list[dict] = field(default_factory=list)
+    rules: list[dict[str, Any]] = field(default_factory=list)
 
     # Version
     firmware_version: str = "1.0.0"
@@ -181,7 +182,7 @@ def _load_settings(path: str) -> Settings:
     return s
 
 
-def atomic_json_write(path: str, data: dict) -> None:
+def atomic_json_write(path: str, data: dict[str, Any]) -> None:
     """Write JSON file atomically (write to .tmp then rename)."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)

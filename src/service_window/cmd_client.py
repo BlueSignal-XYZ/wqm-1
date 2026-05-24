@@ -9,7 +9,7 @@ import json
 import socket
 
 
-def send_command(sock_path: str, action: str, **kwargs: object) -> dict:
+def send_command(sock_path: str, action: str, **kwargs: object) -> dict[str, object]:
     """
     Send a command to the firmware via Unix socket.
 
