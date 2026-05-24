@@ -48,7 +48,7 @@ class HealthReporter:
         """Return last RSSI in dBm. Returns -120 if unknown."""
         return self._last_rssi if self._last_rssi is not None else -120
 
-    def get_report(self) -> dict:
+    def get_report(self) -> dict[str, int | str]:
         """
         Build health telemetry report matching platform contract.
 

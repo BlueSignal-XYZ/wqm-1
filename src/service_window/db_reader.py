@@ -54,7 +54,7 @@ class DBReader:
         conn = self._connect()
         try:
             cur = conn.execute("SELECT COUNT(*) FROM readings")
-            return cur.fetchone()[0]
+            return int(cur.fetchone()[0])
         finally:
             conn.close()
 

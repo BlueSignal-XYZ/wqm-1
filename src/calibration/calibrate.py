@@ -9,6 +9,7 @@ the platform commissioning workflow (step 6).
 import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -36,7 +37,7 @@ class CalibrationData:
     orp_offset_mv: float = 0.0
 
     # Platform-applied offsets (from commissioning step 6)
-    platform_offsets: dict = field(default_factory=dict)
+    platform_offsets: dict[str, float] = field(default_factory=dict)
 
 
 class CalibrationManager:
@@ -143,7 +144,7 @@ class CalibrationManager:
         logger.info("ORP calibrated: offset=%.1f mV", offset)
         return offset
 
-    def apply_platform_offsets(self, offsets: dict) -> None:
+    def apply_platform_offsets(self, offsets: dict[str, Any]) -> None:
         """
         Apply calibration offsets from platform commissioning step 6.
 
