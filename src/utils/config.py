@@ -121,9 +121,14 @@ class Settings:
     # LoRaWAN
     app_key: str = "00000000000000000000000000000000"
 
-    # Cloud sync
-    api_endpoint: str = "https://your-cloud-endpoint.example.com/api/v1/readings"
-    api_key: str = ""
+    # Cloud sync (HTTP/WiFi transport — coexists with LoRaWAN). Enable once the
+    # device has an api_key; set via the service window /provision/cloud page.
+    cloud_enabled: bool = False
+    cloud_ingest_url: str = "https://us-central1-waterquality-trading.cloudfunctions.net/ingestReading"
+    cloud_command_url: str = "https://us-central1-waterquality-trading.cloudfunctions.net/deviceCommands"
+    command_poll_s: int = 5  # how often to poll for relay commands over HTTP
+    api_endpoint: str = "https://your-cloud-endpoint.example.com/api/v1/readings"  # legacy/unused
+    api_key: str = ""  # device API key (X-API-Key), bound to this device id
     batch_size: int = 50
     sync_interval_s: int = 300
     max_retries: int = 3

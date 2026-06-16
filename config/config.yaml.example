@@ -24,13 +24,19 @@ gps_baud: 9600
 # Replace the placeholder below with your actual key.
 app_key: "00000000000000000000000000000000"
 
-# --- Cloud sync (optional) ---
-api_endpoint: "https://your-cloud-endpoint.example.com/api/v1/readings"
-api_key: ""
+# --- Cloud over WiFi (optional; coexists with LoRaWAN) ---
+# Set cloud_enabled: true and paste the device API key to report readings and
+# accept relay commands over HTTP. Easiest via the service window /provision page.
+cloud_enabled: false
+api_key: ""          # device API key (X-API-Key), bound to this device id
+cloud_ingest_url: "https://us-central1-waterquality-trading.cloudfunctions.net/ingestReading"
+cloud_command_url: "https://us-central1-waterquality-trading.cloudfunctions.net/deviceCommands"
+sync_interval_s: 300     # how often to upload buffered readings
+command_poll_s: 5        # how often to poll for relay commands
 batch_size: 50
-sync_interval_s: 300
 max_retries: 3
 retry_delays: [5, 15, 30]
+api_endpoint: "https://your-cloud-endpoint.example.com/api/v1/readings"   # legacy/unused
 
 # --- Storage ---
 db_path: "/var/lib/bluesignal/wqm1.db"
