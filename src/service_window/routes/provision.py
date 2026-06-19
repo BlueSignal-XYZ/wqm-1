@@ -16,6 +16,7 @@ from flask import (
     request,
     url_for,
 )
+from flask.typing import ResponseReturnValue
 
 from service_window import read_firmware_version
 from service_window.auth import login_required
@@ -79,7 +80,7 @@ def identity() -> str:
 
 @provision_bp.route("/appkey", methods=["POST"])
 @login_required
-def set_appkey() -> str:
+def set_appkey() -> ResponseReturnValue:
     app_key = request.form.get("app_key", "").strip()
     if not _HEX32_RE.match(app_key):
         flash("AppKey must be exactly 32 hex characters.", "error")
@@ -92,7 +93,7 @@ def set_appkey() -> str:
 
 @provision_bp.route("/cloud", methods=["POST"])
 @login_required
-def set_cloud() -> str:
+def set_cloud() -> ResponseReturnValue:
     """Commission the unit for the cloud (HTTP/WiFi) path: store the device API
     key + endpoints and toggle cloud mode. Coexists with LoRaWAN."""
     path = current_app.config["CONFIG_PATH"]

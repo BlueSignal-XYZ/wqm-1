@@ -10,6 +10,7 @@ from flask import (
     request,
     url_for,
 )
+from flask.typing import ResponseReturnValue
 
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
@@ -25,7 +26,7 @@ def index() -> str:
 
 @relays_bp.route("/set", methods=["POST"])
 @login_required
-def set_relay() -> str:
+def set_relay() -> ResponseReturnValue:
     try:
         channel = int(request.form["channel"])
         state = request.form["state"] == "on"
@@ -49,7 +50,7 @@ def set_relay() -> str:
 
 @relays_bp.route("/api/set", methods=["POST"])
 @login_required
-def api_set_relay() -> tuple[str, int]:
+def api_set_relay() -> ResponseReturnValue:
     """JSON API for relay control (used by JS)."""
     data = request.get_json(silent=True) or {}
     channel = data.get("channel")
