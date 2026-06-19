@@ -18,6 +18,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -61,6 +62,7 @@ class CloudClient:
         timeout_s: float = 15.0,
         max_retries: int = 3,
         retry_delays: list[int] | tuple[int, ...] = (5, 15, 30),
+        radios_provider: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         self._device_id = device_id
         self._ingest_url = ingest_url
@@ -71,11 +73,16 @@ class CloudClient:
         self._timeout_s = timeout_s
         self._max_retries = max(1, max_retries)
         self._retry_delays = list(retry_delays)
+        # Optional callable returning current radio status (LoRa presence + GPS
+        # fix) for the dashboard's Radios card. Read at sync time; never required.
+        self._radios_provider = radios_provider
         self._sleep = time.sleep  # patchable in tests
 
     # -- reading -> cloud JSON ------------------------------------------------
 
-    def reading_to_json(self, row: dict[str, Any]) -> dict[str, Any]:
+    def reading_to_json(
+        self, row: dict[str, Any], radios: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Map one DB reading row to the cloud ingest schema."""
         sensors: dict[str, dict[str, float]] = {}
         for col, name in _SENSOR_MAP.items():
@@ -92,6 +99,24 @@ class CloudClient:
         lat, lon = row.get("lat"), row.get("lon")
         if lat is not None and lon is not None:
             metadata["gps"] = {"latitude": lat, "longitude": lon, "altitude": row.get("alt_m")}
+
+        # metadata.radios — the shape the cloud Radios card + map consume:
+        #   {lora:{present,chip,mode,cs}, gps:{fix,sats,lat,lon}}.
+        # LoRa presence + sat count come from the live `radios` snapshot; the
+        # per-reading GPS fix is the row's own lat/lon (more accurate for that
+        # sample). Only emitted when something is actually present.
+        radio_meta: dict[str, Any] = {}
+        if radios and isinstance(radios.get("lora"), dict):
+            radio_meta["lora"] = radios["lora"]
+        gps_meta: dict[str, Any] = dict((radios or {}).get("gps") or {})
+        if lat is not None and lon is not None:
+            gps_meta["lat"] = lat
+            gps_meta["lon"] = lon
+            gps_meta["fix"] = True
+        if gps_meta.get("lat") is not None and gps_meta.get("lon") is not None:
+            radio_meta["gps"] = gps_meta
+        if radio_meta:
+            metadata["radios"] = radio_meta
 
         return {
             "deviceId": self._device_id,
@@ -144,7 +169,13 @@ class CloudClient:
         rows = db.get_unsynced(self._batch_size)
         if not rows:
             return 0
-        payload = [self.reading_to_json(r) for r in rows]
+        radios: dict[str, Any] | None = None
+        if self._radios_provider is not None:
+            try:
+                radios = self._radios_provider()
+            except Exception as e:  # noqa: BLE001 — radio status is best-effort
+                logger.debug("radios_provider failed: %s", e)
+        payload = [self.reading_to_json(r, radios) for r in rows]
         status, resp = self._post(self._ingest_url, payload)
         if status == 200:
             db.mark_synced([r["id"] for r in rows])

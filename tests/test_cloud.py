@@ -96,6 +96,35 @@ class TestReadingToJson:
         out = c.reading_to_json(_row(lat=38.9, lon=-77.0, alt_m=10.0))
         assert out["metadata"]["gps"] == {"latitude": 38.9, "longitude": -77.0, "altitude": 10.0}
 
+    def test_emits_radios_metadata(self):
+        # The dashboard's Radios card + map consume metadata.radios:
+        # GPS fix from the row, LoRa presence + sat count from the live snapshot.
+        c = _make_client()
+        radios = {
+            "lora": {"present": True, "chip": "SX1262", "mode": "LoRaWAN", "cs": 0},
+            "gps": {"fix": True, "sats": 12, "lat": None, "lon": None},
+        }
+        out = c.reading_to_json(_row(lat=30.380, lon=-97.995, alt_m=250.0), radios)
+        r = out["metadata"]["radios"]
+        assert r["lora"] == {"present": True, "chip": "SX1262", "mode": "LoRaWAN", "cs": 0}
+        # row lat/lon take precedence for this reading; sats carried from snapshot
+        assert r["gps"]["lat"] == 30.380
+        assert r["gps"]["lon"] == -97.995
+        assert r["gps"]["fix"] is True
+        assert r["gps"]["sats"] == 12
+
+    def test_no_radios_without_gps_or_snapshot(self):
+        c = _make_client()
+        out = c.reading_to_json(_row(ph=7.0))  # no GPS row, no snapshot
+        assert "radios" not in out["metadata"]
+
+    def test_radios_lora_only_when_no_fix(self):
+        c = _make_client()
+        radios = {"lora": {"present": True, "chip": "SX1262", "mode": None, "cs": 0}}
+        out = c.reading_to_json(_row(ph=7.0), radios)  # LoRa present but no GPS fix
+        assert out["metadata"]["radios"]["lora"]["present"] is True
+        assert "gps" not in out["metadata"]["radios"]
+
     def test_orp_and_battery_mapping(self):
         c = _make_client()
         out = c.reading_to_json(_row(orp_mv=200.0, battery_v=4.1))
