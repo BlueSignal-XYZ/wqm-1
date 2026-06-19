@@ -112,11 +112,14 @@ class WQM1App:
         self._last_lora_tx = 0.0
         self._last_gps_fix = 0.0
         self._last_db_rotate = 0.0
+        self._last_cloud_sync = 0.0
+        self._last_cmd_poll = 0.0
 
         # GPS cache
         self._gps_lat: float | None = None
         self._gps_lon: float | None = None
         self._gps_alt: float | None = None
+        self._gps_sats: int | None = None
 
         # Device identity
         self._device_id = get_device_id()
@@ -214,8 +217,26 @@ class WQM1App:
         except Exception as e:
             logger.warning("LoRa init failed: %s", e)
 
-        # --- Cloud sync (removed for open-source release) ---
-        self._cloud = None
+        # --- Cloud (HTTP/WiFi) transport — coexists with LoRaWAN ---
+        # Native store-and-forward uplink + relay command polling. Enabled once
+        # the unit is commissioned with an API key (service window /provision/cloud).
+        if self._settings.cloud_enabled and self._settings.api_key:
+            from cloud import CloudClient
+
+            self._cloud = CloudClient(
+                device_id=self._device_id,
+                ingest_url=self._settings.cloud_ingest_url,
+                command_url=self._settings.cloud_command_url,
+                api_key=self._settings.api_key,
+                fw_version=FW_VERSION,
+                batch_size=self._settings.batch_size,
+                max_retries=self._settings.max_retries,
+                retry_delays=self._settings.retry_delays,
+                radios_provider=self._radios_snapshot,
+            )
+            logger.info("Cloud HTTP transport enabled (ingest=%s)", self._settings.cloud_ingest_url)
+        else:
+            self._cloud = None
 
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
@@ -359,6 +380,14 @@ class WQM1App:
                 self._do_lora_tx()
                 self._last_lora_tx = now
 
+            if self._cloud and now - self._last_cloud_sync >= self._settings.sync_interval_s:
+                self._do_cloud_sync()
+                self._last_cloud_sync = now
+
+            if self._cloud and now - self._last_cmd_poll >= self._settings.command_poll_s:
+                self._do_command_poll()
+                self._last_cmd_poll = now
+
             if now - self._last_db_rotate >= 600:
                 try:
                     self._db.rotate()
@@ -437,6 +466,7 @@ class WQM1App:
                 self._gps_lat = fix.latitude
                 self._gps_lon = fix.longitude
                 self._gps_alt = fix.altitude
+                self._gps_sats = fix.satellites
                 logger.info("GPS fix: %.6f, %.6f", fix.latitude, fix.longitude)
             else:
                 if self._gps_lat is None:
@@ -474,6 +504,71 @@ class WQM1App:
             logger.error("LoRa TX failed: %s", e)
         finally:
             self._leds.lora_tx_off()
+
+    def _radios_snapshot(self) -> dict[str, Any] | None:
+        """Current radio status for the cloud Radios card — LoRa presence + GPS
+        fix. Read at each cloud sync; cheap and safe to call anytime."""
+        snap: dict[str, Any] = {}
+        if self._radio is not None:
+            snap["lora"] = {
+                "present": True,
+                "chip": "SX1262",
+                "mode": "LoRaWAN" if self._lorawan is not None else None,
+                "cs": 0,
+            }
+        if self._gps is not None:
+            snap["gps"] = {
+                "fix": self._gps_lat is not None and self._gps_lon is not None,
+                "sats": self._gps_sats,
+                "lat": self._gps_lat,
+                "lon": self._gps_lon,
+            }
+        return snap or None
+
+    def _do_cloud_sync(self) -> None:
+        """Upload buffered readings to the cloud over HTTP (store-and-forward)."""
+        try:
+            n = self._cloud.sync_readings(self._db)
+            if n:
+                logger.info("Cloud sync: uploaded %d reading(s)", n)
+        except Exception as e:
+            logger.error("Cloud sync failed: %s", e)
+
+    def _do_command_poll(self) -> None:
+        """Poll the cloud for queued relay commands and apply them."""
+        try:
+            for cmd in self._cloud.poll_commands():
+                self._apply_cloud_command(cmd)
+        except Exception as e:
+            logger.error("Cloud command poll failed: %s", e)
+
+    def _apply_cloud_command(self, cmd: dict) -> None:
+        """Actuate a single cloud relay command via the shared dispatcher, then ack."""
+        cmd_id = cmd.get("id")
+        if cmd.get("type") != "relay":
+            self._cloud.ack_command(cmd_id, "error", f"unsupported type: {cmd.get('type')}")
+            return
+        try:
+            channel = int(cmd.get("channel") or 1)
+            state = bool(cmd.get("state"))
+            result = self._handle_cmd({"action": "relay_set", "channel": channel, "state": state})
+            if not result.get("ok"):
+                raise ValueError(result.get("error", "relay_set failed"))
+            # Optional auto-off after a duration (cloud sends durationSeconds).
+            duration = cmd.get("durationSeconds")
+            if state and duration:
+                threading.Timer(
+                    float(duration),
+                    lambda ch=channel: self._handle_cmd(
+                        {"action": "relay_set", "channel": ch, "state": False}
+                    ),
+                ).start()
+            self._cloud.ack_command(cmd_id, "done")
+            logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
+        except Exception as e:
+            logger.error("Apply cloud command %s failed: %s", cmd_id, e)
+            with contextlib.suppress(Exception):
+                self._cloud.ack_command(cmd_id, "error", str(e))
 
     def _handle_signal(self, signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal %d, shutting down...", signum)

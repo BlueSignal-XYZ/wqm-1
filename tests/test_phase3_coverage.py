@@ -11,9 +11,7 @@ class TestServiceWindowConfigLoading:
         import yaml
 
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump({"service_window": {"port": 9090, "pin": "5678"}})
-        )
+        config_file.write_text(yaml.dump({"service_window": {"port": 9090, "pin": "5678"}}))
 
         from service_window.app import _load_sw_config
 
@@ -139,7 +137,7 @@ class TestLoRaWANEdgeCases:
         )
 
         # Valid downlink MHDR (0x60) but wrong dev_addr
-        frame = bytes([0x60]) + b"\xFF\xFF\xFF\xFF" + b"\x00" * 12
+        frame = bytes([0x60]) + b"\xff\xff\xff\xff" + b"\x00" * 12
         result = mac._process_downlink(frame)
         assert result is None
 
@@ -348,7 +346,7 @@ class TestTurbidityEdgeCases:
 
         mock_hardware["bus"].read_i2c_block_data.side_effect = [
             [0x85, 0x83],  # OS poll (bit 7 set = conversion done)
-            [high, low],   # conversion result: ~4.096V
+            [high, low],  # conversion result: ~4.096V
         ]
 
         turb = TurbiditySensor(adc)

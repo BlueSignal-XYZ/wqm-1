@@ -37,4 +37,28 @@
 <h2>Step 3: Device Label</h2>
 <a href="{{ url_for('provision.identity') }}" class="btn">View Identity &amp; QR Code</a>
 <a href="{{ url_for('provision.report') }}" class="btn">Download Identity Report</a>
+
+<h2>Step 4: Cloud over WiFi (optional)</h2>
+<p>Commission this unit over WiFi: paste its device API key to report readings and
+   accept relay commands over HTTP. This coexists with LoRaWAN.
+   Cloud is currently
+   <strong>{{ 'ON' if cloud.enabled else 'OFF' }}</strong>{{ ' (key set)' if cloud.key_set else ' (no key)' }}.</p>
+<form method="post" action="{{ url_for('provision.set_cloud') }}">
+    <label>Device API key:
+        <input type="text" name="api_key" maxlength="128" autocomplete="off"
+               placeholder="{{ 'Saved — leave blank to keep' if cloud.key_set else 'Paste the device API key from the cloud' }}">
+    </label>
+    <label>Ingest URL:
+        <input type="text" name="cloud_ingest_url" value="{{ cloud.ingest_url }}">
+    </label>
+    <label>Command URL:
+        <input type="text" name="cloud_command_url" value="{{ cloud.command_url }}">
+    </label>
+    <label>
+        <input type="checkbox" name="cloud_enabled" {{ 'checked' if cloud.enabled else '' }}>
+        Enable cloud (HTTP/WiFi) mode
+    </label>
+    <button type="submit" class="btn">Save Cloud Settings</button>
+</form>
+<p><small>Restart the firmware service after changing cloud settings.</small></p>
 {% endblock %}
