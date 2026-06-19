@@ -16,6 +16,7 @@ from flask import (
     session,
     url_for,
 )
+from flask.typing import ResponseReturnValue
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -65,7 +66,7 @@ def _record_attempt(ip: str) -> None:
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
-def login() -> str:
+def login() -> ResponseReturnValue:
     error = None
     if request.method == "POST":
         ip = request.remote_addr or "unknown"
@@ -83,6 +84,6 @@ def login() -> str:
 
 
 @auth_bp.route("/logout")
-def logout() -> str:
+def logout() -> ResponseReturnValue:
     session.clear()
     return redirect(url_for("auth.login"))

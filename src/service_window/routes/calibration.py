@@ -1,6 +1,7 @@
 """Sensor calibration wizard."""
 
 from flask import Blueprint, Flask, current_app, flash, redirect, render_template, request, url_for
+from flask.typing import ResponseReturnValue
 
 from service_window.auth import login_required
 from service_window.config_editor import read_config, update_config
@@ -21,7 +22,7 @@ def index() -> str:
 
 @calibration_bp.route("/ph", methods=["GET", "POST"])
 @login_required
-def ph() -> str:
+def ph() -> ResponseReturnValue:
     if request.method == "POST":
         try:
             v_ph4 = float(request.form["v_ph4"])
@@ -49,7 +50,7 @@ def ph() -> str:
 
 @calibration_bp.route("/tds", methods=["GET", "POST"])
 @login_required
-def tds() -> str:
+def tds() -> ResponseReturnValue:
     if request.method == "POST":
         try:
             known_ppm = float(request.form["known_ppm"])
@@ -69,7 +70,7 @@ def tds() -> str:
 
 @calibration_bp.route("/turbidity", methods=["GET", "POST"])
 @login_required
-def turbidity() -> str:
+def turbidity() -> ResponseReturnValue:
     if request.method == "POST":
         try:
             clear_v = float(request.form["clear_v"])
@@ -89,7 +90,7 @@ def turbidity() -> str:
 
 @calibration_bp.route("/orp", methods=["GET", "POST"])
 @login_required
-def orp() -> str:
+def orp() -> ResponseReturnValue:
     if request.method == "POST":
         try:
             known_mv = float(request.form["known_mv"])

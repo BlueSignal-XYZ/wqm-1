@@ -1,6 +1,7 @@
 """Sensor detail and history."""
 
 from flask import Blueprint, current_app, jsonify, render_template
+from flask.typing import ResponseReturnValue
 
 from service_window.auth import login_required
 from service_window.db_reader import DBReader
@@ -18,7 +19,7 @@ def index() -> str:
 
 @sensors_bp.route("/data.json")
 @login_required
-def data_json() -> str:
+def data_json() -> ResponseReturnValue:
     db = DBReader(current_app.config["DB_PATH"])
     readings = db.get_readings(limit=50)
     # Reverse to chronological order for charts
