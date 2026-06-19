@@ -129,6 +129,11 @@ class CloudClient:
 
     def _post(self, url: str, body: Any) -> tuple[int, dict[str, Any] | None]:
         """POST JSON with retry. Returns (status_code, parsed_json|None)."""
+        # Cloud endpoints are HTTP(S) URLs from config, never user input. Refuse
+        # any other scheme so a mis-set config can't open a file:/ or custom URL.
+        if not url.lower().startswith(("http://", "https://")):
+            logger.error("Refusing non-HTTP(S) cloud URL: %s", url)
+            return 0, None
         data = json.dumps(body).encode("utf-8")
         last_status = 0
         for attempt in range(self._max_retries):
@@ -139,7 +144,8 @@ class CloudClient:
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                # B310: scheme validated above (HTTP/S only) — trusted cloud endpoint.
+                with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:  # nosec B310
                     raw = resp.read().decode("utf-8") or "{}"
                     return resp.status, json.loads(raw)
             except urllib.error.HTTPError as e:
