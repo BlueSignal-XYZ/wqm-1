@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 # Add src to path so we can import identity module
 _SRC = Path(__file__).resolve().parent.parent / "src"
@@ -33,7 +34,7 @@ _DIAG_PATHS = [
 _HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
 
-def _get_identity() -> dict:
+def _get_identity() -> dict[str, str]:
     """Get device identity from Pi serial."""
     try:
         from utils.identity import get_ble_name, get_dev_eui, get_device_id
@@ -48,7 +49,7 @@ def _get_identity() -> dict:
     return {"device_id": device_id, "dev_eui": dev_eui, "ble_name": ble_name}
 
 
-def _read_config() -> dict:
+def _read_config() -> dict[str, Any]:
     """Read config YAML."""
     try:
         import yaml
@@ -62,7 +63,7 @@ def _read_config() -> dict:
     return {}
 
 
-def _write_config(updates: dict) -> None:
+def _write_config(updates: dict[str, Any]) -> None:
     """Merge updates into config file."""
     import yaml
 
@@ -91,7 +92,7 @@ def _run_diagnostics() -> bool:
     return result.returncode == 0
 
 
-def _generate_qr(identity: dict, output_path: str) -> bool:
+def _generate_qr(identity: dict[str, str], output_path: str) -> bool:
     """Generate QR code SVG."""
     try:
         import qrcode
