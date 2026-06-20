@@ -209,16 +209,49 @@ class TestTurbidityCalibrationDetailed:
         """
         If clear-water voltage is set at or below TURB_V_MAX, the slope
         inversion guard must return None (not raise a ZeroDivisionError).
+        Use a voltage at/above the rail so the disconnected-probe guard does
+        not short-circuit first, exercising the v_range guard specifically.
         """
         from sensors.ads1115 import ADS1115
         from sensors.turbidity import TurbiditySensor
         from utils.config import TURB_V_MAX
 
         adc = ADS1115()
-        adc.read_voltage = MagicMock(return_value=0.3)
+        adc.read_voltage = MagicMock(return_value=TURB_V_MAX + 0.1)
         sensor = TurbiditySensor(adc)
         sensor.set_clear_water_voltage(TURB_V_MAX)  # equal → range is zero
         assert sensor.read() is None
+
+    def test_turbidity_disconnected_probe_returns_none(self, mock_hardware):
+        """
+        A disconnected/dry probe rails the input below TURB_V_MAX (toward 0 V).
+        The reading must be rejected (None) rather than fabricated as 3000 NTU,
+        which would otherwise drive relay automation indefinitely.
+        """
+        from sensors.ads1115 import ADS1115
+        from sensors.turbidity import TurbiditySensor
+        from utils.config import TURB_V_MAX
+
+        adc = ADS1115()
+        sensor = TurbiditySensor(adc)
+        for v in (0.0, 0.1, TURB_V_MAX - 0.01):
+            adc.read_voltage = MagicMock(return_value=v)
+            assert sensor.read() is None
+        # Nothing invalid should have entered the median window.
+        assert sensor._window == []
+
+    def test_turbidity_at_max_rail_still_valid(self, mock_hardware):
+        """A genuine full-scale reading sits exactly at TURB_V_MAX -> ~3000 NTU."""
+        from sensors.ads1115 import ADS1115
+        from sensors.turbidity import TurbiditySensor
+        from utils.config import TURB_V_MAX
+
+        adc = ADS1115()
+        adc.read_voltage = MagicMock(return_value=TURB_V_MAX)
+        sensor = TurbiditySensor(adc)
+        ntu = sensor.read()
+        assert ntu is not None
+        assert abs(ntu - 3000.0) < 10.0
 
     def test_turbidity_adc_failure_returns_none(self, mock_hardware):
         from sensors.ads1115 import ADS1115

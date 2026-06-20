@@ -34,12 +34,30 @@ class TurbiditySensor:
         Read turbidity in NTU.
 
         Returns:
-            Turbidity in NTU (0-3000) or None on read failure
+            Turbidity in NTU (0-3000), or None if the reading is invalid
+            (ADC failure, bad calibration, or an out-of-range/disconnected
+            probe railed below the maximum-turbidity voltage).
         """
         try:
             voltage = self._adc.read_voltage(ADC_CH_TURBIDITY)
         except Exception as e:
             logger.error("Turbidity ADC read failed: %s", e)
+            return None
+
+        # Reject signals railed below the maximum-turbidity voltage. The sensor's
+        # valid band is [TURB_V_MAX, v_clear]; a voltage below TURB_V_MAX is out
+        # of measurement range, and in practice means the probe is disconnected
+        # or dry (the input floats toward 0 V). Without this guard the linear map
+        # would clamp such a signal to a fabricated 3000 NTU, which can then drive
+        # relay automation indefinitely. Report "no reading" instead of a fake max.
+        # (Equality with TURB_V_MAX is a genuine full-scale reading and is kept.)
+        if voltage < TURB_V_MAX:
+            logger.warning(
+                "Turbidity voltage %.3f V below max-scale rail (%.3f V); "
+                "probe out of range or disconnected — reporting no reading",
+                voltage,
+                TURB_V_MAX,
+            )
             return None
 
         # Linear mapping: v_clear -> 0 NTU, v_max -> NTU_MAX

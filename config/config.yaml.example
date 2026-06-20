@@ -68,7 +68,10 @@ service_window:
 #   duration_s:  auto-shutoff seconds (0 = stay until another rule clears)
 #
 # Safety policies (schedule, cooldown, max on-time) are configured
-# separately in config/policies.yaml.
+# separately in config/policies.yaml. NOTE: relay automation is gated OFF by
+# default via `manual.override: true` in policies.yaml — these rules stay inert
+# until you set it to false. Enable only after wiring/assigning relays and
+# confirming the sensors that drive them are seated and reading in range.
 #
 # Default relay assignments:
 #   Relay 1 — Acid dosing pump
