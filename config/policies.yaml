@@ -30,13 +30,27 @@ schedule:
   end: "21:00"
 
 # --- Manual override ---
-# Set to true to suspend all automatic rules (e.g. during maintenance).
+# When true, the rules engine evaluates nothing and never actuates a relay;
+# all relays are forced OFF at startup. This is the safe default so a freshly
+# provisioned, monitoring-only unit never drives a pump, valve, or aerator.
+#
+# Leave this true until you have (1) wired and assigned the relay channels below
+# for YOUR installation and (2) confirmed every sensor that drives a rule is
+# seated and reading in range. A disconnected/dry probe pins its reading at a
+# rail (e.g. turbidity at full scale, TDS near 0) and, with automation enabled,
+# will hold a relay on until it hits the per-hour on-time cap, then re-engage at
+# the top of the next hour — an audible relay "click" every hour on the hour.
+# Set to false to enable automation once the install is verified.
 manual:
-  override: false
+  override: true
 
 # ---------------------------------------------------------------
-# Automation Rules
+# Automation Rules  (EXAMPLES — inert until manual.override is set to false)
 # ---------------------------------------------------------------
+# These thresholds and relay assignments are illustrative defaults. They do
+# nothing while manual.override is true (the shipped default). Review and adapt
+# them to your installation before enabling automation.
+#
 # Relay assignments (customise for your installation):
 #   Relay 1 — Acid dosing pump (lower pH)
 #   Relay 2 — Base / alkalinity dosing pump (raise pH)
