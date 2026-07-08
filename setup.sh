@@ -10,10 +10,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # non-interactive environment on a system without a "pi" user.
 INSTALL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 
-echo "=== BlueSignal WQM-1 Setup ==="
+# OTA-managed layout: every install lands in /opt/bluesignal/releases/<version>/
+# and /opt/bluesignal/current is a symlink to the active release. The systemd
+# units run from current/src, so the OTA agent can swap releases atomically by
+# flipping the symlink.
+FW_VERSION="$(cat "$SCRIPT_DIR/VERSION")"
+RELEASE_DIR="$INSTALL_DIR/releases/$FW_VERSION"
+CURRENT_LINK="$INSTALL_DIR/current"
+
+echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 
 # --- System packages ---
-echo "[1/7] Installing system packages..."
+echo "[1/9] Installing system packages..."
 sudo apt-get update -qq
 
 # Detect libgpiod version: libgpiod3 on Trixie (13+), libgpiod2 on Bookworm.
@@ -35,11 +43,11 @@ echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
 sudo modprobe i2c-dev 2>/dev/null || true
 
 # --- Python dependencies ---
-echo "[2/7] Installing Python packages..."
+echo "[2/9] Installing Python packages..."
 sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements.txt"
 
 # --- /boot/config.txt overlays ---
-echo "[3/7] Configuring /boot/config.txt..."
+echo "[3/9] Configuring /boot/config.txt..."
 CONFIG="/boot/config.txt"
 [ -f "/boot/firmware/config.txt" ] && CONFIG="/boot/firmware/config.txt"
 sudo cp "$CONFIG" "${CONFIG}.bak.$(date +%s)" 2>/dev/null || true
@@ -89,18 +97,35 @@ if [ -f "$CMDLINE" ]; then
 fi
 sudo systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
 
-# --- Create directories ---
-echo "[4/7] Creating directories..."
-sudo mkdir -p "$INSTALL_DIR"/{src,config,scripts}
+# --- Migrate legacy flat layout (pre-OTA) to releases/ + current symlink ---
+echo "[4/9] Preparing install layout..."
+if [ -d "$INSTALL_DIR/src" ] && [ ! -d "$INSTALL_DIR/releases" ]; then
+    echo "  Legacy flat install detected — migrating to $INSTALL_DIR/releases/"
+    LEGACY_DIR="$INSTALL_DIR/releases/legacy-1.1.0"
+    sudo mkdir -p "$LEGACY_DIR"
+    for item in src config scripts requirements.txt VERSION; do
+        if [ -e "$INSTALL_DIR/$item" ]; then
+            sudo mv "$INSTALL_DIR/$item" "$LEGACY_DIR/"
+        fi
+    done
+    # Point current at the legacy tree so there is never a moment without a
+    # resolvable install (the new release flips it below).
+    sudo ln -s "$LEGACY_DIR" "$INSTALL_DIR/current.tmp"
+    sudo mv -T "$INSTALL_DIR/current.tmp" "$CURRENT_LINK"
+    echo "  Migrated old tree to $LEGACY_DIR"
+fi
+
+sudo mkdir -p "$RELEASE_DIR"/{config,scripts}
 sudo mkdir -p /var/lib/bluesignal
 sudo mkdir -p /var/log/bluesignal
 sudo mkdir -p /etc/bluesignal
 
 # --- Install firmware ---
-echo "[5/7] Installing firmware..."
-sudo cp -r "$SCRIPT_DIR"/src/* "$INSTALL_DIR/src/"
-sudo cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
-sudo cp "$SCRIPT_DIR/VERSION" "$INSTALL_DIR/"
+echo "[5/9] Installing firmware to $RELEASE_DIR..."
+sudo cp -r "$SCRIPT_DIR/src" "$RELEASE_DIR/"
+sudo cp "$SCRIPT_DIR/requirements.txt" "$RELEASE_DIR/"
+sudo cp "$SCRIPT_DIR/VERSION" "$RELEASE_DIR/"
+sudo cp "$SCRIPT_DIR/setup.sh" "$RELEASE_DIR/"
 
 # Install example config if none exists
 if [ ! -f /etc/bluesignal/config.yaml ]; then
@@ -108,31 +133,50 @@ if [ ! -f /etc/bluesignal/config.yaml ]; then
     echo "  Installed default config to /etc/bluesignal/config.yaml"
 fi
 
-# Install policies and diagnostics
-sudo cp "$SCRIPT_DIR/config/policies.yaml" "$INSTALL_DIR/config/"
-sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$INSTALL_DIR/scripts/"
-sudo chmod +x "$INSTALL_DIR/scripts/diagnostics.sh"
+# Install policies, diagnostics, and the OTA verification public key
+sudo cp "$SCRIPT_DIR/config/policies.yaml" "$RELEASE_DIR/config/"
+if [ -f "$SCRIPT_DIR/config/ota_public_key.pem" ]; then
+    sudo cp "$SCRIPT_DIR/config/ota_public_key.pem" "$RELEASE_DIR/config/"
+else
+    echo "  WARNING: config/ota_public_key.pem not found — OTA updates will fail"
+    echo "           verification until a public key is installed (see docs/ota-runbook.md)."
+fi
+sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$RELEASE_DIR/scripts/"
+sudo chmod +x "$RELEASE_DIR/scripts/diagnostics.sh"
+
+# Flip the current symlink atomically (symlink + rename, never a dead window).
+sudo ln -s "$RELEASE_DIR" "$INSTALL_DIR/current.tmp"
+sudo mv -T "$INSTALL_DIR/current.tmp" "$CURRENT_LINK"
+echo "  current -> $RELEASE_DIR"
 
 sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal
 
 # --- systemd services ---
-echo "[6/8] Installing systemd services..."
-# Substitute the actual install user into the service files at install time.
-# The source files in the repo keep the documented default of User=pi.
-sudo sed "s/^User=pi$/User=$INSTALL_USER/" "$SCRIPT_DIR/systemd/bluesignal-wqm.service" \
+echo "[6/9] Installing systemd services..."
+# Substitute the actual install user into the service files at install time,
+# and rewrite the packaged /opt/bluesignal/src paths to the OTA-managed
+# /opt/bluesignal/current/src (the repo unit files keep the documented
+# defaults; the rewrite happens only here).
+sudo sed -e "s/^User=pi$/User=$INSTALL_USER/" \
+         -e "s|/opt/bluesignal/src|/opt/bluesignal/current/src|g" \
+    "$SCRIPT_DIR/systemd/bluesignal-wqm.service" \
     | sudo tee /etc/systemd/system/bluesignal-wqm.service > /dev/null
-sudo sed "s/^User=pi$/User=$INSTALL_USER/" "$SCRIPT_DIR/systemd/bluesignal-service-window.service" \
+sudo sed -e "s/^User=pi$/User=$INSTALL_USER/" \
+         -e "s|/opt/bluesignal/src|/opt/bluesignal/current/src|g" \
+    "$SCRIPT_DIR/systemd/bluesignal-service-window.service" \
     | sudo tee /etc/systemd/system/bluesignal-service-window.service > /dev/null
+# OTA agent runs as root (symlink flip + systemctl restart) — install verbatim.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-ota.service" /etc/systemd/system/
 if [ -f "$SCRIPT_DIR/systemd/bluesignal-provision.service" ]; then
     sudo cp "$SCRIPT_DIR/systemd/bluesignal-provision.service" /etc/systemd/system/
 fi
 sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
+sudo systemctl enable bluesignal-ota.service
 
 # --- Service window + provisioning ---
-echo "[7/8] Installing service window and provisioning tools..."
-sudo mkdir -p "$INSTALL_DIR/scripts"
+echo "[7/9] Installing service window and provisioning tools..."
 
 # /var/run is tmpfs and clears on reboot, so install a tmpfiles.d entry
 # that recreates /var/run/bluesignal owned by the install user on every boot.
@@ -141,18 +185,24 @@ d /var/run/bluesignal 0755 $INSTALL_USER $INSTALL_USER -
 EOF
 sudo mkdir -p /var/run/bluesignal
 if [ -f "$SCRIPT_DIR/scripts/provision.py" ]; then
-    sudo cp "$SCRIPT_DIR/scripts/provision.py" "$INSTALL_DIR/scripts/"
+    sudo cp "$SCRIPT_DIR/scripts/provision.py" "$RELEASE_DIR/scripts/"
 fi
 if [ -f "$SCRIPT_DIR/scripts/first-boot-check.sh" ]; then
-    sudo cp "$SCRIPT_DIR/scripts/first-boot-check.sh" "$INSTALL_DIR/scripts/"
-    sudo chmod +x "$INSTALL_DIR/scripts/first-boot-check.sh"
+    sudo cp "$SCRIPT_DIR/scripts/first-boot-check.sh" "$RELEASE_DIR/scripts/"
+    sudo chmod +x "$RELEASE_DIR/scripts/first-boot-check.sh"
 fi
-sudo chown -R "$INSTALL_USER:$INSTALL_USER" /var/run/bluesignal
+sudo chown -R "$INSTALL_USER:$INSTALL_USER" /var/run/bluesignal "$RELEASE_DIR"
 
 # GPS UART (/dev/serial0) requires dialout group membership.
 sudo usermod -aG dialout "$INSTALL_USER"
 
-echo "[8/8] Setup complete!"
+# --- Restart services onto the new release ---
+echo "[8/9] Restarting services..."
+sudo systemctl restart bluesignal-wqm.service bluesignal-service-window.service 2>/dev/null \
+    || echo "  Services not running yet — start them after configuration (step 6 below)."
+sudo systemctl restart bluesignal-ota.service 2>/dev/null || true
+
+echo "[9/9] Setup complete!"
 echo ""
 echo "Note: $INSTALL_USER was added to the 'dialout' group for GPS UART access."
 echo "      A reboot (or re-login) is required for the group change to take effect."
@@ -160,9 +210,9 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit config:      sudo nano /etc/bluesignal/config.yaml"
 echo "  2. Set LoRaWAN key:  app_key field (from TTN/Chirpstack)"
-echo "  3. Review policies:  sudo nano /opt/bluesignal/config/policies.yaml"
+echo "  3. Review policies:  sudo nano /opt/bluesignal/current/config/policies.yaml"
 echo "  4. Reboot:           sudo reboot"
-echo "  5. Run diagnostics:  sudo bash /opt/bluesignal/scripts/diagnostics.sh"
+echo "  5. Run diagnostics:  sudo bash /opt/bluesignal/current/scripts/diagnostics.sh"
 echo "  6. Start service:    sudo systemctl start bluesignal-wqm"
 echo "  7. View logs:        journalctl -u bluesignal-wqm -f"
 echo ""
@@ -171,5 +221,10 @@ echo "  Web UI:              http://$(hostname).local:8080"
 echo "  Default PIN:         1234 (change in /etc/bluesignal/config.yaml)"
 echo ""
 echo "Provisioning:"
-echo "  CLI wizard:          sudo python3 /opt/bluesignal/scripts/provision.py"
+echo "  CLI wizard:          sudo python3 /opt/bluesignal/current/scripts/provision.py"
 echo "  Web wizard:          http://$(hostname).local:8080/provision"
+echo ""
+echo "OTA updates:"
+echo "  Layout:              releases in $INSTALL_DIR/releases/, active = $CURRENT_LINK"
+echo "  Agent logs:          journalctl -u bluesignal-ota -f"
+echo "  Runbook:             docs/ota-runbook.md"

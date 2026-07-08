@@ -13,10 +13,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so annotated tag messages are available for the
+          # manifest "notes" field.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # The VERSION file is the single source of truth; a tag that disagrees
+      # with it (or with pyproject.toml) must never produce an artifact.
+      - name: Verify tag == VERSION == pyproject
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION="$(cat VERSION)"
+          PYPROJECT_VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          echo "tag=$TAG_VERSION VERSION=$FILE_VERSION pyproject=$PYPROJECT_VERSION"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ] || [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::Version mismatch: tag=$TAG_VERSION VERSION=$FILE_VERSION pyproject=$PYPROJECT_VERSION"
+            exit 1
+          fi
 
       - name: Package hardware BOM
         run: zip -r hardware-bom.zip hardware/bom/
@@ -29,20 +46,101 @@ jobs:
             echo "No fab outputs found — skipping."
           fi
 
-      - name: Package firmware
+      - name: Package firmware (legacy zip)
         run: |
           VERSION=$(cat VERSION)
           zip -r "firmware-v${VERSION}.zip" \
             src/ config/ scripts/ systemd/ requirements.txt VERSION setup.sh \
             -x "src/__pycache__/*" "src/**/__pycache__/*"
 
+      # OTA bundle layout: repo files at the TOP LEVEL of the tarball (no
+      # wrapping directory) — the device agent extracts straight into
+      # /opt/bluesignal/releases/<version>/, so `src/`, `VERSION`, etc. must
+      # sit at the archive root. Keep this in sync with the round-trip job in
+      # ci.yml and with setup.sh's per-release install layout.
+      - name: Build OTA firmware bundle
+        run: |
+          VERSION=$(cat VERSION)
+          tar --exclude='__pycache__' --exclude='*.pyc' \
+            -czf "wqm1-firmware-${VERSION}.tar.gz" \
+            src config scripts systemd requirements.txt VERSION setup.sh
+          ls -l "wqm1-firmware-${VERSION}.tar.gz"
+
+      - name: Generate and sign OTA manifest
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          if [ -z "$OTA_SIGNING_KEY" ]; then
+            echo "::error::OTA_SIGNING_KEY secret is not set — cannot sign the OTA manifest. Generate a keypair with scripts/ota-generate-keys.py and add the private PEM as a repo secret."
+            exit 1
+          fi
+          pip install pycryptodome
+          TAG_NOTES="$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")"
+          export TAG_NOTES
+          python3 <<'PYEOF'
+          import base64, hashlib, json, os
+          from datetime import UTC, datetime
+          from pathlib import Path
+
+          from Crypto.PublicKey import ECC
+          from Crypto.Signature import eddsa
+
+          version = Path("VERSION").read_text().strip()
+          bundle = Path(f"wqm1-firmware-{version}.tar.gz")
+          data = bundle.read_bytes()
+
+          min_from = "2.0.0"
+          if Path("MIN_FROM_VERSION").exists():
+              min_from = Path("MIN_FROM_VERSION").read_text().strip()
+
+          manifest = {
+              "product": "wqm1",
+              "version": version,
+              "channel": "stable",
+              "sha256": hashlib.sha256(data).hexdigest(),
+              "sizeBytes": len(data),
+              "minFromVersion": min_from,
+              "keyId": "ota-2026",
+              "createdAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "requiresDeps": False,
+              "notes": os.environ.get("TAG_NOTES", "").strip(),
+          }
+          # These exact bytes are what gets signed, stored server-side, and
+          # re-verified on-device — never re-serialize after this point.
+          manifest_str = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+          Path("manifest.json").write_text(manifest_str)
+
+          key = ECC.import_key(os.environ["OTA_SIGNING_KEY"])
+          signature = eddsa.new(key, "rfc8032").sign(manifest_str.encode("utf-8"))
+          sig_b64 = base64.b64encode(signature).decode("ascii")
+          Path("manifest.sig").write_text(sig_b64 + "\n")
+
+          # Round-trip self-check with the derived public key.
+          pub = ECC.import_key(key.public_key().export_key(format="PEM"))
+          eddsa.new(pub, "rfc8032").verify(manifest_str.encode("utf-8"), signature)
+          print("manifest signed and self-verified OK")
+
+          payload = {
+              "manifest": manifest_str,
+              "signature": sig_b64,
+              "storagePath": f"firmware/wqm1/{version}/wqm1-firmware-{version}.tar.gz",
+          }
+          Path("publish-payload.json").write_text(json.dumps(payload, indent=2))
+          PYEOF
+
       - name: Generate checksums
-        run: sha256sum *.zip > checksums.sha256
+        run: sha256sum *.zip *.tar.gz manifest.json > checksums.sha256
 
       - name: Generate SBOM
         run: |
           pip install cyclonedx-bom
           cyclonedx-py requirements -i requirements.txt -o sbom.json --format json || true
+
+      - name: Upload publish payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-publish-payload
+          path: publish-payload.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -52,5 +150,29 @@ jobs:
             hardware-bom.zip
             hardware-fab.zip
             firmware-v*.zip
+            wqm1-firmware-*.tar.gz
+            manifest.json
+            manifest.sig
             checksums.sha256
             sbom.json
+
+      - name: OTA publish instructions (job summary)
+        run: |
+          VERSION=$(cat VERSION)
+          {
+            echo "## OTA release ${VERSION} — manual publish steps"
+            echo ""
+            echo "The bundle is signed but NOT yet published to the fleet. To publish:"
+            echo ""
+            echo "1. Upload the tarball to the private Storage bucket:"
+            echo '   ```'
+            echo "   gsutil cp wqm1-firmware-${VERSION}.tar.gz gs://<bucket>/firmware/wqm1/${VERSION}/wqm1-firmware-${VERSION}.tar.gz"
+            echo '   ```'
+            echo "2. Register the release (admin token) using the ota-publish-payload artifact:"
+            echo '   ```'
+            echo "   curl -X POST \"\$API_BASE/v2/firmware/releases\" -H \"Authorization: Bearer \$ADMIN_ID_TOKEN\" -H 'Content-Type: application/json' -d @publish-payload.json"
+            echo '   ```'
+            echo "3. Target a device: POST /v2/devices/:id/firmware/target {\"version\": \"${VERSION}\"}"
+            echo ""
+            echo "Full procedure, rollback, and key rotation: docs/ota-runbook.md"
+          } >> "$GITHUB_STEP_SUMMARY"
