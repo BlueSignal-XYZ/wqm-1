@@ -328,3 +328,22 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
   BOM reference
 - See `config/policies.yaml` for relay automation rules (dosing pumps,
   aerators, valves)
+
+## First-boot setup (v2.2+)
+
+New units are commissioned entirely from a phone browser — no SSH, no config
+files. Power the unit, join its network, and open `http://<unit-ip>:8080`.
+Until setup is completed the unit shows only the guided wizard:
+
+1. **PIN** — replace the factory PIN (1234 is refused).
+2. **Identity** — device ID + DevEUI with a QR code for your install records.
+3. **Cloud** — paste the device API key from cloud.bluesignal.xyz.
+4. **Sensor check** — live traffic-light cards; each problem card says what to
+   check in plain language.
+5. **Go / no-go** — a final checklist covering sensors, cloud, LoRa, GPS and
+   storage. Finish restarts monitoring with everything applied.
+
+The dashboard home page keeps the same traffic-light language afterwards:
+green = fine, amber = worth a look, red = needs attention — every card carries
+the likely cause and the next step. Status LEDs mirror the same states
+(steady heartbeat = ok, error blinks = the dashboard has details).

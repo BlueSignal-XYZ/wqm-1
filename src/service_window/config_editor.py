@@ -24,6 +24,16 @@ def update_config(path: str, updates: dict[str, Any]) -> None:
     _atomic_yaml_write(path, current)
 
 
+def update_config_section(path: str, section: str, updates: dict[str, Any]) -> None:
+    """Merge updates into a nested mapping (e.g. service_window) atomically."""
+    current = read_config(path)
+    existing = current.get(section)
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(updates)
+    current[section] = merged
+    _atomic_yaml_write(path, current)
+
+
 def _atomic_yaml_write(path: str, data: dict[str, Any]) -> None:
     """Write YAML file atomically (write to .tmp then rename)."""
     p = Path(path)

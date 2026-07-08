@@ -34,6 +34,11 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["CAL_PATH"] = sw_config.get("cal_path", "/etc/bluesignal/calibration.yaml")
     app.config["CMD_SOCK"] = sw_config.get("cmd_sock", "/var/run/bluesignal/cmd.sock")
 
+    # Direct Flask-config overrides (UPPERCASE keys — used by tests and any
+    # embedder that wants to bypass the YAML-derived lowercase mapping above).
+    if config:
+        app.config.update({k: v for k, v in config.items() if k.isupper()})
+
     # Register blueprints
     app.register_blueprint(auth_bp)
 
@@ -43,6 +48,8 @@ def create_app(config: dict | None = None) -> Flask:
     from service_window.routes.provision import provision_bp
     from service_window.routes.relays import relays_bp
     from service_window.routes.sensors import sensors_bp
+    from service_window.routes.settings import settings_bp
+    from service_window.routes.setup import needs_setup, setup_bp
     from service_window.routes.status import status_bp
 
     app.register_blueprint(status_bp)
@@ -52,6 +59,22 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(relays_bp)
     app.register_blueprint(diagnostics_bp)
     app.register_blueprint(provision_bp)
+    app.register_blueprint(setup_bp)
+    app.register_blueprint(settings_bp)
+
+    # Until the factory PIN is replaced and the setup wizard finished, every
+    # page funnels into /setup — a unit can't be left half-commissioned by
+    # accident, and the shipped PIN can't quietly stay in service.
+    @app.before_request
+    def _force_setup():  # type: ignore[reportUnusedFunction]
+        from flask import redirect, request
+
+        allowed = ("/setup", "/login", "/logout", "/static", "/provision/qr.svg")
+        if request.path.startswith(allowed):
+            return None
+        if needs_setup(app.config):
+            return redirect("/setup/")
+        return None
 
     return app
 

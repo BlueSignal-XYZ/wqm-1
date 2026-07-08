@@ -234,3 +234,67 @@ pre.output {
     main { padding: 1rem; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
+
+/* ── Health traffic lights + setup wizard (v2.2) ───────────────────────── */
+.health-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: baseline;
+}
+.health-ok { background: #2e9e5b; }
+.health-attention { background: #e0a300; }
+.health-fault { background: #d64545; }
+.health-disabled { background: #9aa3ad; }
+
+.health-card { border-left: 4px solid transparent; }
+.health-border-ok { border-left-color: #2e9e5b; }
+.health-border-attention { border-left-color: #e0a300; }
+.health-border-fault { border-left-color: #d64545; }
+.health-border-disabled { border-left-color: #9aa3ad; }
+
+.health-message { margin-top: 6px; font-size: 0.95rem; line-height: 1.45; }
+.health-detail { margin-top: 8px; font-size: 0.9rem; }
+.health-detail summary { cursor: pointer; color: #2c6cb0; }
+.health-detail p { margin: 6px 0 0; }
+
+.steps-bar {
+    display: flex;
+    gap: 8px;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 20px;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+}
+.steps-bar li {
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #eef1f4;
+    color: #5b6570;
+}
+.steps-bar li.current { background: #2c6cb0; color: #fff; font-weight: 600; }
+.steps-bar li.done { background: #d9ecdf; color: #2e6e47; }
+
+.lead { font-size: 1.05rem; line-height: 1.5; max-width: 44rem; }
+.setup-list { line-height: 1.9; }
+.setup-form { max-width: 26rem; display: flex; flex-direction: column; gap: 14px; }
+.setup-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.setup-form input[type="text"],
+.setup-form input[type="password"],
+.setup-form input[type="number"] {
+    padding: 10px;
+    font-size: 1rem;
+    border: 1px solid #c6ccd2;
+    border-radius: 6px;
+    font-weight: 400;
+}
+.setup-form small { font-weight: 400; color: #5b6570; }
+.btn { display: inline-block; padding: 10px 18px; border-radius: 6px; border: 0;
+       font-size: 1rem; cursor: pointer; text-decoration: none; }
+.btn-primary { background: #2c6cb0; color: #fff; }
+.btn-secondary { background: #eef1f4; color: #2b333b; }
+.qr-wrap { margin: 16px 0; }
+.mono { font-family: ui-monospace, monospace; }

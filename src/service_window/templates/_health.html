@@ -1,0 +1,27 @@
+{# Shared traffic-light health card macros — driven by diagnostics.explain
+   dicts: {status, message, likelyCause, action}. #}
+{% macro health_dot(status) -%}
+<span class="health-dot health-{{ status }}" aria-label="{{ status }}"></span>
+{%- endmacro %}
+
+{% macro health_card(name, card) -%}
+<div class="card health-card health-border-{{ card.status }}">
+    <div class="card-label">{{ health_dot(card.status) }} {{ name }}</div>
+    <div class="health-message">{{ card.message }}</div>
+    {% if card.status not in ('ok', 'disabled') %}
+    <details class="health-detail">
+        <summary>What should I do?</summary>
+        {% if card.likelyCause %}<p><b>Likely cause:</b> {{ card.likelyCause }}</p>{% endif %}
+        {% if card.action %}<p><b>Try this:</b> {{ card.action }}</p>{% endif %}
+    </details>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro steps_bar(steps, step) -%}
+<ol class="steps-bar">
+    {% for s in steps %}
+    <li class="{{ 'current' if s == step else ('done' if steps.index(s) < steps.index(step) else '') }}">{{ s|capitalize }}</li>
+    {% endfor %}
+</ol>
+{%- endmacro %}

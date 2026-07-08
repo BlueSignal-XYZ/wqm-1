@@ -16,6 +16,7 @@
         <a href="{{ url_for('relays.index') }}" {% if '/relays' in request.path %}class="active"{% endif %}>Relays</a>
         <a href="{{ url_for('diagnostics.index') }}" {% if '/diagnostics' in request.path %}class="active"{% endif %}>Diagnostics</a>
         <a href="{{ url_for('provision.index') }}" {% if '/provision' in request.path %}class="active"{% endif %}>Provisioning</a>
+        <a href="{{ url_for('settings.index') }}" {% if '/settings' in request.path %}class="active"{% endif %}>Settings</a>
         <div class="nav-spacer"></div>
         <a href="{{ url_for('auth.logout') }}" class="logout">Logout</a>
     </nav>

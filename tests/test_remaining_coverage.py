@@ -145,6 +145,8 @@ class TestDiagnosticsEdgeCases:
         conn.close()
         app = create_app(
             {
+                # Non-factory PIN: units on 1234 are force-redirected to /setup.
+                "PIN": "9999",
                 "db_path": db_path,
                 "pin": "1234",
                 "config_path": str(tmp_path / "config.yaml"),
@@ -241,6 +243,8 @@ class TestProvisionEdgeCases:
         conn.close()
         app = create_app(
             {
+                # Non-factory PIN: units on 1234 are force-redirected to /setup.
+                "PIN": "9999",
                 "db_path": db_path,
                 "pin": "1234",
                 "config_path": str(tmp_path / "config.yaml"),
@@ -359,6 +363,8 @@ class TestRelaySuccessFlash:
         conn.close()
         app = create_app(
             {
+                # Non-factory PIN: units on 1234 are force-redirected to /setup.
+                "PIN": "9999",
                 "db_path": db_path,
                 "pin": "1234",
                 "config_path": str(tmp_path / "config.yaml"),

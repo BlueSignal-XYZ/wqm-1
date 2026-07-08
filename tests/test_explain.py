@@ -10,7 +10,7 @@ from diagnostics.explain import (
     explain,
 )
 
-VALID_STATUSES = {"ok", "attention", "fault"}
+VALID_STATUSES = {"ok", "attention", "fault", "disabled"}
 EXPECTED_KEYS = {"status", "message", "likelyCause", "action"}
 
 
@@ -43,7 +43,8 @@ class TestGolden:
         attention/fault condition."""
         for subject, state in all_states():
             info = explain(subject, state)
-            if info["status"] != "ok":
+            # ok needs no action; disabled means "not installed" — also no action.
+            if info["status"] not in ("ok", "disabled"):
                 assert info["action"], (subject, state)
 
 

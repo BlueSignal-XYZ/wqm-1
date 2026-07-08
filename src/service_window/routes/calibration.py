@@ -1,5 +1,7 @@
 """Sensor calibration wizard."""
 
+from datetime import UTC, datetime
+
 from flask import Blueprint, Flask, current_app, flash, redirect, render_template, request, url_for
 from flask.typing import ResponseReturnValue
 
@@ -13,11 +15,37 @@ def _load_cal(app: Flask) -> dict:
     return read_config(app.config["CAL_PATH"])
 
 
+def _stamp_calibrated(sensor: str) -> None:
+    """Record when the sensor was calibrated — feeds the calibration-age
+    reminders on the dashboard and in heartbeats (drift detection resets its
+    baseline from these timestamps)."""
+    cal = read_config(current_app.config["CAL_PATH"])
+    stamps = cal.get("calibrated_at")
+    stamps = dict(stamps) if isinstance(stamps, dict) else {}
+    stamps[sensor] = datetime.now(UTC).isoformat()
+    update_config(current_app.config["CAL_PATH"], {"calibrated_at": stamps})
+
+
+def _calibration_ages(cal: dict) -> dict[str, int | None]:
+    """Whole days since each sensor's last calibration (None = unknown)."""
+    stamps = cal.get("calibrated_at")
+    stamps = stamps if isinstance(stamps, dict) else {}
+    ages: dict[str, int | None] = {}
+    now = datetime.now(UTC)
+    for sensor in ("ph", "tds", "turbidity", "orp"):
+        raw = stamps.get(sensor)
+        try:
+            ages[sensor] = int((now - datetime.fromisoformat(str(raw))).days) if raw else None
+        except (ValueError, TypeError):
+            ages[sensor] = None
+    return ages
+
+
 @calibration_bp.route("/")
 @login_required
 def index() -> str:
     cal = _load_cal(current_app)
-    return render_template("calibration/index.html", cal=cal)
+    return render_template("calibration/index.html", cal=cal, ages=_calibration_ages(cal))
 
 
 @calibration_bp.route("/ph", methods=["GET", "POST"])
@@ -40,6 +68,7 @@ def ph() -> ResponseReturnValue:
                     "ph_slope": round(slope, 4),
                 },
             )
+            _stamp_calibrated("ph")
             flash(f"pH calibrated: slope={slope:.4f}", "success")
         except (ValueError, KeyError):
             flash("Invalid input.", "error")
@@ -60,6 +89,7 @@ def tds() -> ResponseReturnValue:
                 return redirect(url_for("calibration.tds"))
             k = known_ppm / measured_v
             update_config(current_app.config["CAL_PATH"], {"tds_k": round(k, 2)})
+            _stamp_calibrated("tds")
             flash(f"TDS calibrated: k={k:.2f}", "success")
         except (ValueError, KeyError):
             flash("Invalid input.", "error")
@@ -80,6 +110,7 @@ def turbidity() -> ResponseReturnValue:
                     "turbidity_v_clear": round(clear_v, 3),
                 },
             )
+            _stamp_calibrated("turbidity")
             flash(f"Turbidity calibrated: clear water V={clear_v:.3f}", "success")
         except (ValueError, KeyError):
             flash("Invalid input.", "error")
@@ -102,6 +133,7 @@ def orp() -> ResponseReturnValue:
                     "orp_offset_mv": round(offset, 1),
                 },
             )
+            _stamp_calibrated("orp")
             flash(f"ORP calibrated: offset={offset:.1f} mV", "success")
         except (ValueError, KeyError):
             flash("Invalid input.", "error")

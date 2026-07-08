@@ -27,9 +27,10 @@ SENSOR_STATES: tuple[str, ...] = (
     "recovered",
     "calibration_overdue",
     "calibration_drift",
+    "disabled",
 )
 
-SYSTEM_STATES: tuple[str, ...] = ("ok", "degraded", "down")
+SYSTEM_STATES: tuple[str, ...] = ("ok", "degraded", "down", "stale")
 
 # Display names installers actually use.
 _DISPLAY_NAMES: dict[str, str] = {
@@ -55,6 +56,8 @@ _STATE_STATUS: dict[str, str] = {
     "stuck": "fault",
     "stuck_no_data": "fault",
     "down": "fault",
+    "stale": "fault",
+    "disabled": "disabled",
 }
 
 # Generic sensor copy per state: (message, likelyCause, action).
@@ -88,6 +91,11 @@ _SENSOR_COPY: dict[str, tuple[str, str | None, str | None]] = {
         "{name} readings have drifted from their post-calibration baseline.",
         "Probe aging or fouling can slowly shift readings over weeks.",
         "Recalibrate the {name} soon.",
+    ),
+    "disabled": (
+        "{name} is not installed on this unit.",
+        None,
+        None,
     ),
 }
 
@@ -158,6 +166,11 @@ _SYSTEM_COPY: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
         "Local storage is failing.",
         "The memory card may be worn out or corrupted.",
         "Contact support to arrange a memory card replacement.",
+    ),
+    ("storage", "stale"): (
+        "New readings are not being recorded.",
+        "The monitoring service may be stopped or restarting.",
+        "Wait a minute and refresh. If it persists, power-cycle the unit.",
     ),
 }
 
