@@ -1,60 +1,163 @@
-"""Tests for src/utils/config.py — settings loader and atomic JSON writer."""
+"""Tests for src/utils/config.py — layered ConfigManager, schema validation,
+remote overlay, atomic JSON writer."""
 
 import json
 
 import pytest
 
 
-class TestLoadSettings:
-    def test_returns_defaults_when_file_missing(self, tmp_path, mock_hardware):
-        from utils.config import _load_settings
+def make_manager(tmp_path, base_yaml=None, remote_yaml=None):
+    from utils.config import ConfigManager
 
-        s = _load_settings(str(tmp_path / "nonexistent.yaml"))
-        # defaults
-        assert s.sensor_read_s == 60
-        assert s.lora_tx_s == 300
-        assert s.orp_enabled is False
+    base = tmp_path / "config.yaml"
+    if base_yaml is not None:
+        base.write_text(base_yaml)
+    remote = tmp_path / "config.d" / "remote.yaml"
+    if remote_yaml is not None:
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        remote.write_text(remote_yaml)
+    return ConfigManager(str(base), str(remote))
+
+
+class TestConfigManagerBase:
+    def test_returns_defaults_when_file_missing(self, tmp_path, mock_hardware):
+        mgr = make_manager(tmp_path)
+        assert mgr.settings.sensor_read_s == 60
+        assert mgr.settings.lora_tx_s == 300
+        assert mgr.settings.orp_enabled is False
+        assert mgr.remote_version is None
 
     def test_overrides_from_yaml(self, tmp_path, mock_hardware):
-        from utils.config import _load_settings
-
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
+        mgr = make_manager(
+            tmp_path,
             "sensor_read_s: 120\n"
             "lora_tx_s: 600\n"
             "orp_enabled: true\n"
-            "app_key: ffffffffffffffffffffffffffffffff\n"
+            "app_key: ffffffffffffffffffffffffffffffff\n",
         )
-        s = _load_settings(str(yaml_path))
+        s = mgr.settings
         assert s.sensor_read_s == 120
         assert s.lora_tx_s == 600
         assert s.orp_enabled is True
 
     def test_ignores_unknown_keys(self, tmp_path, mock_hardware):
-        from utils.config import _load_settings
+        mgr = make_manager(tmp_path, "sensor_read_s: 42\nnot_a_real_field: hello\n")
+        assert mgr.settings.sensor_read_s == 42
+        assert not hasattr(mgr.settings, "not_a_real_field")
 
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text("sensor_read_s: 42\nnot_a_real_field: hello\n")
-        s = _load_settings(str(yaml_path))
-        assert s.sensor_read_s == 42
-        assert not hasattr(s, "not_a_real_field")
+    def test_rejects_out_of_range_local_values(self, tmp_path, mock_hardware):
+        # A locally mis-edited value must not take the loop to a broken cadence.
+        mgr = make_manager(tmp_path, "sensor_read_s: 1\n")
+        assert mgr.settings.sensor_read_s == 60
+
+    def test_rejects_wrong_types(self, tmp_path, mock_hardware):
+        mgr = make_manager(tmp_path, "sensor_read_s: 'sixty'\norp_enabled: 3\n")
+        assert mgr.settings.sensor_read_s == 60
+        assert mgr.settings.orp_enabled is False
 
     def test_handles_invalid_yaml(self, tmp_path, mock_hardware):
-        from utils.config import _load_settings
-
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text("not: valid: yaml: here: [\n")
-        # should return defaults rather than raise
-        s = _load_settings(str(yaml_path))
-        assert s.sensor_read_s == 60
+        mgr = make_manager(tmp_path, "not: valid: yaml: here: [\n")
+        assert mgr.settings.sensor_read_s == 60
 
     def test_handles_empty_yaml(self, tmp_path, mock_hardware):
-        from utils.config import _load_settings
+        mgr = make_manager(tmp_path, "")
+        assert mgr.settings.sensor_read_s == 60
 
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text("")
-        s = _load_settings(str(yaml_path))
-        assert s.sensor_read_s == 60
+    def test_rules_pass_through(self, tmp_path, mock_hardware):
+        mgr = make_manager(
+            tmp_path,
+            "rules:\n  - sensor: ph\n    below: 6.5\n    relay: 1\n    action: 'on'\n",
+        )
+        assert mgr.settings.rules == [{"sensor": "ph", "below": 6.5, "relay": 1, "action": "on"}]
+
+
+class TestRemoteOverlay:
+    def test_remote_overlay_wins_over_base(self, tmp_path, mock_hardware):
+        mgr = make_manager(
+            tmp_path,
+            base_yaml="sensor_read_s: 120\n",
+            remote_yaml="version: 3\nvalues:\n  sensor_read_s: 30\n",
+        )
+        assert mgr.settings.sensor_read_s == 30
+        assert mgr.remote_version == 3
+
+    def test_remote_overlay_cannot_set_credentials(self, tmp_path, mock_hardware):
+        mgr = make_manager(
+            tmp_path,
+            remote_yaml=(
+                "version: 1\nvalues:\n"
+                "  api_key: attacker\n"
+                "  cloud_ingest_url: https://evil.example/ingest\n"
+                "  sensor_read_s: 30\n"
+            ),
+        )
+        # Valid keys apply, credential/URL keys are refused.
+        assert mgr.settings.sensor_read_s == 30
+        assert mgr.settings.api_key == ""
+        assert "evil.example" not in mgr.settings.cloud_ingest_url
+
+    def test_apply_remote_config_persists_and_reloads(self, tmp_path, mock_hardware):
+        mgr = make_manager(tmp_path)
+        ok, errors = mgr.apply_remote_config(5, {"heartbeat_s": 1200, "batch_size": 25})
+        assert ok and not errors
+        assert mgr.settings.heartbeat_s == 1200
+        assert mgr.settings.batch_size == 25
+        assert mgr.remote_version == 5
+        # Survives a full reload (i.e. a reboot).
+        mgr.reload()
+        assert mgr.settings.heartbeat_s == 1200
+        assert mgr.remote_version == 5
+
+    def test_apply_remote_config_rejects_bad_values_keeping_last_known_good(
+        self, tmp_path, mock_hardware
+    ):
+        mgr = make_manager(tmp_path)
+        assert mgr.apply_remote_config(1, {"sensor_read_s": 45})[0]
+        ok, errors = mgr.apply_remote_config(2, {"sensor_read_s": 999999})
+        assert not ok
+        assert errors
+        # Previous overlay still in force — bad config can't brick the device.
+        assert mgr.settings.sensor_read_s == 45
+        assert mgr.remote_version == 1
+
+    def test_apply_remote_config_rejects_unknown_keys(self, tmp_path, mock_hardware):
+        mgr = make_manager(tmp_path)
+        ok, errors = mgr.apply_remote_config(1, {"rm_rf_slash": True})
+        assert not ok
+        assert any("unknown key" in e for e in errors)
+
+
+class TestValidateValues:
+    def test_hot_and_restart_classification(self, mock_hardware):
+        from utils.config import hot_keys, restart_keys
+
+        values = {"sensor_read_s": 30, "gps_baud": 38400, "heartbeat_s": 900}
+        assert hot_keys(values) == {"sensor_read_s", "heartbeat_s"}
+        assert restart_keys(values) == {"gps_baud"}
+
+    def test_bool_not_accepted_as_int(self, mock_hardware):
+        from utils.config import validate_values
+
+        accepted, errors = validate_values({"sensor_read_s": True})
+        assert not accepted
+        assert errors
+
+    def test_int_widens_to_float(self, mock_hardware):
+        from utils.config import validate_values
+
+        accepted, errors = validate_values({"fan_on_temp_c": 65})
+        assert accepted == {"fan_on_temp_c": 65.0}
+        assert not errors
+
+
+class TestFirmwareVersion:
+    def test_version_read_from_version_file(self, mock_hardware):
+        from pathlib import Path
+
+        from utils.config import FIRMWARE_VERSION
+
+        on_disk = (Path(__file__).parent.parent / "VERSION").read_text().strip()
+        assert on_disk == FIRMWARE_VERSION
 
 
 class TestAtomicJsonWrite:
@@ -117,7 +220,7 @@ class TestGetSettingsCaching:
         import utils.config as cfg
 
         # Reset cache
-        monkeypatch.setattr(cfg, "_settings", None)
+        monkeypatch.setattr(cfg, "_manager", None)
 
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text("sensor_read_s: 999\n")

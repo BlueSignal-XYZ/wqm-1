@@ -192,9 +192,7 @@ class TestAckCommand:
     def test_ack_skips_empty_command_id(self, monkeypatch):
         c = _make_client()
         calls = []
-        monkeypatch.setattr(
-            "urllib.request.urlopen", lambda req, timeout=None: calls.append(1)
-        )
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: calls.append(1))
         c.ack_command("", "done")
         assert len(calls) == 0
 

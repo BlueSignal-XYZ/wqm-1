@@ -98,12 +98,17 @@ class TestDatabaseWALBuffering:
         reader.close()
         db.close()
 
-    def test_close_sets_conn_none(self, tmp_path, mock_hardware):
+    def test_close_rejects_further_use(self, tmp_path, mock_hardware):
+        import sqlite3
+
+        import pytest
+
         from storage.database import WQM1Database
 
         db = WQM1Database(path=str(tmp_path / "test.db"))
         db.close()
-        assert db._conn is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            db.get_latest()
 
     def test_get_latest_empty_db(self, tmp_path, mock_hardware):
         from storage.database import WQM1Database

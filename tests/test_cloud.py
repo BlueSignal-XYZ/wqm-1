@@ -206,11 +206,11 @@ class TestCommands:
 
 class TestCloudConfig:
     def test_settings_load_cloud_fields(self, tmp_path):
-        from utils.config import _load_settings
+        from utils.config import ConfigManager
 
         path = tmp_path / "config.yaml"
         path.write_text("cloud_enabled: true\napi_key: abc123\ncommand_poll_s: 7\n")
-        s = _load_settings(str(path))
+        s = ConfigManager(str(path), str(tmp_path / "config.d" / "remote.yaml")).settings
         assert s.cloud_enabled is True
         assert s.api_key == "abc123"
         assert s.command_poll_s == 7
