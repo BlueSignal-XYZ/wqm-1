@@ -134,7 +134,7 @@ def sensors() -> str:
         readings = db.get_readings(limit=30)
     except Exception:
         readings = []
-    cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")))
+    cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
     ready = all(c["status"] in ("ok", "disabled") for c in cards.values())
     return render_template(
         "setup/sensors.html",
@@ -158,7 +158,7 @@ def done() -> ResponseReturnValue:
     except Exception:
         readings, count, session = [], 0, None
 
-    s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")))
+    s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
     sys_cards = system_cards(readings, config, session, count)
     checklist = {**s_cards, **sys_cards}
     overall = worst_status(checklist)

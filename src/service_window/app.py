@@ -47,6 +47,7 @@ def create_app(config: dict | None = None) -> Flask:
     from service_window.routes.lora import lora_bp
     from service_window.routes.provision import provision_bp
     from service_window.routes.relays import relays_bp
+    from service_window.routes.rs485 import rs485_bp
     from service_window.routes.sensors import sensors_bp
     from service_window.routes.settings import settings_bp
     from service_window.routes.setup import needs_setup, setup_bp
@@ -55,6 +56,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(status_bp)
     app.register_blueprint(sensors_bp)
     app.register_blueprint(calibration_bp)
+    app.register_blueprint(rs485_bp)
     app.register_blueprint(lora_bp)
     app.register_blueprint(relays_bp)
     app.register_blueprint(diagnostics_bp)

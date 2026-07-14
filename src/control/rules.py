@@ -79,6 +79,9 @@ class RulesEngine:
         "turbidity": "turbidity_ntu",
         "temperature": "temp_c",
         "orp": "orp_mv",
+        "chlorine": "chlorine_mgl",
+        "conductivity": "conductivity_uscm",
+        "salinity": "salinity_ppt",
     }
 
     def set_suspended_sensors(self, sensors: set[str]) -> None:

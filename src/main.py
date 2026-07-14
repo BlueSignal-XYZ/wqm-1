@@ -133,6 +133,9 @@ class WQM1App:
         self._tds: Any = None
         self._turbidity: Any = None
         self._orp: Any = None
+        self._modbus_bus: Any = None
+        self._chlorine: Any = None
+        self._multi: Any = None
         self._db: Any = None
         self._cloud: Any = None
         self._health: Any = None
@@ -170,17 +173,43 @@ class WQM1App:
         self._ph = PHSensor(self._adc)
         self._tds = TDSSensor(self._adc)
         self._turbidity = TurbiditySensor(self._adc)
-        if self._settings.orp_enabled:
+        if self._settings.orp_enabled and not self._settings.rs485_orp_enabled:
             self._orp = ORPSensor(self._adc)
-        else:
+        elif not self._settings.rs485_orp_enabled:
             logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
+
+        # --- RS485 (Modbus) sensors — Honde probes on the shared USB bus.
+        # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
+        # supersede their analog equivalents inside SamplingWorker.step().
+        s = self._settings
+        if s.rs485_chlorine_enabled or s.rs485_orp_enabled or s.rs485_multi_enabled:
+            from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
+            from sensors.modbus import ModbusBus
+
+            self._modbus_bus = ModbusBus(s.rs485_port)
+            if s.rs485_chlorine_enabled:
+                self._chlorine = HondeChlorineSensor(self._modbus_bus, s.rs485_chlorine_addr)
+            if s.rs485_orp_enabled:
+                self._orp = HondeOrpSensor(self._modbus_bus, s.rs485_orp_addr)
+                logger.info("Digital ORP (RS485 addr %d) supersedes analog", s.rs485_orp_addr)
+            if s.rs485_multi_enabled:
+                self._multi = HondeMultiSensor(self._modbus_bus, s.rs485_multi_addr)
+            logger.info(
+                "RS485 bus on %s (chlorine=%s orp=%s multi=%s)",
+                s.rs485_port,
+                s.rs485_chlorine_enabled,
+                s.rs485_orp_enabled,
+                s.rs485_multi_enabled,
+            )
 
         # Apply calibration to sensors
         cal = self._cal.data
         self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
         self._tds.set_calibration(cal.tds_k)
         self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
-        if self._orp:
+        if self._orp and hasattr(self._orp, "set_offset"):
+            # Analog ORP only — the digital probe is factory-calibrated and
+            # holds its own state.
             self._orp.set_offset(cal.orp_offset_mv, 0.0)
 
         # --- Database ---
@@ -291,6 +320,8 @@ class WQM1App:
                     "tds": self._tds,
                     "turbidity": self._turbidity,
                     "orp": self._orp,
+                    "chlorine": self._chlorine,
+                    "multi485": self._multi,
                 },
                 db=self._db,
                 rules=self._rules,
@@ -588,6 +619,7 @@ class WQM1App:
             (self._relays, "all_off"),
             (self._radio, "close"),
             (self._gps, "close"),
+            (self._modbus_bus, "close"),
             (self._adc, "close"),
             (self._db, "close"),
             (self._leds, "cleanup"),

@@ -29,7 +29,7 @@ def index() -> str:
     latest = readings[0] if readings else None
     config = read_config(current_app.config["CONFIG_PATH"])
 
-    s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")))
+    s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
     sys_cards = system_cards(readings, config, session, count)
     overall = worst_status({**s_cards, **sys_cards})
 

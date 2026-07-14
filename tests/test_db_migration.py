@@ -177,3 +177,48 @@ class TestCrossThreadAccess:
         assert not errors
         assert db.get_count() == 80
         db.close()
+
+
+class TestV3Migration:
+    """v3 adds the RS485 sensor columns (chlorine, conductivity, salinity)."""
+
+    def test_v1_db_gains_rs485_columns(self, tmp_path, mock_hardware):
+        from storage.database import SCHEMA_VERSION, WQM1Database
+
+        path = tmp_path / "v1.db"
+        make_v1_db(path)
+        db = WQM1Database(path=str(path))
+        rid = db.insert_reading(
+            {"ph": 7.0, "chlorine_mgl": 0.35, "conductivity_uscm": 480.0, "salinity_ppt": 0.24}
+        )
+        row = next(r for r in db.get_unsynced(limit=10) if r["id"] == rid)
+        assert row["chlorine_mgl"] == 0.35
+        assert row["conductivity_uscm"] == 480.0
+        assert row["salinity_ppt"] == 0.24
+        db.close()
+
+        conn = sqlite3.connect(str(path))
+        stamp = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        assert int(stamp[0]) == SCHEMA_VERSION
+        conn.close()
+
+    def test_pre_rs485_rows_read_null_for_new_columns(self, tmp_path, mock_hardware):
+        from storage.database import WQM1Database
+
+        path = tmp_path / "v1.db"
+        make_v1_db(path)
+        db = WQM1Database(path=str(path))
+        rows = db.get_unsynced(limit=10)
+        assert all(r["chlorine_mgl"] is None for r in rows)
+        db.close()
+
+    def test_v3_migration_is_idempotent(self, tmp_path, mock_hardware):
+        from storage.database import WQM1Database
+
+        path = tmp_path / "v1.db"
+        make_v1_db(path)
+        for _ in range(3):
+            WQM1Database(path=str(path)).close()
+        db = WQM1Database(path=str(path))
+        assert db.insert_reading({"chlorine_mgl": 0.1}) > 0
+        db.close()

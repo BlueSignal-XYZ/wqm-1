@@ -16,25 +16,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from diagnostics.explain import explain
-
-# Reading column -> canonical sensor name (matches sensing.monitor).
-_FIELD_TO_SENSOR = {
-    "ph": "ph",
-    "tds_ppm": "tds",
-    "turbidity_ntu": "turbidity",
-    "temp_c": "temperature",
-    "orp_mv": "orp",
-}
-
-# Quick flatline screen over the recent window (mirrors sensing.monitor's
-# noise floors; this is a coarse read-side check, not the live detector).
-_NOISE_FLOOR = {
-    "ph": 0.02,
-    "tds": 5.0,
-    "turbidity": 1.0,
-    "temperature": 0.05,
-    "orp": 2.0,
-}
+from sensing.monitor import FIELD_TO_SENSOR as _FIELD_TO_SENSOR
+from sensing.monitor import NOISE_FLOOR as _NOISE_FLOOR
 
 # A reading is "recent" within 3x the default sample cadence.
 _RECENT_S = 3 * 60
@@ -49,15 +32,29 @@ def _parse_ts(ts: str | None) -> datetime | None:
         return None
 
 
+def _sensor_enabled(sensor: str, orp_enabled: bool, config: dict[str, Any] | None) -> bool:
+    """Which sensors this unit actually has, from its config."""
+    cfg = config or {}
+    if sensor == "orp":
+        return orp_enabled or bool(cfg.get("rs485_orp_enabled"))
+    if sensor == "chlorine":
+        return bool(cfg.get("rs485_chlorine_enabled"))
+    if sensor in ("conductivity", "salinity"):
+        return bool(cfg.get("rs485_multi_enabled"))
+    return True  # core analog probes are always fitted
+
+
 def sensor_cards(
     readings: list[dict[str, Any]],
     orp_enabled: bool = False,
     now: datetime | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     Per-sensor plain-language card from the recent readings (newest first).
     A sensor is: fault when its recent values are all missing or flat;
-    ok otherwise. Disabled sensors (ORP without hardware) say so.
+    ok otherwise. Disabled sensors (ORP without hardware, RS485 probes not
+    fitted) say so.
     """
     now = now or datetime.now(UTC)
     cards: dict[str, dict[str, Any]] = {}
@@ -66,7 +63,7 @@ def sensor_cards(
     stale = latest_at is None or (now - latest_at).total_seconds() > _RECENT_S
 
     for field, sensor in _FIELD_TO_SENSOR.items():
-        if sensor == "orp" and not orp_enabled:
+        if not _sensor_enabled(sensor, orp_enabled, config):
             cards[sensor] = explain(sensor, "disabled")
             continue
         if not readings or stale:
@@ -117,6 +114,26 @@ def system_cards(
         age_s = (now - _parse_ts(latest["timestamp"])).total_seconds()
         fresh = age_s <= _RECENT_S
     cards["storage"] = explain("storage", "ok" if (reading_count and fresh) else "stale")
+
+    # RS485 bus: only shown when Modbus probes are enabled. A dead bus is one
+    # fault (adapter / 12V), so it gets its own card instead of three probe
+    # faults. Judged from whether the enabled probes' fields carry data.
+    rs485_fields = []
+    if config.get("rs485_chlorine_enabled"):
+        rs485_fields.append("chlorine_mgl")
+    if config.get("rs485_orp_enabled"):
+        rs485_fields.append("orp_mv")
+    if config.get("rs485_multi_enabled"):
+        rs485_fields.append("conductivity_uscm")
+    if rs485_fields:
+        recent = readings[:10]
+        answering = [f for f in rs485_fields if any(r.get(f) is not None for r in recent)]
+        if not recent or not answering:
+            cards["rs485"] = explain("rs485", "down")
+        elif len(answering) < len(rs485_fields):
+            cards["rs485"] = explain("rs485", "degraded")
+        else:
+            cards["rs485"] = explain("rs485", "ok")
 
     return cards
 

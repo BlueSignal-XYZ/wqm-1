@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}RS485 Sensors{% endblock %}
+{% block content %}
+<h1>RS485 sensors</h1>
+<p class="lead">Digital probes on the Modbus bus (via the USB adapter on <code>{{ port }}</code>).
+Data comes in over USB — each probe also needs the <strong>12V feed</strong>.</p>
+
+<div class="grid">
+    {% for key, probe in probes.items() %}
+    <div class="card">
+        <h3>{{ probe.label }}</h3>
+        {% if probe.enabled %}
+        <p>Enabled — bus address <strong>{{ probe.address }}</strong></p>
+        {% if key == 'chlorine' %}
+        <a class="btn btn-secondary" href="{{ url_for('rs485.calibrate_chlorine') }}">Calibrate</a>
+        {% elif key == 'multi' %}
+        <a class="btn btn-secondary" href="{{ url_for('rs485.calibrate_multi') }}">Calibrate</a>
+        {% endif %}
+        {% else %}
+        <p>Not set up</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<h2>Bus check</h2>
+{% if scanned %}
+    {% if scan_error %}
+    <p class="lead">Could not open the bus: {{ scan_error }}. Is the USB adapter plugged in?</p>
+    {% elif scan_result %}
+    <p class="lead">Probes answered at address{{ 'es' if scan_result|length > 1 }}:
+        {% for a in scan_result %}<strong>{{ a }}</strong>{{ ", " if not loop.last }}{% endfor %}</p>
+    {% else %}
+    <p class="lead">Nothing answered. Check the bus wiring (yellow = A, green = B) and the 12V feed.</p>
+    {% endif %}
+{% endif %}
+<form method="post" action="{{ url_for('rs485.scan') }}">
+    <button type="submit" class="btn btn-primary">Scan the bus</button>
+</form>
+
+<h2>Add a probe</h2>
+<p>Every new probe ships at address 1, so probes are added <strong>one at a time</strong>.</p>
+<a class="btn btn-primary" href="{{ url_for('rs485.assign') }}">Add a new probe</a>
+
+<p><a href="{{ url_for('status.index') }}">&larr; Back to status</a></p>
+{% endblock %}

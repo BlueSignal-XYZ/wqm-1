@@ -14,10 +14,21 @@ diagnostics path.
 from typing import Any
 
 # Sensors (short canonical names used in events, heartbeats, and monitoring).
-SENSOR_SUBJECTS: tuple[str, ...] = ("ph", "tds", "turbidity", "temperature", "orp")
+SENSOR_SUBJECTS: tuple[str, ...] = (
+    "ph",
+    "tds",
+    "turbidity",
+    "temperature",
+    "orp",
+    "chlorine",
+    "conductivity",
+    "salinity",
+)
 
 # System subsystems (used by the Service Window system-health view).
-SYSTEM_SUBJECTS: tuple[str, ...] = ("cloud", "lora", "gps", "storage")
+# "rs485" is the shared Modbus bus the Honde probes hang off — a dead bus is
+# ONE fault (adapter/power), not three separate probe faults.
+SYSTEM_SUBJECTS: tuple[str, ...] = ("cloud", "lora", "gps", "storage", "rs485")
 
 SENSOR_STATES: tuple[str, ...] = (
     "ok",
@@ -39,10 +50,14 @@ _DISPLAY_NAMES: dict[str, str] = {
     "turbidity": "turbidity sensor",
     "temperature": "temperature probe",
     "orp": "ORP probe",
+    "chlorine": "chlorine sensor",
+    "conductivity": "conductivity (EC) probe",
+    "salinity": "salinity probe",
     "cloud": "cloud connection",
     "lora": "LoRa radio",
     "gps": "GPS receiver",
     "storage": "local storage",
+    "rs485": "RS485 sensor bus",
 }
 
 # state -> status. Anything unknown maps to "attention" (safe middle ground).
@@ -119,6 +134,30 @@ _SENSOR_OVERRIDES: dict[tuple[str, str], dict[str, str]] = {
         "likelyCause": "The sensor may be disconnected or failing.",
         "action": "Check the temperature sensor cable connection at the enclosure.",
     },
+    ("chlorine", "stuck"): {
+        "likelyCause": "The chlorine sensor needs flowing water — the flow cell "
+        "may be blocked, or the sample pump may be off.",
+        "action": "Check that water is moving through the flow cell "
+        "(15–30 L/h), then rinse the probe tip.",
+    },
+    ("chlorine", "stuck_no_data"): {
+        "likelyCause": "The RS485 cable, USB adapter, or the probe's 12V "
+        "supply may be disconnected.",
+        "action": "Check the sensor cable, the USB adapter, and the 12V feed.",
+    },
+    ("chlorine", "calibration_overdue"): {
+        "likelyCause": "Chlorine probes need recalibration every 1–2 months.",
+        "action": "Run the guided chlorine calibration with a lab-verified sample.",
+    },
+    ("conductivity", "stuck"): {
+        "likelyCause": "The probe may be out of the water, disconnected, or scaled over.",
+        "action": "Make sure the probe is submerged, then clean the electrode.",
+    },
+    ("salinity", "stuck"): {
+        "likelyCause": "Salinity comes from the same probe as conductivity — "
+        "it may be out of the water or fouled.",
+        "action": "Make sure the probe is submerged, then clean the electrode.",
+    },
 }
 
 # System copy: (subject, state) -> (message, likelyCause, action).
@@ -171,6 +210,19 @@ _SYSTEM_COPY: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
         "New readings are not being recorded.",
         "The monitoring service may be stopped or restarting.",
         "Wait a minute and refresh. If it persists, power-cycle the unit.",
+    ),
+    ("rs485", "ok"): ("RS485 sensors are responding normally.", None, None),
+    ("rs485", "degraded"): (
+        "Some RS485 sensor reads are failing.",
+        "A loose bus connection, or one probe dragging the bus down.",
+        "Check the green/yellow bus wiring at each probe. If one probe was "
+        "just added, make sure its address doesn't clash with another.",
+    ),
+    ("rs485", "down"): (
+        "No RS485 sensors are responding.",
+        "The USB adapter may be unplugged, or the probes' 12V supply is off.",
+        "Reseat the USB adapter and check the 12V feed to the sensors, "
+        "then power-cycle the unit if they stay silent.",
     ),
 }
 

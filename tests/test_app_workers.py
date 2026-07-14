@@ -149,6 +149,84 @@ class TestSamplingWorker:
         assert worker.interval_s() == 60.0
 
 
+class FakeMultiSensor:
+    """RS485 5-in-1 stand-in: read_all() returns all five params at once."""
+
+    def __init__(self, values=None, fail=False):
+        self.values = values
+        self.fail = fail
+
+    def read_all(self):
+        if self.fail:
+            raise OSError("modbus timeout")
+        return self.values
+
+
+class TestSamplingWorkerRs485:
+    make = TestSamplingWorker.make
+
+    MULTI = {
+        "ph": 6.86,
+        "conductivity_uscm": 100.0,
+        "temp_c": 25.0,
+        "tds_ppm": 50.0,
+        "salinity_ppt": 0.5,
+    }
+
+    def sensors(self, **overrides):
+        base = {
+            "temperature": FakeSensor(21.5),
+            "ph": FakeSensor(7.2),
+            "tds": FakeSensor(340.0),
+            "turbidity": FakeSensor(3.0),
+            "orp": None,
+            "chlorine": None,
+            "multi485": None,
+        }
+        base.update(overrides)
+        return base
+
+    def test_multi485_supersedes_analog_ph_tds_temp(self, mock_hardware):
+        worker, db, _ = self.make(sensors=self.sensors(multi485=FakeMultiSensor(self.MULTI)))
+        worker.step()
+        r = db.readings[0]
+        assert r["ph"] == 6.86  # digital, not the analog 7.2
+        assert r["tds_ppm"] == 50.0  # digital, not the analog 340.0
+        assert r["temp_c"] == 25.0  # digital, not the DS18B20 21.5
+        assert r["conductivity_uscm"] == 100.0
+        assert r["salinity_ppt"] == 0.5
+        assert r["turbidity_ntu"] == 3.0  # analog params unaffected
+
+    def test_multi485_failure_falls_back_to_analog(self, mock_hardware):
+        worker, db, state = self.make(sensors=self.sensors(multi485=FakeMultiSensor(fail=True)))
+        worker.step()
+        r = db.readings[0]
+        assert r["ph"] == 7.2  # analog fallback
+        assert r["tds_ppm"] == 340.0
+        assert r["temp_c"] == 21.5
+        assert r["conductivity_uscm"] is None
+        assert r["salinity_ppt"] is None
+        assert state.error_counts()["sensor"] == 1
+
+    def test_multi485_returning_none_falls_back(self, mock_hardware):
+        worker, db, _ = self.make(sensors=self.sensors(multi485=FakeMultiSensor(values=None)))
+        worker.step()
+        assert db.readings[0]["ph"] == 7.2
+
+    def test_chlorine_sensor_stored(self, mock_hardware):
+        worker, db, _ = self.make(sensors=self.sensors(chlorine=FakeSensor(0.35)))
+        worker.step()
+        assert db.readings[0]["chlorine_mgl"] == 0.35
+
+    def test_no_rs485_sensors_stores_nulls(self, mock_hardware):
+        worker, db, _ = self.make(sensors=self.sensors())
+        worker.step()
+        r = db.readings[0]
+        assert r["chlorine_mgl"] is None
+        assert r["conductivity_uscm"] is None
+        assert r["salinity_ppt"] is None
+
+
 class TestCommandWorker:
     def make(self, poll_result, state=None):
         from app.state import StateStore

@@ -41,6 +41,9 @@ _SENSOR_MAP = {
     "turbidity_ntu": "turbidity",
     "orp_mv": "orp",
     "temp_c": "temperature",
+    "chlorine_mgl": "chlorine",
+    "conductivity_uscm": "conductivity",
+    "salinity_ppt": "salinity",
     "battery_v": "battery_voltage",
 }
 

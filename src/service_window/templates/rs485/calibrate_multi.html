@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}5-in-1 Calibration{% endblock %}
+{% block content %}
+<h1>5-in-1 probe calibration</h1>
+
+<div class="card">
+    <h3>Live reading (address {{ address }})</h3>
+    {% if live %}
+    <p>pH <strong>{{ live.ph }}</strong>
+       &middot; EC <strong>{{ live.conductivity_uscm|int }}</strong> µS/cm
+       &middot; {{ live.temp_c }} &deg;C
+       &middot; TDS {{ live.tds_ppm|int }} ppm
+       &middot; salinity {{ live.salinity_ppt }} ppt</p>
+    {% else %}
+    <p>The probe is not answering — check the bus wiring and 12V feed.</p>
+    {% endif %}
+    <a class="btn btn-secondary" href="{{ url_for('rs485.calibrate_multi') }}">Refresh</a>
+</div>
+
+<div class="wizard">
+    <h2>pH — buffer points</h2>
+    <p>Rinse the probe with distilled water, place it in a buffer, wait for the
+       live pH to stop moving (refresh above), then save that point. Use as many
+       of the three buffers as you have, in any order.</p>
+    {% for buffer in ["4.01", "6.86", "9.18"] %}
+    <form method="post" style="display:inline-block; margin-right:8px;">
+        <input type="hidden" name="action" value="ph_point">
+        <input type="hidden" name="buffer" value="{{ buffer }}">
+        <button type="submit" class="btn btn-primary">Save pH {{ buffer }}</button>
+    </form>
+    {% endfor %}
+
+    <h2>EC — slope</h2>
+    <p>With the probe in a solution of known conductivity, set the slope so the
+       live EC matches (measured &times; slope = actual; factory is 1.000).</p>
+    <form method="post">
+        <input type="hidden" name="action" value="ec_slope">
+        <label>Slope:
+            <input type="number" name="slope" step="0.001" min="0.1" max="10" value="1.000" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Save EC slope</button>
+    </form>
+</div>
+
+<a href="{{ url_for('rs485.index') }}">&larr; Back</a>
+{% endblock %}

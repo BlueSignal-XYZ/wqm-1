@@ -138,16 +138,32 @@ class SamplingWorker(Worker):
         temp = self._sensors.get("temperature")
         temp_c = self._safe_read("Temperature", temp.read_temp_c) if temp else None
 
-        ph_s, tds_s, turb_s, orp_s = (
+        # RS485 5-in-1 probe first: one bus read yields pH/EC/temp/TDS/salinity,
+        # and its values supersede the analog equivalents (precedence decided
+        # at wiring time by which sensors main.py enables). A failed digital
+        # read falls back to the analog probes for this cycle rather than
+        # blanking the reading.
+        multi_s = self._sensors.get("multi485")
+        multi = (self._safe_read("5-in-1", multi_s.read_all) if multi_s else None) or {}
+        if multi.get("temp_c") is not None:
+            temp_c = multi["temp_c"]
+
+        ph_s, tds_s, turb_s, orp_s, chlorine_s = (
             self._sensors.get("ph"),
             self._sensors.get("tds"),
             self._sensors.get("turbidity"),
             self._sensors.get("orp"),
+            self._sensors.get("chlorine"),
         )
-        ph = self._safe_read("pH", lambda: ph_s.read(temp_c=temp_c)) if ph_s else None
-        tds = self._safe_read("TDS", lambda: tds_s.read(temp_c=temp_c)) if tds_s else None
+        ph = multi.get("ph")
+        if ph is None and ph_s:
+            ph = self._safe_read("pH", lambda: ph_s.read(temp_c=temp_c))
+        tds = multi.get("tds_ppm")
+        if tds is None and tds_s:
+            tds = self._safe_read("TDS", lambda: tds_s.read(temp_c=temp_c))
         turb = self._safe_read("Turbidity", turb_s.read) if turb_s else None
         orp = self._safe_read("ORP", orp_s.read) if orp_s else None
+        chlorine = self._safe_read("Chlorine", chlorine_s.read) if chlorine_s else None
 
         gps = self._state.gps()
         reading = {
@@ -157,6 +173,9 @@ class SamplingWorker(Worker):
             "turbidity_ntu": turb,
             "orp_mv": orp,
             "temp_c": temp_c,
+            "chlorine_mgl": chlorine,
+            "conductivity_uscm": multi.get("conductivity_uscm"),
+            "salinity_ppt": multi.get("salinity_ppt"),
             "lat": gps.lat,
             "lon": gps.lon,
             "alt_m": gps.alt_m,

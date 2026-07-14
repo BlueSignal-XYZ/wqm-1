@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Add RS485 Probe{% endblock %}
+{% block content %}
+<h1>Add a new probe</h1>
+
+<div class="wizard">
+    <p>1. Disconnect any <strong>other new</strong> probes — exactly one un-configured
+       probe on the bus (already-configured probes can stay connected).</p>
+    <p>2. Connect the new probe: yellow &rarr; A, green &rarr; B, red &rarr; 12V, black &rarr; ground.</p>
+    <p>3. Pick what it is and give it its own address, then save.</p>
+
+    <form method="post">
+        <label>Probe type:
+            <select name="probe_type" required>
+                {% for key, meta in probe_types.items() %}
+                <option value="{{ key }}">{{ meta.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Bus address (must be unique):
+            <input type="number" name="new_address" min="1" max="247" value="{{ suggested }}" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Find probe &amp; assign address</button>
+    </form>
+</div>
+
+<a href="{{ url_for('rs485.index') }}">&larr; Back</a>
+{% endblock %}

@@ -11,7 +11,8 @@
         <div class="brand">WQM-1</div>
         <a href="{{ url_for('status.index') }}" {% if request.path == '/' %}class="active"{% endif %}>Dashboard</a>
         <a href="{{ url_for('sensors.index') }}" {% if '/sensors' in request.path %}class="active"{% endif %}>Sensors</a>
-        <a href="{{ url_for('calibration.index') }}" {% if '/calibrate' in request.path %}class="active"{% endif %}>Calibration</a>
+        <a href="{{ url_for('calibration.index') }}" {% if '/calibrate' in request.path and '/rs485' not in request.path %}class="active"{% endif %}>Calibration</a>
+        <a href="{{ url_for('rs485.index') }}" {% if '/rs485' in request.path %}class="active"{% endif %}>RS485 Sensors</a>
         <a href="{{ url_for('lora.index') }}" {% if '/lora' in request.path %}class="active"{% endif %}>LoRaWAN</a>
         <a href="{{ url_for('relays.index') }}" {% if '/relays' in request.path %}class="active"{% endif %}>Relays</a>
         <a href="{{ url_for('diagnostics.index') }}" {% if '/diagnostics' in request.path %}class="active"{% endif %}>Diagnostics</a>

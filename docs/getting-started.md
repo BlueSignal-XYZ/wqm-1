@@ -347,3 +347,45 @@ The dashboard home page keeps the same traffic-light language afterwards:
 green = fine, amber = worth a look, red = needs attention — every card carries
 the likely cause and the next step. Status LEDs mirror the same states
 (steady heartbeat = ok, error blinks = the dashboard has details).
+
+## RS485 digital probes (v2.3+)
+
+The unit reads Honde Tech digital probes — residual chlorine, digital ORP,
+and the 5-in-1 (pH/EC/TDS/salinity/temperature) — over a shared RS485
+Modbus bus through the supplied RS485→USB adapter.
+
+### Wiring
+
+The USB adapter carries **data only**. Every probe also needs power from
+the unit's 12V rail:
+
+| Probe wire | Goes to |
+|---|---|
+| Red | +12V rail |
+| Black | Ground |
+| Yellow | RS485 A (adapter A terminal) |
+| Green / White | RS485 B (adapter B terminal) |
+
+All probes share the same two A/B bus wires (multi-drop). Never let the
+A/B lines touch the power wires — that permanently damages the probe's
+transceiver.
+
+### Addresses
+
+Every probe ships at Modbus address **1**, so probes must be added one at
+a time: connect the new probe, open **Service Window → RS485 Sensors →
+Add a new probe**, and the wizard discovers it and assigns the next free
+address before you connect the following one.
+
+### Calibration cadence
+
+| Probe | Method | Cadence |
+|---|---|---|
+| Residual chlorine | Guided zero/slope wizard, flow cell (15–30 L/h), lab-verified sample | Every 1–2 months |
+| 5-in-1 pH | Guided buffer wizard (4.01 / 6.86 / 9.18) | Quarterly, or on drift alert |
+| 5-in-1 EC | Slope against a known-conductivity solution | Quarterly, or on drift alert |
+| Digital ORP | Factory calibrated | Replace electrode per vendor guidance |
+
+Notes for the chlorine probe: activate a new probe in 3M KCL before first
+use, keep sample pH between 5 and 9, and install it in the flow cell —
+immersion installs read unstably and foul quickly.

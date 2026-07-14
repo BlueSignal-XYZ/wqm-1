@@ -28,7 +28,7 @@ from utils.config import get_settings
 
 logger = logging.getLogger("wqm1.db")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS readings (
     turbidity_ntu REAL,
     orp_mv REAL,
     temp_c REAL,
+    chlorine_mgl REAL,
+    conductivity_uscm REAL,
+    salinity_ppt REAL,
     lat REAL,
     lon REAL,
     alt_m REAL,
@@ -77,7 +80,8 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 _READING_COLS = (
-    "id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c, lat, lon, alt_m,"
+    "id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c,"
+    " chlorine_mgl, conductivity_uscm, salinity_ppt, lat, lon, alt_m,"
     " battery_v, relay_state"
 )
 
@@ -147,6 +151,21 @@ class WQM1Database:
                     "CREATE INDEX IF NOT EXISTS idx_readings_sync_state ON readings(sync_state)"
                 )
                 conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')"
+                )
+            logger.info("Database migrated to schema v2")
+            current = 2
+
+        if current < 3:
+            # v3 (RS485 sensor expansion): residual chlorine, conductivity
+            # and salinity columns. NULL for readings that predate the
+            # sensors — additive and rollback-safe.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+            with conn:
+                for column in ("chlorine_mgl", "conductivity_uscm", "salinity_ppt"):
+                    if column not in cols:
+                        conn.execute(f"ALTER TABLE readings ADD COLUMN {column} REAL")
+                conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
                 )
@@ -168,8 +187,9 @@ class WQM1Database:
             cur = conn.execute(
                 """INSERT INTO readings
                    (timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c,
+                    chlorine_mgl, conductivity_uscm, salinity_ppt,
                     lat, lon, alt_m, battery_v, relay_state, synced, sync_state)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
                 (
                     ts,
                     data.get("ph"),
@@ -177,6 +197,9 @@ class WQM1Database:
                     data.get("turbidity_ntu"),
                     data.get("orp_mv"),
                     data.get("temp_c"),
+                    data.get("chlorine_mgl"),
+                    data.get("conductivity_uscm"),
+                    data.get("salinity_ppt"),
                     data.get("lat"),
                     data.get("lon"),
                     data.get("alt_m"),

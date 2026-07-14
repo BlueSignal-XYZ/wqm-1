@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Chlorine Calibration{% endblock %}
+{% block content %}
+<h1>Chlorine calibration</h1>
+<p class="lead">Two points: a zero sample, then a sample with a lab-verified
+chlorine level. Keep a steady flow through the flow cell (15&ndash;30 L/h) the
+whole time. Only valid between pH 5 and 9.</p>
+
+<div class="card">
+    <h3>Live reading (address {{ address }})</h3>
+    <p>Chlorine: <strong>{{ "%.3f"|format(live.value_mgl) if live.value_mgl is not none else "no answer" }}</strong> mg/L
+       &middot; raw AD: <strong>{{ live.ad_counts if live.ad_counts is not none else "—" }}</strong></p>
+    <p>Refresh the page and confirm the AD value has stopped moving before saving a point.</p>
+    <a class="btn btn-secondary" href="{{ url_for('rs485.calibrate_chlorine') }}">Refresh</a>
+</div>
+
+<div class="wizard">
+    <h2>Step 1 — zero point</h2>
+    <p>Run chlorine-free water (no residual chlorine) through the flow cell for
+       10 minutes, wait for the AD value to stop moving, then:</p>
+    <form method="post">
+        <input type="hidden" name="action" value="zero">
+        <button type="submit" class="btn btn-primary">Save zero point</button>
+    </form>
+
+    <h2>Step 2 — high point</h2>
+    <p>Run the sample with a known chlorine level for 10 minutes, wait for a
+       stable AD value, enter the lab-verified level, then:</p>
+    <form method="post">
+        <input type="hidden" name="action" value="slope">
+        <label>Lab-verified chlorine (mg/L):
+            <input type="number" name="reference_mgl" step="0.01" min="0.01" max="20" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Save high point</button>
+    </form>
+    <p>Tip: the probe usually only needs the high point — run the zero step when
+       readings sit offset from the lab value even after a high-point calibration.</p>
+</div>
+
+<a href="{{ url_for('rs485.index') }}">&larr; Back</a>
+{% endblock %}

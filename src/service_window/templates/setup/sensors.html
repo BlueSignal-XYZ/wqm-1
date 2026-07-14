@@ -18,6 +18,9 @@ This page refreshes automatically as you fix things.</p>
     {{ health_card(name|capitalize, card) }}
     {% endfor %}
 </div>
+<p>Installing digital RS485 probes (chlorine, digital ORP, 5-in-1)?
+   <a href="{{ url_for('rs485.index') }}">Set them up here</a> — you can come back
+   to this check afterwards.</p>
 <a class="btn btn-primary" href="{{ url_for('setup.done') }}">Continue</a>
 {% endblock %}
 {% block scripts %}

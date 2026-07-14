@@ -33,6 +33,9 @@ FIELD_TO_SENSOR: dict[str, str] = {
     "turbidity_ntu": "turbidity",
     "temp_c": "temperature",
     "orp_mv": "orp",
+    "chlorine_mgl": "chlorine",
+    "conductivity_uscm": "conductivity",
+    "salinity_ppt": "salinity",
 }
 
 # Per-sensor noise floor: population stddev below this over a full flatline
@@ -43,6 +46,12 @@ NOISE_FLOOR: dict[str, float] = {
     "turbidity": 1.0,
     "temperature": 0.05,
     "orp": 2.0,
+    # RS485 digital probes quantize (EC to 1 µS, salinity to 0.01 ppt), so
+    # floors sit below one quantization step: only a truly frozen value —
+    # not step noise — reads as flat.
+    "chlorine": 0.005,
+    "conductivity": 0.5,
+    "salinity": 0.005,
 }
 
 # Spike events are rate-limited to one per sensor per this many seconds; a
@@ -62,6 +71,11 @@ DRIFT_THRESHOLDS: dict[str, tuple[str, float]] = {
     "tds": ("rel", 0.10),
     "turbidity": ("rel", 0.15),
     "orp": ("abs", 30.0),
+    # Chlorine baselines can sit near zero, so relative drift is meaningless
+    # — use an absolute band. EC/salinity mirror TDS (same electrode physics).
+    "chlorine": ("abs", 0.2),
+    "conductivity": ("rel", 0.10),
+    "salinity": ("rel", 0.10),
 }
 
 

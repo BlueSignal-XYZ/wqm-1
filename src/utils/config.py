@@ -180,6 +180,18 @@ class Settings:
     # Sensors
     orp_enabled: bool = False  # No ORP hardware on PCBA Fin_3; enable when connected
 
+    # RS485 (Modbus-RTU) sensors — Honde probes via the USB adapter.
+    # Data over USB; the probes take 12V from the unit's rail. Each probe
+    # ships at address 1: multi-drop requires re-addressing during setup
+    # (the wizard walks through it one probe at a time).
+    rs485_port: str = "/dev/ttyUSB0"
+    rs485_chlorine_enabled: bool = False
+    rs485_chlorine_addr: int = 1
+    rs485_orp_enabled: bool = False  # digital ORP supersedes analog orp_enabled
+    rs485_orp_addr: int = 2
+    rs485_multi_enabled: bool = False  # 5-in-1: its pH/TDS/temp supersede analog
+    rs485_multi_addr: int = 3
+
     # Smarter sensing (v2.1): adaptive sampling + sensor-health monitoring.
     adaptive_sampling_enabled: bool = False
     sensor_read_fast_s: int = 15
@@ -256,6 +268,13 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "db_max_rows": SettingSpec(int, hot=True, min=1000, max=10_000_000),
     # Sensors
     "orp_enabled": SettingSpec(bool, hot=False),
+    "rs485_port": SettingSpec(str, hot=False, max_length=64, remote=False),
+    "rs485_chlorine_enabled": SettingSpec(bool, hot=False),
+    "rs485_chlorine_addr": SettingSpec(int, hot=False, min=1, max=247),
+    "rs485_orp_enabled": SettingSpec(bool, hot=False),
+    "rs485_orp_addr": SettingSpec(int, hot=False, min=1, max=247),
+    "rs485_multi_enabled": SettingSpec(bool, hot=False),
+    "rs485_multi_addr": SettingSpec(int, hot=False, min=1, max=247),
     # Smarter sensing (hot — safe to tune live)
     "adaptive_sampling_enabled": SettingSpec(bool, hot=True),
     "sensor_read_fast_s": SettingSpec(int, hot=True, min=5, max=600),
