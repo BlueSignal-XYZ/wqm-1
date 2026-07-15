@@ -1,6 +1,8 @@
 #!/bin/bash
 # WQM-1 Firmware Setup Script
-# Run on a fresh Raspberry Pi Zero 2W with Raspberry Pi OS Lite
+# Reference host: Raspberry Pi Zero 2W with Raspberry Pi OS Lite.
+# Also runs digital-first on Debian hosts without direct header access
+# (Arduino UNO Q / VENTUNO Q) — see docs/platforms.md.
 set -euo pipefail
 
 INSTALL_DIR="/opt/bluesignal"
@@ -20,33 +22,56 @@ CURRENT_LINK="$INSTALL_DIR/current"
 
 echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 
+# --- Host board detection (mirrors src/platform_support/board.py) ---
+# Raspberry Pi hosts get the full direct-header stack (I2C/SPI/1-Wire/GPIO,
+# boot overlays, RPi Python libs). Anything else — Arduino UNO Q / VENTUNO Q,
+# generic Debian — runs digital-first: RS485-USB probes, USB GPS, Wi-Fi sync.
+BOARD_MODEL="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo unknown)"
+if echo "$BOARD_MODEL" | grep -qi "raspberry pi"; then
+    IS_RPI=1
+    echo "Host: $BOARD_MODEL (direct-header install)"
+else
+    IS_RPI=0
+    echo "Host: $BOARD_MODEL (digital-first install — analog/LoRa/relay skipped)"
+fi
+
 # --- System packages ---
 echo "[1/9] Installing system packages..."
 sudo apt-get update -qq
 
-# Detect libgpiod version: libgpiod3 on Trixie (13+), libgpiod2 on Bookworm.
-if apt-cache show libgpiod3 &>/dev/null; then
-    GPIOD_PKG="libgpiod3"
+if [ "$IS_RPI" = "1" ]; then
+    # Detect libgpiod version: libgpiod3 on Trixie (13+), libgpiod2 on Bookworm.
+    if apt-cache show libgpiod3 &>/dev/null; then
+        GPIOD_PKG="libgpiod3"
+    else
+        GPIOD_PKG="libgpiod2"
+    fi
+
+    sudo apt-get install -y -qq \
+        python3-pip python3-venv python3-dev \
+        i2c-tools python3-smbus \
+        swig liblgpio-dev \
+        "$GPIOD_PKG"
+
+    # Ensure the i2c-dev module loads on boot. On Trixie, i2c_bcm2835 auto-loads
+    # but i2c-dev does not, so /dev/i2c-1 never appears.
+    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
+    sudo modprobe i2c-dev 2>/dev/null || true
 else
-    GPIOD_PKG="libgpiod2"
+    sudo apt-get install -y -qq python3-pip python3-venv python3-dev
 fi
-
-sudo apt-get install -y -qq \
-    python3-pip python3-venv python3-dev \
-    i2c-tools python3-smbus \
-    swig liblgpio-dev \
-    "$GPIOD_PKG"
-
-# Ensure the i2c-dev module loads on boot. On Trixie, i2c_bcm2835 auto-loads
-# but i2c-dev does not, so /dev/i2c-1 never appears.
-echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
-sudo modprobe i2c-dev 2>/dev/null || true
 
 # --- Python dependencies ---
 echo "[2/9] Installing Python packages..."
 sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements.txt"
+if [ "$IS_RPI" = "1" ]; then
+    sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-rpi.txt"
+fi
 
-# --- /boot/config.txt overlays ---
+# --- /boot/config.txt overlays (Raspberry Pi only) ---
+if [ "$IS_RPI" = "0" ]; then
+echo "[3/9] Skipping /boot/config.txt overlays (non-Pi host)"
+else
 echo "[3/9] Configuring /boot/config.txt..."
 CONFIG="/boot/config.txt"
 [ -f "/boot/firmware/config.txt" ] && CONFIG="/boot/firmware/config.txt"
@@ -96,6 +121,7 @@ if [ -f "$CMDLINE" ]; then
     sudo sed -i -E 's/[[:space:]]+console=(serial0|ttyAMA0)[^[:space:]]*//g' "$CMDLINE"
 fi
 sudo systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
+fi  # IS_RPI — end of Pi-only boot configuration
 
 # --- Migrate legacy flat layout (pre-OTA) to releases/ + current symlink ---
 echo "[4/9] Preparing install layout..."
@@ -124,6 +150,9 @@ sudo mkdir -p /etc/bluesignal
 echo "[5/9] Installing firmware to $RELEASE_DIR..."
 sudo cp -r "$SCRIPT_DIR/src" "$RELEASE_DIR/"
 sudo cp "$SCRIPT_DIR/requirements.txt" "$RELEASE_DIR/"
+if [ -f "$SCRIPT_DIR/requirements-rpi.txt" ]; then
+    sudo cp "$SCRIPT_DIR/requirements-rpi.txt" "$RELEASE_DIR/"
+fi
 sudo cp "$SCRIPT_DIR/VERSION" "$RELEASE_DIR/"
 sudo cp "$SCRIPT_DIR/setup.sh" "$RELEASE_DIR/"
 

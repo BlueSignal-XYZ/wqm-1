@@ -11,12 +11,16 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import RPi.GPIO as GPIO
 import serial
 
 from utils.config import GPS_BAUD, GPS_EXTINT, GPS_UART_PORT
 
 logger = logging.getLogger("wqm1.gps")
+
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # non-Pi host (e.g. Arduino UNO Q): a USB GPS still works
+    GPIO = None  # over pyserial — only the EXTINT power-cycle pin is absent
 
 
 @dataclass
@@ -42,10 +46,11 @@ class GPS:
         self._last_fix: GPSFix | None = None
         self._lock = threading.Lock()
 
-        # Setup EXTINT pin for power cycling
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        GPIO.setup(GPS_EXTINT, GPIO.OUT, initial=GPIO.LOW)
+        # Setup EXTINT pin for power cycling (direct-header boards only)
+        if GPIO is not None:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            GPIO.setup(GPS_EXTINT, GPIO.OUT, initial=GPIO.LOW)
 
         try:
             self._serial = serial.Serial(
@@ -120,6 +125,9 @@ class GPS:
         Pulse EXTINT to reset/wake the GPS module.
         u-blox EXTINT: pulse low for >100 ms to toggle power save.
         """
+        if GPIO is None:
+            logger.info("GPS power cycle skipped — EXTINT pin not wired on this host")
+            return
         logger.info("GPS power cycle via EXTINT")
         GPIO.output(GPS_EXTINT, GPIO.HIGH)
         time.sleep(0.2)

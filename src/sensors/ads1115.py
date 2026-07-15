@@ -7,12 +7,16 @@ Single-shot mode, PGA ±4.096V, 128 SPS.
 
 import logging
 import time
-
-import smbus2
+from typing import Any
 
 from utils.config import ADS1115_ADDR, I2C_BUS
 
 logger = logging.getLogger("wqm1.adc")
+
+try:
+    import smbus2
+except ImportError:  # non-Pi host (e.g. Arduino UNO Q): kernel I2C is not
+    smbus2 = None  # exposed to Linux — the board gate never constructs this
 
 # ADS1115 register addresses
 _REG_CONVERSION = 0x00
@@ -49,8 +53,10 @@ class ADS1115:
     """ADS1115 16-bit ADC over I2C (smbus2)."""
 
     def __init__(self, bus: int = I2C_BUS, address: int = ADS1115_ADDR) -> None:
+        if smbus2 is None:
+            raise RuntimeError("smbus2 not installed — no direct I2C on this host")
         self._address = address
-        self._bus: smbus2.SMBus | None = None
+        self._bus: Any = None
         try:
             self._bus = smbus2.SMBus(bus)
             # Verify device is reachable by reading config register

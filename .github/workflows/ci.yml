@@ -61,7 +61,7 @@ jobs:
           VERSION=$(cat VERSION)
           tar --exclude='__pycache__' --exclude='*.pyc' \
             -czf "wqm1-firmware-${VERSION}.tar.gz" \
-            src config scripts systemd requirements.txt VERSION setup.sh
+            src config scripts systemd requirements.txt requirements-rpi.txt VERSION setup.sh
           python3 <<'PYEOF'
           import base64, json
           from datetime import UTC, datetime

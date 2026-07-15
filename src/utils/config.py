@@ -177,6 +177,12 @@ class Settings:
     log_backup_count: int = 5
     db_max_rows: int = 100_000
 
+    # Host board. "auto" sniffs /proc/device-tree/model; explicit ids pin it
+    # (rpi-zero-2w, arduino-uno-q, arduino-ventuno-q, generic-linux). On
+    # boards where Linux can't reach the headers (the Arduino Q family), the
+    # firmware runs digital-first: RS485 probes + USB GPS + Wi-Fi sync.
+    board: str = "auto"
+
     # Sensors
     orp_enabled: bool = False  # No ORP hardware on PCBA Fin_3; enable when connected
 
@@ -267,6 +273,7 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "log_backup_count": SettingSpec(int, hot=False, min=0, max=50, remote=False),
     "db_max_rows": SettingSpec(int, hot=True, min=1000, max=10_000_000),
     # Sensors
+    "board": SettingSpec(str, hot=False, max_length=32, remote=False),
     "orp_enabled": SettingSpec(bool, hot=False),
     "rs485_port": SettingSpec(str, hot=False, max_length=64, remote=False),
     "rs485_chlorine_enabled": SettingSpec(bool, hot=False),

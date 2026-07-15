@@ -9,17 +9,22 @@ import atexit
 import contextlib
 import logging
 
-import RPi.GPIO as GPIO
-
 from utils.config import RELAY_PINS
 
 logger = logging.getLogger("wqm1.relay")
+
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # non-Pi host (e.g. Arduino UNO Q): relays need the
+    GPIO = None  # Bridge companion sketch — the board gate never builds this
 
 
 class RelayController:
     """Controls 4 relays on the WQM-1 HAT."""
 
     def __init__(self) -> None:
+        if GPIO is None:
+            raise RuntimeError("RPi.GPIO not installed — no direct GPIO on this host")
         self._pins = RELAY_PINS
         self._state = 0  # 4-bit bitmask (bit 0 = relay 1)
 

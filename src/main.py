@@ -156,27 +156,45 @@ class WQM1App:
         """Initialise all hardware and build the worker set."""
         logger.info("WQM-1 firmware v%s starting (device=%s)", FW_VERSION, self._device_id)
 
-        # --- GPIO outputs ---
-        self._relays = RelayController()
-        self._relays.all_off()
-        self._leds = StatusLEDs()
-        self._leds.startup_test()
-        self._fan = FanController(
-            on_temp=self._settings.fan_on_temp_c,
-            off_temp=self._settings.fan_off_temp_c,
-        )
+        # --- Host board: decides whether Linux can reach the headers ---
+        from platform_support import detect_board
 
-        # --- ADC + sensors ---
-        self._adc = ADS1115()
-        self._temp = DS18B20()
+        self._board = detect_board(override=self._settings.board)
+        direct = self._board.has_direct_headers
+        if not direct:
+            # Arduino Q family (UNO Q / VENTUNO Q): headers belong to the
+            # MCU, so analog probes, LoRa, relays, LEDs, and the fan are
+            # unavailable from Linux. Digital-first mode: RS485 probes over
+            # the USB adapter, USB GPS, and Wi-Fi cloud sync carry the unit.
+            logger.info(
+                "Board %s has no direct header access — running digital-first "
+                "(RS485 + GPS + cloud); analog/LoRa/relay disabled",
+                self._board.name,
+            )
+
+        # --- GPIO outputs (direct-header boards only) ---
+        if direct:
+            self._relays = RelayController()
+            self._relays.all_off()
+            self._leds = StatusLEDs()
+            self._leds.startup_test()
+            self._fan = FanController(
+                on_temp=self._settings.fan_on_temp_c,
+                off_temp=self._settings.fan_off_temp_c,
+            )
+
+        # --- ADC + sensors (direct-header boards only) ---
         self._cal = CalibrationManager()
-        self._ph = PHSensor(self._adc)
-        self._tds = TDSSensor(self._adc)
-        self._turbidity = TurbiditySensor(self._adc)
-        if self._settings.orp_enabled and not self._settings.rs485_orp_enabled:
-            self._orp = ORPSensor(self._adc)
-        elif not self._settings.rs485_orp_enabled:
-            logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
+        if direct:
+            self._adc = ADS1115()
+            self._temp = DS18B20()
+            self._ph = PHSensor(self._adc)
+            self._tds = TDSSensor(self._adc)
+            self._turbidity = TurbiditySensor(self._adc)
+            if self._settings.orp_enabled and not self._settings.rs485_orp_enabled:
+                self._orp = ORPSensor(self._adc)
+            elif not self._settings.rs485_orp_enabled:
+                logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
 
         # --- RS485 (Modbus) sensors — Honde probes on the shared USB bus.
         # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
@@ -202,14 +220,16 @@ class WQM1App:
                 s.rs485_multi_enabled,
             )
 
-        # Apply calibration to sensors
+        # Apply calibration to the analog sensors (digital probes hold their
+        # own calibration state on the probe itself)
         cal = self._cal.data
-        self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
-        self._tds.set_calibration(cal.tds_k)
-        self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
+        if self._ph:
+            self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
+        if self._tds:
+            self._tds.set_calibration(cal.tds_k)
+        if self._turbidity:
+            self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
         if self._orp and hasattr(self._orp, "set_offset"):
-            # Analog ORP only — the digital probe is factory-calibrated and
-            # holds its own state.
             self._orp.set_offset(cal.orp_offset_mv, 0.0)
 
         # --- Database ---
@@ -236,8 +256,10 @@ class WQM1App:
         except Exception as e:
             logger.warning("GPS init failed: %s", e)
 
-        # --- LoRa + LoRaWAN ---
+        # --- LoRa + LoRaWAN (direct-header boards only: SX1262 is SPI) ---
         try:
+            if not direct:
+                raise RuntimeError("no direct SPI on this board")
             self._radio = SX1262()
             self._radio.init()
             app_key = bytes.fromhex(self._settings.app_key)
@@ -290,7 +312,8 @@ class WQM1App:
         self._start_cmd_listener()
 
         # --- Heartbeat LED ---
-        self._leds.heartbeat_start()
+        if self._leds:
+            self._leds.heartbeat_start()
 
         # --- Supervisor + workers ---
         self._supervisor = Supervisor(
@@ -300,7 +323,9 @@ class WQM1App:
             leds=self._leds,
             db=self._db,
             notifier=SdNotifier(),
-            hw_watchdog=(HardwareWatchdog() if self._settings.hardware_watchdog_enabled else None),
+            hw_watchdog=(
+                HardwareWatchdog() if direct and self._settings.hardware_watchdog_enabled else None
+            ),
         )
 
         # --- Signal handlers ---
