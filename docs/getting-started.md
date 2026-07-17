@@ -331,7 +331,10 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 - [Hardware Overview](hardware-overview.md) — schematic, pinout, and
   BOM reference
 - See `config/policies.yaml` for relay automation rules (dosing pumps,
-  aerators, valves)
+  aerators, valves). **Relay automation ships inert** (`manual.override: true`)
+  — all four relays stay OFF until you enable rules for the site. The channel
+  assignments in that file are editable examples, not fixed functions; set the
+  real mapping in your cloud rules.
 
 ## First-boot setup (v2.2+)
 
@@ -351,6 +354,18 @@ The dashboard home page keeps the same traffic-light language afterwards:
 green = fine, amber = worth a look, red = needs attention — every card carries
 the likely cause and the next step. Status LEDs mirror the same states
 (steady heartbeat = ok, error blinks = the dashboard has details).
+
+### Status LEDs
+
+The board has four function LEDs (there is no separate "power" LED and no
+"relay" LED):
+
+| LED | Meaning |
+|---|---|
+| LED 1 — Heartbeat | 1 Hz blink = firmware alive and sampling |
+| LED 2 — LoRa | Lights during each LoRa uplink |
+| LED 3 — GPS | Lights while attempting a GPS fix |
+| LED 4 — Fault | Blinks on a sensor/system fault — details on the dashboard |
 
 ## RS485 digital probes (v2.3+)
 
