@@ -9,4 +9,4 @@ types-pyserial>=3.5.0.20260519
 bandit[toml]>=1.9.4
 pip-audit>=2.10.1
 pre-commit>=4.6.0
-cyclonedx-bom>=7.3.0
+cyclonedx-bom>=7.3.1
