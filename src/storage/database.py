@@ -28,7 +28,7 @@ from utils.config import get_settings
 
 logger = logging.getLogger("wqm1.db")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -76,6 +76,52 @@ INSERT OR IGNORE INTO lorawan_session (id) VALUES (1);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- Relay control audit trail. Append-only: the answer to "why did this relay
+-- move?" for an operator who just lost a crop. Never updated, never deleted
+-- outside rotation.
+CREATE TABLE IF NOT EXISTS relay_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    channel INTEGER NOT NULL,
+    new_state INTEGER NOT NULL,      -- 1 = load running, 0 = load stopped
+    cause TEXT NOT NULL,             -- setpoint|manual|staleness|watchdog|
+                                     -- commissioning_test|ota
+    reason TEXT,
+    cycles INTEGER,
+    synced INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_relay_tx_ts ON relay_transitions(timestamp);
+CREATE INDEX IF NOT EXISTS idx_relay_tx_synced ON relay_transitions(synced);
+
+-- Per-channel contact wear. Survives restart so the counter reflects the
+-- physical relay, not the process lifetime.
+CREATE TABLE IF NOT EXISTS relay_cycles (
+    channel INTEGER PRIMARY KEY,
+    cycles INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
+);
+"""
+
+_RELAY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS relay_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    channel INTEGER NOT NULL,
+    new_state INTEGER NOT NULL,
+    cause TEXT NOT NULL,
+    reason TEXT,
+    cycles INTEGER,
+    synced INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_relay_tx_ts ON relay_transitions(timestamp);
+CREATE INDEX IF NOT EXISTS idx_relay_tx_synced ON relay_transitions(synced);
+CREATE TABLE IF NOT EXISTS relay_cycles (
+    channel INTEGER PRIMARY KEY,
+    cycles INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT
 );
 """
 
@@ -169,7 +215,94 @@ class WQM1Database:
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
                 )
+            logger.info("Database migrated to schema v3")
+            current = 3
+
+        if current < 4:
+            # v4 (relay control tier): audit trail + contact wear counters.
+            # Purely additive — a rollback to v2.2 firmware simply stops
+            # writing these tables; existing readings are untouched.
+            with conn:
+                conn.executescript(_RELAY_SCHEMA)
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
             logger.info("Database migrated to schema v%d", SCHEMA_VERSION)
+
+    # -- relay control audit trail -----------------------------------------
+
+    def log_relay_transition(
+        self,
+        channel: int,
+        new_state: bool,
+        cause: str,
+        reason: str = "",
+        cycles: int | None = None,
+    ) -> int:
+        """
+        Append one relay transition and bump that channel's wear counter.
+
+        Both writes share a transaction so the audit trail and the counter can
+        never disagree about how many times a contact has moved.
+        """
+        conn = self._conn
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO relay_transitions (channel, new_state, cause, reason, cycles)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (int(channel), 1 if new_state else 0, str(cause), str(reason or ""), cycles),
+            )
+            conn.execute(
+                "INSERT INTO relay_cycles (channel, cycles, updated_at)"
+                " VALUES (?, 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+                " ON CONFLICT(channel) DO UPDATE SET"
+                " cycles = cycles + 1,"
+                " updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+                (int(channel),),
+            )
+            return int(cur.lastrowid or 0)
+
+    def get_relay_cycles(self) -> dict[int, int]:
+        """Per-channel cumulative contact cycles, surviving restarts."""
+        rows = self._conn.execute("SELECT channel, cycles FROM relay_cycles").fetchall()
+        return {int(r[0]): int(r[1]) for r in rows}
+
+    def get_relay_transitions(
+        self, limit: int = 50, unsynced_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """Most recent transitions first."""
+        sql = (
+            "SELECT id, timestamp, channel, new_state, cause, reason, cycles, synced"
+            " FROM relay_transitions"
+        )
+        if unsynced_only:
+            sql += " WHERE synced = 0"
+        sql += " ORDER BY id DESC LIMIT ?"
+        rows = self._conn.execute(sql, (int(limit),)).fetchall()
+        return [
+            {
+                "id": r[0],
+                "timestamp": r[1],
+                "channel": r[2],
+                "new_state": bool(r[3]),
+                "cause": r[4],
+                "reason": r[5],
+                "cycles": r[6],
+                "synced": bool(r[7]),
+            }
+            for r in rows
+        ]
+
+    def mark_transitions_synced(self, ids: list[int]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        with self._conn as conn:
+            conn.execute(
+                f"UPDATE relay_transitions SET synced = 1 WHERE id IN ({placeholders})",
+                [int(i) for i in ids],
+            )
 
     def insert_reading(self, data: dict[str, Any]) -> int:
         """

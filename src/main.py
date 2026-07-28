@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import types
+from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,15 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
-from utils.config import FIRMWARE_VERSION, get_config_manager, hot_keys, restart_keys
+from utils.config import (
+    CAUSE_COMMISSIONING_TEST,
+    CAUSE_MANUAL,
+    FIRMWARE_VERSION,
+    get_config_manager,
+    hot_keys,
+    load_channel_configs,
+    restart_keys,
+)
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.sdnotify import SdNotifier
@@ -122,6 +131,8 @@ class WQM1App:
         # Components (lazy-initialised in start(); typed Any to avoid
         # union-attr noise — init order is guaranteed by start())
         self._relays: Any = None
+        self._channels: Any = None
+        self._tier: Any = None
         self._leds: Any = None
         self._fan: Any = None
         self._adc: Any = None
@@ -303,7 +314,7 @@ class WQM1App:
             self._cloud = None
 
         # --- Rules engine ---
-        self._rules = RulesEngine(self._relays)
+        self._rules = RulesEngine(self._relays, channel_controller=self._channels)
         self._load_policies()
         if self._settings.rules:
             self._rules.load_rules(self._settings.rules)
@@ -454,10 +465,35 @@ class WQM1App:
                 return {"ok": False, "error": "channel must be 1-4"}
             if not isinstance(state, bool):
                 return {"ok": False, "error": "state must be boolean"}
+
+            # Manual requests route through the safety layer when control is
+            # configured, so commissioning, contact type, dwell limits, and the
+            # audit trail all apply. Cloud commands reach this same path — the
+            # cloud can REQUEST, it is never in the actuation path.
+            if self._channels is not None and self._channels.config(channel) is not None:
+                if self._tier is not None and not self._tier.allows_manual_control():
+                    return {"ok": False, "error": "commercial control not entitled"}
+                moved = self._channels.request(
+                    channel, run=state, cause=CAUSE_MANUAL, reason="service window"
+                )
+                return {
+                    "ok": True,
+                    "channel": channel,
+                    "state": self._channels.is_running(channel),
+                    "transitioned": moved,
+                }
             if self._relays:
                 self._relays.set(channel, state)
                 return {"ok": True, "channel": channel, "state": state}
             return {"ok": False, "error": "relays not initialised"}
+        if action == "channel_status":
+            if self._channels is None:
+                return {"ok": False, "error": "control not available"}
+            snap = self._channels.snapshot()
+            snap["entitled"] = bool(self._tier and self._tier.granted)
+            return {"ok": True, "status": snap}
+        if action == "channel_test_fire":
+            return self._handle_test_fire(cmd)
         if action == "restart":
             self._state.request_restart()
             return {"ok": True, "restarting": True}
@@ -467,6 +503,58 @@ class WQM1App:
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
         return {"ok": False, "error": f"unknown action: {action}"}
+
+    def _handle_test_fire(self, cmd: dict) -> dict:
+        """
+        Commissioning test-fire: pulse a channel so the installer can confirm
+        the load actually moves, then leave it at fail-safe.
+
+        Requires an explicit typed confirmation from the operator — this is the
+        one moment a channel is allowed to actuate before it is commissioned,
+        so it must never be reachable by accident or by a stray cloud command.
+        """
+        if self._channels is None:
+            return {"ok": False, "error": "control not available"}
+
+        channel = cmd.get("channel")
+        if not isinstance(channel, int) or channel < 1 or channel > 4:
+            return {"ok": False, "error": "channel must be 1-4"}
+        if cmd.get("confirm") != f"TEST CH{channel}":
+            return {
+                "ok": False,
+                "error": f"operator confirmation required — type 'TEST CH{channel}'",
+            }
+        if self._tier is not None and not self._tier.allows_commissioning():
+            return {"ok": False, "error": "commercial control not entitled"}
+
+        cfg = self._channels.config(channel)
+        if cfg is None:
+            return {"ok": False, "error": f"CH{channel} has no validated config"}
+
+        try:
+            duration = float(cmd.get("duration_s", 2.0))
+        except (TypeError, ValueError):
+            duration = 2.0
+        duration = max(0.5, min(10.0, duration))
+
+        # Drive the load away from its fail-safe briefly, then put it back.
+        # Fail-safe is the resting state even during commissioning.
+        self._channels.force_test_fire(channel, cause=CAUSE_COMMISSIONING_TEST)
+        threading.Timer(
+            duration,
+            lambda ch=channel: self._channels.revert_to_fail_safe(
+                ch, cause=CAUSE_COMMISSIONING_TEST, reason="test-fire complete"
+            ),
+        ).start()
+
+        logger.warning(
+            "CH%d test-fired for %.1fs by operator confirmation (role=%s, contact=%s)",
+            channel,
+            duration,
+            cfg.role,
+            cfg.contact,
+        )
+        return {"ok": True, "channel": channel, "duration_s": duration}
 
     _POLICIES_PATHS: list[str | Path] = [
         "/opt/bluesignal/config/policies.yaml",
@@ -482,6 +570,7 @@ class WQM1App:
                     with path.open() as f:
                         policies = yaml.safe_load(f) or {}
                     self._rules.load_policies(policies)
+                    self._load_channel_configs(policies)
                     # Also load rules from policies if config rules are empty
                     if not self._settings.rules and policies.get("rules"):
                         self._rules.load_rules(policies["rules"])
@@ -490,6 +579,37 @@ class WQM1App:
                 except Exception as e:
                     logger.warning("Failed to load policies from %s: %s", path, e)
         logger.info("No policies.yaml found, using defaults")
+
+    def _load_channel_configs(self, policies: dict) -> None:
+        """
+        Apply per-channel control config.
+
+        A channel that fails validation is dropped, never partially applied —
+        an unvalidatable channel stays inert rather than actuating on a config
+        we only half understand.
+        """
+        if self._channels is None:
+            return
+        configs, errors = load_channel_configs(policies)
+        for err in errors:
+            logger.error("Channel config rejected: %s", err)
+        if self._tier is not None and not self._tier.allows_commissioning():
+            # Entitlement gates ADMISSION only. Already-commissioned channels
+            # keep running with their fail-safe intact; we simply refuse to
+            # bring newly-commissioned ones online.
+            blocked = [ch for ch, c in configs.items() if c.commissioned]
+            if blocked:
+                logger.warning(
+                    "Commercial control not entitled — channels %s stay inert",
+                    ", ".join(str(c) for c in sorted(blocked)),
+                )
+                configs = {
+                    ch: replace(c, commissioned=False) if c.commissioned else c
+                    for ch, c in configs.items()
+                }
+        self._channels.set_configs(configs)
+        if configs:
+            logger.info("Channel control config loaded for channels %s", sorted(configs))
 
     def _persist_session(self) -> None:
         """Save LoRaWAN session to database."""
@@ -605,6 +725,14 @@ class WQM1App:
 
     def _nudge_ota_agent(self) -> None:
         """Touch the flag file the OTA agent watches for an immediate check."""
+        # Relays revert BEFORE the agent can swap or roll back the release.
+        # atexit covers a clean stop; this covers the window where a new
+        # release is about to take over, and is safe to run repeatedly.
+        if self._channels is not None:
+            try:
+                self._channels.prepare_for_ota()
+            except Exception as e:
+                logger.error("Could not revert channels before OTA: %s", e)
         try:
             OTA_CHECK_FLAG.parent.mkdir(parents=True, exist_ok=True)
             OTA_CHECK_FLAG.touch()

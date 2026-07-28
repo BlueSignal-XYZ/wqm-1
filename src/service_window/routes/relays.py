@@ -14,6 +14,15 @@ from flask.typing import ResponseReturnValue
 
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
+from utils.config import (
+    CHANNEL_ROLES,
+    CONTACTS,
+    FAIL_SAFE_STATES,
+    LOAD_TYPES,
+    RELAY_MAX_CURRENT_A_NC,
+    RELAY_MAX_CURRENT_A_NO,
+    validate_channel_config,
+)
 
 relays_bp = Blueprint("relays", __name__, url_prefix="/relays")
 
@@ -21,7 +30,71 @@ relays_bp = Blueprint("relays", __name__, url_prefix="/relays")
 @relays_bp.route("/")
 @login_required
 def index() -> str:
-    return render_template("relays.html")
+    sock_path = current_app.config["CMD_SOCK"]
+    status = send_command(sock_path, "channel_status")
+    control = status.get("status") if status.get("ok") else None
+    return render_template("relays.html", control=control)
+
+
+@relays_bp.route("/commission/<int:channel>")
+@login_required
+def commission(channel: int) -> ResponseReturnValue:
+    """
+    Commissioning wizard for one channel.
+
+    Walks role -> contact -> fail-safe direction -> load type + current ->
+    dwell times -> test-fire. The channel stays inert throughout; only a
+    confirmed test-fire records that the wiring was actually verified.
+    """
+    if channel < 1 or channel > 4:
+        flash("Relay channel must be 1-4.", "error")
+        return redirect(url_for("relays.index"))
+
+    sock_path = current_app.config["CMD_SOCK"]
+    status = send_command(sock_path, "channel_status")
+    return render_template(
+        "relays_commission.html",
+        channel=channel,
+        roles=CHANNEL_ROLES,
+        contacts=CONTACTS,
+        fail_safe_states=FAIL_SAFE_STATES,
+        load_types=LOAD_TYPES,
+        max_a_no=RELAY_MAX_CURRENT_A_NO,
+        max_a_nc=RELAY_MAX_CURRENT_A_NC,
+        control=status.get("status") if status.get("ok") else None,
+    )
+
+
+@relays_bp.route("/commission/<int:channel>/validate", methods=["POST"])
+@login_required
+def validate(channel: int) -> ResponseReturnValue:
+    """Dry-run the operator's answers through the same validator the daemon uses."""
+    data = request.get_json(silent=True) or request.form.to_dict()
+    raw = dict(data)
+    raw["channel"] = channel
+    cfg, errors = validate_channel_config(raw)
+    return jsonify({"ok": not errors, "errors": errors, "valid": cfg is not None})
+
+
+@relays_bp.route("/commission/<int:channel>/test-fire", methods=["POST"])
+@login_required
+def test_fire(channel: int) -> ResponseReturnValue:
+    """
+    Pulse the channel so the installer can watch the load move.
+
+    Requires the operator to type the exact confirmation string. The daemon
+    re-checks it — this is not a client-side gate.
+    """
+    data = request.get_json(silent=True) or request.form.to_dict()
+    sock_path = current_app.config["CMD_SOCK"]
+    result = send_command(
+        sock_path,
+        "channel_test_fire",
+        channel=channel,
+        confirm=data.get("confirm", ""),
+        duration_s=data.get("duration_s", 2.0),
+    )
+    return jsonify(result), (200 if result.get("ok") else 400)
 
 
 @relays_bp.route("/set", methods=["POST"])

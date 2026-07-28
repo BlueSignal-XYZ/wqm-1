@@ -211,9 +211,9 @@ class TestMaxOnTime:
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate relay 1 already used 11 minutes this hour
-        from datetime import datetime
+        from datetime import UTC, datetime
 
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         engine._on_time[1] = (current_hour, 660.0)  # 11 minutes in seconds
 
         actions = engine.evaluate({"ph": 9.0})
@@ -232,9 +232,9 @@ class TestMaxOnTime:
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate relay 1 used only 2 minutes this hour
-        from datetime import datetime
+        from datetime import UTC, datetime
 
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         engine._on_time[1] = (current_hour, 120.0)  # 2 minutes
 
         actions = engine.evaluate({"ph": 9.0})

@@ -198,3 +198,65 @@ rules:
     relay: 2
     action: "off"
     duration_s: 0
+
+# ===============================================================
+# RELAY CONTROL CHANNELS  (Commercial tier)
+# ===============================================================
+# Read this before wiring anything.
+#
+# A dead Pi cannot energise a coil. The only state a crashed, hung, or
+# unpowered device can hold is DE-ENERGISED, so that is what "fail-safe"
+# always means. What it does physically depends on how you wire the contact:
+#
+#     contact: NC  ->  de-energised = load RUNNING
+#     contact: NO  ->  de-energised = load STOPPED
+#
+# Therefore ANY channel whose fail_safe_state is "run" MUST be wired NC.
+# The firmware rejects run+NO outright, because that fail-safe cannot happen.
+# Life-critical loads (aeration, circulation) are called out by name and get a
+# clearer error, but the rule applies to every role.
+#
+# PILOT DUTY. These outputs switch a contactor coil, a 24 V solenoid, or a VFD
+# enable input. They never carry a motor or a line-voltage load directly.
+# Limits: 5 A @ 30 VDC through NO, 3 A through NC (Omron G5Q-14-DC24).
+#
+# COMMISSIONED. Every channel ships false and never actuates until the Service
+# Window commissioning wizard test-fires it and the operator confirms. Do not
+# hand-edit this to true — the wizard logs the test-fire, which is the record
+# that the wiring was actually verified.
+#
+# These channel settings are deliberately NOT remotely configurable. Remote
+# config carries only SETTINGS_SCHEMA keys, so a compromised cloud account
+# cannot re-declare a contact type, raise a current limit, or commission a
+# channel.
+# ---------------------------------------------------------------
+# channels:
+#   - channel: 3
+#     role: aeration              # aeration|circulation|dosing|valve|heater|
+#                                 # chiller|lighting|auxiliary
+#     contact: NC                 # aeration is life-critical -> must be NC
+#     fail_safe_state: run        # loss of power leaves the aerator RUNNING
+#     load_type: contactor_coil   # contactor_coil|solenoid_24v|vfd_enable|
+#                                 # pilot_relay
+#     expected_current_a: 0.25    # coil current, not motor current
+#     deadband: 15.0              # ORP mV either side of the setpoint
+#     min_on_s: 300               # protect the contactor and the motor
+#     min_off_s: 300
+#     min_interval_s: 60
+#     stale_cycles: 3             # 3 x 60 s without a valid reading -> fail-safe
+#     commissioned: false         # set by the commissioning wizard only
+#
+#   - channel: 1
+#     role: dosing
+#     contact: NO                 # dosing stops on power loss
+#     fail_safe_state: stop
+#     load_type: solenoid_24v
+#     expected_current_a: 0.5
+#     deadband: 0.15              # pH units
+#     min_on_s: 10
+#     min_off_s: 120
+#     min_interval_s: 30
+#     stale_cycles: 3
+#     commissioned: false
+
+channels: []

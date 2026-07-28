@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Commission CH{{ channel }}{% endblock %}
+
+{% block content %}
+<h1>Commission relay CH{{ channel }}</h1>
+
+<div class="card warn">
+  <h3>Before you start</h3>
+  <p>
+    A dead Pi cannot energise a coil. The only state a crashed or unpowered
+    device can hold is <strong>de-energised</strong>, so that is what
+    &ldquo;fail-safe&rdquo; always means here. What it does physically depends
+    on how this channel is wired:
+  </p>
+  <ul>
+    <li><strong>NC</strong> &mdash; de-energised leaves the load <strong>RUNNING</strong></li>
+    <li><strong>NO</strong> &mdash; de-energised leaves the load <strong>STOPPED</strong></li>
+  </ul>
+  <p>
+    Anything that must survive a power cut &mdash; aeration, circulation &mdash;
+    has to be wired <strong>NC</strong>. The firmware refuses a
+    <em>fail-safe&nbsp;=&nbsp;run</em> channel on an NO contact, because that
+    fail-safe cannot happen.
+  </p>
+  <p>
+    These outputs are <strong>pilot duty</strong>: a contactor coil, a 24&nbsp;V
+    solenoid, or a VFD enable input. Never a motor or a line-voltage load
+    directly. Limits are {{ '%.0f'|format(max_a_no) }}&nbsp;A on NO and
+    {{ '%.0f'|format(max_a_nc) }}&nbsp;A on NC.
+  </p>
+</div>
+
+<form id="commission-form" class="card">
+  <h3>1 &middot; What does this channel drive?</h3>
+  <label for="role">Role</label>
+  <select id="role" name="role">
+    {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+  </select>
+
+  <h3>2 &middot; How is the contact wired?</h3>
+  <label for="contact">Contact</label>
+  <select id="contact" name="contact">
+    {% for c in contacts %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+  </select>
+
+  <h3>3 &middot; What should happen on power loss?</h3>
+  <label for="fail_safe_state">Fail-safe direction</label>
+  <select id="fail_safe_state" name="fail_safe_state">
+    {% for f in fail_safe_states %}<option value="{{ f }}">{{ f }}</option>{% endfor %}
+  </select>
+
+  <h3>4 &middot; What is on the other end?</h3>
+  <label for="load_type">Load type</label>
+  <select id="load_type" name="load_type">
+    {% for lt in load_types %}<option value="{{ lt }}">{{ lt }}</option>{% endfor %}
+  </select>
+
+  <label for="expected_current_a">Expected coil current (A)</label>
+  <input type="number" step="0.01" min="0" id="expected_current_a"
+         name="expected_current_a" value="0.25">
+
+  <h3>5 &middot; Anti-chatter</h3>
+  <p class="hint">Protects contactor coils and pump motors. Always bypassed for a fail-safe.</p>
+  <label for="deadband">Deadband (sensor units)</label>
+  <input type="number" step="0.01" min="0" id="deadband" name="deadband" value="0">
+
+  <label for="min_on_s">Minimum on-dwell (s)</label>
+  <input type="number" min="0" id="min_on_s" name="min_on_s" value="300">
+
+  <label for="min_off_s">Minimum off-dwell (s)</label>
+  <input type="number" min="0" id="min_off_s" name="min_off_s" value="300">
+
+  <label for="min_interval_s">Minimum interval between transitions (s)</label>
+  <input type="number" min="0" id="min_interval_s" name="min_interval_s" value="60">
+
+  <label for="stale_cycles">Revert to fail-safe after N cycles without a reading</label>
+  <input type="number" min="1" id="stale_cycles" name="stale_cycles" value="3">
+
+  <button type="button" id="validate-btn">Check this configuration</button>
+  <div id="validate-result" role="status"></div>
+</form>
+
+<div class="card danger">
+  <h3>6 &middot; Test-fire</h3>
+  <p>
+    This drives the load away from its fail-safe for a couple of seconds so you
+    can confirm the right thing actually moves. <strong>Make sure it is safe to
+    operate right now.</strong> The pulse is recorded in the audit trail.
+  </p>
+  <label for="confirm">Type <code>TEST CH{{ channel }}</code> to confirm</label>
+  <input type="text" id="confirm" autocomplete="off" placeholder="TEST CH{{ channel }}">
+  <button type="button" id="testfire-btn" class="danger">Test-fire CH{{ channel }}</button>
+  <div id="testfire-result" role="status"></div>
+</div>
+
+<p><a href="{{ url_for('relays.index') }}">&larr; Back to relays</a></p>
+
+<script>
+(function () {
+  const form = document.getElementById('commission-form');
+  const channel = {{ channel }};
+
+  function payload() {
+    const data = {};
+    new FormData(form).forEach((v, k) => { data[k] = v; });
+    return data;
+  }
+
+  document.getElementById('validate-btn').addEventListener('click', async () => {
+    const out = document.getElementById('validate-result');
+    out.textContent = 'Checking…';
+    const res = await fetch(`/relays/commission/${channel}/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload()),
+    });
+    const body = await res.json();
+    out.innerHTML = body.ok
+      ? '<span class="ok">Configuration is valid.</span>'
+      : '<ul class="error">' + body.errors.map((e) => `<li>${e}</li>`).join('') + '</ul>';
+  });
+
+  document.getElementById('testfire-btn').addEventListener('click', async () => {
+    const out = document.getElementById('testfire-result');
+    out.textContent = 'Firing…';
+    const res = await fetch(`/relays/commission/${channel}/test-fire`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: document.getElementById('confirm').value, duration_s: 2 }),
+    });
+    const body = await res.json();
+    out.innerHTML = body.ok
+      ? `<span class="ok">CH${channel} fired for ${body.duration_s}s, then returned to fail-safe.</span>`
+      : `<span class="error">${body.error}</span>`;
+  });
+})();
+</script>
+{% endblock %}

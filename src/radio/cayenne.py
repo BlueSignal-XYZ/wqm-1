@@ -12,6 +12,8 @@ from typing import Any
 LPP_TEMPERATURE = 0x67  # 2 bytes, 0.1°C signed
 LPP_ANALOG_INPUT = 0x02  # 2 bytes, 0.01 signed
 LPP_GPS = 0x88  # 9 bytes: lat(3) lon(3) alt(3)
+LPP_DIGITAL_INPUT = 0x00  # 1 byte, unsigned
+LPP_LUMINOSITY = 0x65  # 2 bytes, unsigned 0-65535 — reused as a plain counter
 
 # Channel assignments (platform contract — DO NOT CHANGE without coordination)
 CH_TEMPERATURE = 1
@@ -27,6 +29,29 @@ CH_GPS = 6
 CH_CHLORINE = 10
 CH_CONDUCTIVITY = 11
 CH_SALINITY = 12
+
+# Relay control telemetry (v2.3, Commercial tier). CH7 is the already-claimed
+# relay_state slot in the platform contract; 13-17 are new and additive, so
+# older decoders simply ignore them.
+#
+# A LoRaWAN payload is far too small for a per-transition audit trail, so only
+# a SUMMARY rides the uplink: current load state, contact wear, and the cause
+# of the most recent transition. The full trail lives in SQLite WAL and syncs
+# over a real backhaul.
+CH_RELAY_STATE = 7
+CH_RELAY_CYCLES_BASE = 13  # 13,14,15,16 -> channels 1-4
+CH_RELAY_CAUSE = 17
+
+# Cause encoded as a small int so it fits a single byte.
+CAUSE_CODES = {
+    "setpoint": 1,
+    "manual": 2,
+    "staleness": 3,
+    "watchdog": 4,
+    "commissioning_test": 5,
+    "ota": 6,
+}
+CODE_TO_CAUSE = {v: k for k, v in CAUSE_CODES.items()}
 
 # Analog-input LPP packs value*100 into a signed 16-bit int, capping at
 # 327.67. EC spans 0-10,000 µS/cm, so it rides the channel in mS/cm.
@@ -109,6 +134,32 @@ def encode(data: dict[str, Any]) -> bytes:
         buf.append(CH_SALINITY)
         buf.append(LPP_ANALOG_INPUT)
         buf += struct.pack(">h", val)
+
+    # --- Relay control summary (Commercial tier) ---
+    # Emitted only when the device actually has control configured, so
+    # monitoring-only units keep byte-for-byte identical payloads.
+    relay_state = data.get("relay_state")
+    if relay_state is not None:
+        buf.append(CH_RELAY_STATE)
+        buf.append(LPP_DIGITAL_INPUT)
+        buf.append(int(relay_state) & 0x0F)
+
+    cycles = data.get("relay_cycles") or {}
+    for channel in (1, 2, 3, 4):
+        count = cycles.get(channel, cycles.get(str(channel)))
+        if count is None:
+            continue
+        buf.append(CH_RELAY_CYCLES_BASE + channel - 1)
+        buf.append(LPP_LUMINOSITY)
+        buf += struct.pack(">H", max(0, min(65535, int(count))))
+
+    cause = data.get("relay_last_cause")
+    if cause is not None:
+        code = CAUSE_CODES.get(str(cause))
+        if code is not None:
+            buf.append(CH_RELAY_CAUSE)
+            buf.append(LPP_DIGITAL_INPUT)
+            buf.append(code)
 
     # CH6: GPS (lat/lon in 0.0001°, alt in 0.01 m)
     lat = data.get("lat")

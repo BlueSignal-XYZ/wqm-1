@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from datetime import time as dt_time
 from typing import Any
 
+from utils.config import CAUSE_SETPOINT
+
 logger = logging.getLogger("wqm1.rules")
 
 
@@ -44,9 +46,14 @@ _OPERATORS = {
 class RulesEngine:
     """Evaluates rules against sensor readings and controls relays."""
 
-    def __init__(self, relay_controller: Any = None) -> None:
+    def __init__(self, relay_controller: Any = None, channel_controller: Any = None) -> None:
         self._rules: list[Rule] = []
         self._relay = relay_controller
+        # When present, ALL actuation goes through the channel controller so
+        # commissioning, contact type, dwell limits, and the audit trail apply.
+        # The raw relay controller is only used on units without control config
+        # (the pre-tier behaviour), which keeps existing installs unchanged.
+        self._channels = channel_controller
         # Track auto-shutoff timers: {relay_channel: shutoff_time}
         self._timers: dict[int, float] = {}
 
@@ -232,6 +239,21 @@ class RulesEngine:
             if op_fn(value, rule.threshold):
                 state = rule.action == "on"
 
+                # --- Guard: per-channel deadband ---
+                # Requires the reading to travel past the threshold by a margin
+                # so a probe sitting on the setpoint cannot chatter a contactor.
+                if self._channels is not None and not self._channels.passes_deadband(
+                    rule.relay, value, rule.threshold, rule.operator
+                ):
+                    logger.debug(
+                        "Relay %d: %s=%.3f inside deadband of %.3f, holding",
+                        rule.relay,
+                        rule.sensor,
+                        value,
+                        rule.threshold,
+                    )
+                    continue
+
                 if state:
                     # --- Guard: cooldown ---
                     if self._is_in_cooldown(rule.relay):
@@ -269,15 +291,46 @@ class RulesEngine:
             self._on_since.pop(ch, None)
             del self._timers[ch]
 
-        # Apply actions to relay controller
-        if self._relay and actions:
+        # Apply actions. The channel controller is the safe path: it enforces
+        # commissioning, translates load state to a coil level for the declared
+        # contact, applies dwell limits, and writes the audit trail. Falling
+        # back to the bare relay keeps pre-tier units behaving exactly as before.
+        if actions:
             for channel, state in actions:
                 try:
-                    self._relay.set(channel, state)
+                    if self._channels is not None:
+                        self._channels.request(
+                            channel, run=state, cause=CAUSE_SETPOINT, reason="rule"
+                        )
+                    elif self._relay:
+                        self._relay.set(channel, state)
                 except Exception as e:
                     logger.error("Relay %d action failed: %s", channel, e)
 
         return actions
+
+    def driving_columns(self, channel: int) -> set[str]:
+        """Reading columns whose rules control this channel."""
+        return {r.sensor for r in self._rules if r.relay == channel}
+
+    def channel_reading_valid(self, channel: int, reading: dict) -> bool:
+        """
+        Is this channel's decision basis intact for one cycle?
+
+        Conservative on purpose: if ANY sensor driving the channel is missing,
+        None, or suspended by the health monitor, the basis is incomplete and
+        the cycle counts as a miss. Acting on a partial picture is how a stuck
+        probe holds a relay on.
+        """
+        columns = self.driving_columns(channel)
+        if not columns:
+            return True
+        for column in columns:
+            if column in self._suspended_columns:
+                return False
+            if reading.get(column) is None:
+                return False
+        return True
 
     def process_downlink_command(self, fport: int, payload: bytes) -> bool:
         """

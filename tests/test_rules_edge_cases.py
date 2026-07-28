@@ -137,13 +137,13 @@ class TestAccumulateOnTime:
         assert 1 not in engine._on_time
 
     def test_accumulate_adds_to_existing_entry(self, mock_hardware):
-        from datetime import datetime
+        from datetime import UTC, datetime
 
         from control.rules import RulesEngine
 
         engine = RulesEngine()
         engine._max_on_s_per_hour = 600
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         engine._on_time[1] = (current_hour, 10.0)
 
         engine._accumulate_on_time(1, 5.0)

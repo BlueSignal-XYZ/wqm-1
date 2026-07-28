@@ -522,3 +522,274 @@ def atomic_json_write(path: str, data: dict[str, Any]) -> None:
         if tmp.exists():
             tmp.unlink()
         raise
+
+
+# ===========================================================================
+# Relay channel control config (Commercial tier)
+# ===========================================================================
+#
+# THE ONE PHYSICAL FACT THIS SECTION IS BUILT ON:
+#
+#   A dead Pi cannot energise a coil.
+#
+# The only state a crashed, hung, or unpowered device can hold is
+# DE-ENERGISED. So "fail-safe" always means de-energised, and the contact type
+# decides what that does physically:
+#
+#   contact=NC  ->  de-energised = load RUNNING
+#   contact=NO  ->  de-energised = load STOPPED
+#
+# fail_safe_state and contact are therefore NOT independent. A channel asking
+# for fail_safe_state=run on an NO contact is asking for a fail-safe that
+# cannot happen, and is rejected.
+#
+# These channel settings deliberately live in policies.yaml, NOT in Settings /
+# SETTINGS_SCHEMA. Remote config can only carry SETTINGS_SCHEMA keys, so a
+# compromised cloud account can never re-declare a channel's contact type,
+# raise its current limit, or mark it commissioned.
+# ---------------------------------------------------------------------------
+
+# Omron G5Q-14-DC24 contact ratings on the Fin_3 board.
+RELAY_MAX_CURRENT_A_NO = 5.0  # 5 A @ 30 VDC through the normally-open contact
+RELAY_MAX_CURRENT_A_NC = 3.0  # 3 A through the normally-closed contact
+RELAY_MAX_VOLTAGE_DC = 30.0
+
+CONTACT_NO = "NO"
+CONTACT_NC = "NC"
+CONTACTS = (CONTACT_NO, CONTACT_NC)
+
+FAIL_SAFE_RUN = "run"
+FAIL_SAFE_STOP = "stop"
+FAIL_SAFE_STATES = (FAIL_SAFE_RUN, FAIL_SAFE_STOP)
+
+# Roles whose loss kills livestock. Called out by name so the operator gets a
+# specific error, but the general invariant below catches every other role too.
+LIFE_CRITICAL_ROLES = ("aeration", "circulation")
+CHANNEL_ROLES = (
+    "aeration",
+    "circulation",
+    "dosing",
+    "valve",
+    "heater",
+    "chiller",
+    "lighting",
+    "auxiliary",
+)
+
+# These outputs are PILOT DUTY. They switch the coil of a contactor, a 24 V
+# solenoid, or a VFD enable input — they never carry a motor or a line-voltage
+# load directly.
+LOAD_TYPES = ("contactor_coil", "solenoid_24v", "vfd_enable", "pilot_relay")
+
+# Transition causes recorded in the audit trail.
+CAUSE_SETPOINT = "setpoint"
+CAUSE_MANUAL = "manual"
+CAUSE_STALENESS = "staleness"
+CAUSE_WATCHDOG = "watchdog"
+CAUSE_COMMISSIONING_TEST = "commissioning_test"
+CAUSE_OTA = "ota"
+TRANSITION_CAUSES = (
+    CAUSE_SETPOINT,
+    CAUSE_MANUAL,
+    CAUSE_STALENESS,
+    CAUSE_WATCHDOG,
+    CAUSE_COMMISSIONING_TEST,
+    CAUSE_OTA,
+)
+
+
+@dataclass
+class ChannelConfig:
+    """Per-channel control configuration. Inert until commissioned."""
+
+    channel: int
+    role: str = "auxiliary"
+    contact: str = CONTACT_NO
+    fail_safe_state: str = FAIL_SAFE_STOP
+    load_type: str = "contactor_coil"
+    expected_current_a: float = 0.0
+
+    # Anti-chatter. These protect contactor coils and pump motors; they are
+    # ALWAYS bypassed for a fail-safe reversion.
+    deadband: float = 0.0
+    min_on_s: int = 0
+    min_off_s: int = 0
+    min_interval_s: int = 0
+
+    # Consecutive 60 s cycles without a valid driving reading before the
+    # channel reverts to fail_safe_state.
+    stale_cycles: int = 3
+
+    # Set only by the commissioning wizard's test-fire step. A channel that has
+    # not been commissioned never actuates.
+    commissioned: bool = False
+
+    @property
+    def failsafe_is_energised(self) -> bool:
+        """
+        Always False. Fail-safe is de-energised, by construction.
+
+        Kept explicit so any future refactor that tries to make a fail-safe
+        state require energising a coil has to delete this and confront why.
+        """
+        return False
+
+
+def _limit_for_contact(contact: str) -> float:
+    return RELAY_MAX_CURRENT_A_NC if contact == CONTACT_NC else RELAY_MAX_CURRENT_A_NO
+
+
+def validate_channel_config(raw: dict[str, Any]) -> tuple[ChannelConfig | None, list[str]]:
+    """
+    Validate one channel's config.
+
+    Returns (config, errors). config is None when errors is non-empty — an
+    invalid channel is never partially applied.
+    """
+    errors: list[str] = []
+
+    try:
+        channel = int(raw.get("channel", 0))
+    except (TypeError, ValueError):
+        return None, ["channel must be an integer 1-4"]
+    if not 1 <= channel <= 4:
+        return None, [f"channel must be 1-4, got {channel}"]
+
+    role = str(raw.get("role", "auxiliary"))
+    contact = str(raw.get("contact", CONTACT_NO)).upper()
+    fail_safe_state = str(raw.get("fail_safe_state", FAIL_SAFE_STOP)).lower()
+    load_type = str(raw.get("load_type", "contactor_coil"))
+
+    if role not in CHANNEL_ROLES:
+        errors.append(
+            f"CH{channel}: unknown role '{role}' (expected one of {', '.join(CHANNEL_ROLES)})"
+        )
+    if contact not in CONTACTS:
+        errors.append(f"CH{channel}: contact must be NO or NC, got '{contact}'")
+    if fail_safe_state not in FAIL_SAFE_STATES:
+        errors.append(f"CH{channel}: fail_safe_state must be run or stop, got '{fail_safe_state}'")
+    if load_type not in LOAD_TYPES:
+        errors.append(
+            f"CH{channel}: unknown load_type '{load_type}'. These outputs are pilot duty — "
+            f"expected one of {', '.join(LOAD_TYPES)}. They drive contactor coils, 24 V "
+            f"solenoids, or VFD enable inputs, never a line-voltage load directly."
+        )
+
+    # --- The core invariant ------------------------------------------------
+    # A dead Pi cannot energise a coil, so fail_safe_state=run is only
+    # achievable on an NC contact.
+    if fail_safe_state == FAIL_SAFE_RUN and contact == CONTACT_NO:
+        if role in LIFE_CRITICAL_ROLES:
+            errors.append(
+                f"CH{channel}: role '{role}' is life-critical and must be wired NC. "
+                f"On an NO contact, loss of power or a crashed process de-energises the "
+                f"coil and STOPS the load. Rewire to NC, or the fail-safe cannot hold."
+            )
+        else:
+            errors.append(
+                f"CH{channel}: fail_safe_state=run requires contact=NC. A de-energised NO "
+                f"contact is open, so the load stops — the requested fail-safe is "
+                f"physically unachievable on a crashed or unpowered device."
+            )
+
+    # A life-critical load declared fail-safe=stop is legal but almost never
+    # intended, so it is called out loudly rather than silently accepted.
+    if role in LIFE_CRITICAL_ROLES and fail_safe_state == FAIL_SAFE_STOP:
+        logger.warning(
+            "CH%d: role '%s' is life-critical but fail_safe_state=stop — the load will "
+            "STOP on power loss or crash. Confirm this is intended.",
+            channel,
+            role,
+        )
+
+    # --- Pilot-duty current ------------------------------------------------
+    try:
+        current = float(raw.get("expected_current_a", 0.0))
+    except (TypeError, ValueError):
+        current = -1.0
+        errors.append(f"CH{channel}: expected_current_a must be a number")
+
+    if current < 0:
+        if current == -1.0 and any("expected_current_a" in e for e in errors):
+            pass
+        else:
+            errors.append(f"CH{channel}: expected_current_a must be >= 0")
+    elif contact in CONTACTS:
+        limit = _limit_for_contact(contact)
+        if current > limit:
+            errors.append(
+                f"CH{channel}: expected_current_a {current:.2f} A exceeds the "
+                f"{limit:.1f} A limit for a {contact} contact "
+                f"(Omron G5Q-14-DC24: {RELAY_MAX_CURRENT_A_NO:.0f} A @ "
+                f"{RELAY_MAX_VOLTAGE_DC:.0f} VDC on NO, {RELAY_MAX_CURRENT_A_NC:.0f} A on NC). "
+                f"These are pilot-duty outputs — switch a contactor coil, not the load."
+            )
+
+    def _non_negative(key: str, default: Any) -> Any:
+        try:
+            value = type(default)(raw.get(key, default))
+        except (TypeError, ValueError):
+            errors.append(f"CH{channel}: {key} must be a number")
+            return default
+        if value < 0:
+            errors.append(f"CH{channel}: {key} must be >= 0, got {value}")
+            return default
+        return value
+
+    deadband = _non_negative("deadband", 0.0)
+    min_on_s = _non_negative("min_on_s", 0)
+    min_off_s = _non_negative("min_off_s", 0)
+    min_interval_s = _non_negative("min_interval_s", 0)
+
+    try:
+        stale_cycles = int(raw.get("stale_cycles", 3))
+    except (TypeError, ValueError):
+        stale_cycles = 3
+        errors.append(f"CH{channel}: stale_cycles must be an integer")
+    if stale_cycles < 1:
+        errors.append(f"CH{channel}: stale_cycles must be >= 1, got {stale_cycles}")
+
+    if errors:
+        return None, errors
+
+    return (
+        ChannelConfig(
+            channel=channel,
+            role=role,
+            contact=contact,
+            fail_safe_state=fail_safe_state,
+            load_type=load_type,
+            expected_current_a=current,
+            deadband=deadband,
+            min_on_s=min_on_s,
+            min_off_s=min_off_s,
+            min_interval_s=min_interval_s,
+            stale_cycles=stale_cycles,
+            commissioned=bool(raw.get("commissioned", False)),
+        ),
+        [],
+    )
+
+
+def load_channel_configs(policies: dict[str, Any]) -> tuple[dict[int, ChannelConfig], list[str]]:
+    """
+    Build {channel: ChannelConfig} from a policies.yaml dict.
+
+    Invalid channels are dropped, never partially applied — a channel we cannot
+    validate stays inert rather than actuating on a half-understood config.
+    """
+    configs: dict[int, ChannelConfig] = {}
+    all_errors: list[str] = []
+    for raw in policies.get("channels", []) or []:
+        if not isinstance(raw, dict):
+            all_errors.append(f"channel entry must be a mapping, got {type(raw).__name__}")
+            continue
+        cfg, errors = validate_channel_config(raw)
+        if errors:
+            all_errors.extend(errors)
+            for e in errors:
+                logger.error("Channel config rejected — %s", e)
+            continue
+        if cfg is not None:
+            configs[cfg.channel] = cfg
+    return configs, all_errors
