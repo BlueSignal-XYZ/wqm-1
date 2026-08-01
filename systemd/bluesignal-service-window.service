@@ -6,6 +6,10 @@ After=network.target bluesignal-wqm.service
 Type=simple
 User=pi
 SupplementaryGroups=dialout gpio i2c spi
+# The provisioning UI rewrites /etc/bluesignal/config.yaml. Declared
+# explicitly so adding ProtectSystem=/ProtectHome= later cannot silently
+# make the page read-only again.
+ReadWritePaths=/etc/bluesignal
 RuntimeDirectory=bluesignal
 RuntimeDirectoryMode=0755
 WorkingDirectory=/opt/bluesignal/src

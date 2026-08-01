@@ -113,7 +113,12 @@ sudo cp "$SCRIPT_DIR/config/policies.yaml" "$INSTALL_DIR/config/"
 sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$INSTALL_DIR/scripts/"
 sudo chmod +x "$INSTALL_DIR/scripts/diagnostics.sh"
 
-sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal
+# /etc/bluesignal must be writable by the service user, not just readable.
+# The service window provisions the device by rewriting config.yaml (AppKey,
+# cloud_enabled, api_key, PIN). It runs as $INSTALL_USER, so a root-owned
+# /etc/bluesignal makes every save fail with a 500 and the provisioning page
+# is read-only in practice — which is the one thing it exists to do.
+sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal /etc/bluesignal
 
 # --- systemd services ---
 echo "[6/8] Installing systemd services..."
