@@ -31,7 +31,10 @@ from service_window.config_editor import ConfigWriteError
 _SETTING_ALIASES = {
     "SERVICE_PORT": "port",
     "PIN": "pin",
-    "SECRET_KEY": "secret_key",
+    # nosec B105 - a setting-name mapping, not a credential. The value is the
+    # YAML key to read; the secret itself comes from SW_SECRET_KEY or a fresh
+    # token_hex(32) below.
+    "SECRET_KEY": "secret_key",  # nosec B105
     "DB_PATH": "db_path",
     "CONFIG_PATH": "config_path",
     "CAL_PATH": "cal_path",
