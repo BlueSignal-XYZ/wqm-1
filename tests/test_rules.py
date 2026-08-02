@@ -211,9 +211,12 @@ class TestMaxOnTime:
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate relay 1 already used 11 minutes this hour
-        from datetime import datetime
+        # UTC, matching RulesEngine._accumulate_on_time. A local-time hour only
+        # agrees with it on a UTC machine, so this test passed in CI and failed
+        # on any developer box with an offset.
+        from datetime import UTC, datetime
 
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         engine._on_time[1] = (current_hour, 660.0)  # 11 minutes in seconds
 
         actions = engine.evaluate({"ph": 9.0})
@@ -232,9 +235,12 @@ class TestMaxOnTime:
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
         # Simulate relay 1 used only 2 minutes this hour
-        from datetime import datetime
+        # UTC — see the note in test_on_time_budget_blocks_when_exceeded. This
+        # one passed under local time only by accident: a mismatched hour reset
+        # the counter to 0.0, which is also under the limit.
+        from datetime import UTC, datetime
 
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(UTC).hour
         engine._on_time[1] = (current_hour, 120.0)  # 2 minutes
 
         actions = engine.evaluate({"ph": 9.0})
