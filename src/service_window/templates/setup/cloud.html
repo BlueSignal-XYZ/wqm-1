@@ -32,7 +32,25 @@ receive updates. Two minutes on any other device — this page can stay open.</p
     <label>Device API key
         <input type="text" name="api_key" autocomplete="off" spellcheck="false"
                placeholder="paste the key here" {% if not key_set %}required{% endif %}>
+        <small>Used for readings over WiFi. This is the one that matters today.</small>
     </label>
+
+    <details class="qr-detail">
+        <summary>Also using the LoRa radio? Add its join credentials</summary>
+        <p class="skip-note">The cloud issues these with the same claim. Leave them
+        blank for a WiFi-only site — but a unit that finishes setup without an
+        AppKey can never join a LoRa network.</p>
+        <label>LoRa AppKey (32 hex characters)
+            <input type="text" name="app_key" autocomplete="off" spellcheck="false"
+                   placeholder="optional" maxlength="32">
+        </label>
+        <label>JoinEUI / AppEUI (16 hex characters)
+            <input type="text" name="app_eui" autocomplete="off" spellcheck="false"
+                   placeholder="0000000000000000" maxlength="16">
+            <small>Must match the JoinEUI this device is registered under on the
+            network server.</small>
+        </label>
+    </details>
     <div class="setup-actions">
         <button type="submit" class="btn btn-primary btn-lg">Save and continue</button>
         <button type="submit" name="skip" value="1" class="btn btn-secondary" formnovalidate>

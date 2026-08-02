@@ -104,3 +104,22 @@ def mock_hardware():
         "w1": _w1,
         "w1_sensor": _w1_sensor,
     }
+
+
+@pytest.fixture(autouse=True)
+def no_outbound_http(monkeypatch):
+    """
+    Nothing in the suite may talk to the real cloud.
+
+    The setup wizard's cloud step verifies a pasted key by calling the live
+    API. Without this fixture, `pytest` fires real requests at production
+    Cloud Functions — slow, flaky offline, and noise in prod logs from CI.
+    Tests that exercise the probe monkeypatch `urlopen` themselves, which
+    takes precedence over this default.
+    """
+    import utils.netinfo as netinfo
+
+    def blocked(*_a, **_k):
+        raise netinfo.urllib.error.URLError("outbound HTTP blocked in tests")
+
+    monkeypatch.setattr(netinfo.urllib.request, "urlopen", blocked)

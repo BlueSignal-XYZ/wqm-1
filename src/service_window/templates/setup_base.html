@@ -19,7 +19,8 @@
     <main class="setup-shell">
         <ol class="steps-track" aria-label="Setup progress">
             {% set labels = {'welcome': 'Welcome', 'pin': 'PIN', 'identity': 'Identity',
-                             'cloud': 'Cloud', 'sensors': 'Sensors', 'done': 'Finish'} %}
+                             'network': 'Network', 'cloud': 'Cloud', 'sensors': 'Sensors',
+                             'done': 'Finish'} %}
             {% for s in steps %}
             {% set state = 'current' if s == step else ('done' if steps.index(s) < steps.index(step) else '') %}
             <li class="{{ state }}">

@@ -1,0 +1,55 @@
+{% extends "setup_base.html" %}
+{% from "_health.html" import health_card %}
+{% block title %}Setup — Network{% endblock %}
+{% block content %}
+<h1 class="setup-h1">Network check</h1>
+<p class="lead">Check the link <b>where the unit will actually live</b> — lid closed,
+in its final spot. A signal that works on the bench can fail behind a panel.</p>
+
+<div class="id-block">
+    <div class="id-label">Network</div>
+    <div class="id-row">
+        <code class="id-value">{{ wifi.ssid or 'Not connected' }}</code>
+    </div>
+</div>
+<div class="id-block">
+    <div class="id-label">Signal</div>
+    <div class="id-row">
+        <code class="id-value">{{ (wifi.rssi_dbm ~ ' dBm') if wifi.rssi_dbm is not none else '—' }}</code>
+    </div>
+</div>
+<div class="id-block">
+    <div class="id-label">Address on this network</div>
+    <div class="id-row">
+        <code class="id-value">{{ wifi.ip or '—' }}</code>
+    </div>
+</div>
+
+<div class="grid">
+    {% for name, card in cards.items() %}
+    {{ health_card('WiFi' if name == 'wifi' else name|capitalize, card) }}
+    {% endfor %}
+</div>
+
+<div class="howto">
+    <div class="howto-title">Why this matters</div>
+    <p class="skip-note" style="margin-top: 0">
+        WiFi is how this unit uploads readings and receives updates.
+        {% if lora_enabled %}LoRa runs alongside it as a long-range backup, but it is
+        far slower and carries less — WiFi is the path you want working.{% endif %}
+        Either way, <b>control decisions are made on this unit</b>, so a dropped
+        network never stops monitoring, logging, or fail-safe behaviour.
+    </p>
+</div>
+
+{% if not wifi.ssid %}
+<p class="skip-note">Changing networks isn&rsquo;t done from this page — the page is
+served over the very connection it would be changing. Re-flash with the network set
+in Raspberry Pi Imager, or connect a keyboard and run <code>sudo nmtui</code>.</p>
+{% endif %}
+
+<div class="setup-actions">
+    <a class="btn btn-primary btn-lg" href="{{ url_for('setup.cloud') }}">Continue</a>
+    <a class="btn btn-secondary" href="{{ url_for('setup.network') }}">Re-check</a>
+</div>
+{% endblock %}

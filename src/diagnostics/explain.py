@@ -28,7 +28,15 @@ SENSOR_SUBJECTS: tuple[str, ...] = (
 # System subsystems (used by the Service Window system-health view).
 # "rs485" is the shared Modbus bus the Honde probes hang off — a dead bus is
 # ONE fault (adapter/power), not three separate probe faults.
-SYSTEM_SUBJECTS: tuple[str, ...] = ("cloud", "lora", "gps", "storage", "rs485")
+SYSTEM_SUBJECTS: tuple[str, ...] = (
+    "cloud",
+    "lora",
+    "gps",
+    "storage",
+    "rs485",
+    "wifi",
+    "cloud_auth",
+)
 
 SENSOR_STATES: tuple[str, ...] = (
     "ok",
@@ -224,11 +232,48 @@ _SYSTEM_COPY: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
         "Reseat the USB adapter and check the 12V feed to the sensors, "
         "then power-cycle the unit if they stay silent.",
     ),
+    # WiFi link quality, judged at the MOUNTING location during commissioning.
+    # A link that merely works while you stand next to it with the lid open is
+    # not the same as one that holds for a year inside a sealed enclosure.
+    ("wifi", "ok"): ("Connected to {ssid} at {rssi} dBm — a solid link.", None, None),
+    ("wifi", "degraded"): (
+        "Connected to {ssid}, but only at {rssi} dBm.",
+        "The unit is near the edge of usable range for its mounting spot.",
+        "Readings will still upload, but expect gaps. Move the unit closer to the "
+        "access point, or add one nearer the water, before you leave the site.",
+    ),
+    ("wifi", "down"): (
+        "Not connected to any WiFi network.",
+        "No credentials for a network in range, or the access point is down.",
+        "Set the network from the Raspberry Pi Imager when flashing, or connect a "
+        "keyboard and run 'sudo nmtui'. The unit keeps monitoring and storing "
+        "readings locally either way.",
+    ),
+    # End-to-end proof that the pasted key actually authorizes THIS device —
+    # the one failure that used to stay silent until the next day.
+    ("cloud_auth", "ok"): ("The cloud accepted this unit's key.", None, None),
+    ("cloud_auth", "degraded"): (
+        "Reached the cloud, but it rejected this unit's key.",
+        "The key was mistyped, belongs to a different device, or was replaced.",
+        "Re-copy the key from cloud.bluesignal.xyz → Devices → this device, and "
+        "paste it again on the Cloud step.",
+    ),
+    ("cloud_auth", "down"): (
+        "Could not reach the cloud to check the key.",
+        "No internet route from this network, or DNS is blocked.",
+        "Confirm the site's internet works, then re-run this check. Readings are "
+        "stored locally and upload once the connection is back.",
+    ),
 }
 
 # Fallback values for template keys so formatting never raises and still
 # reads like a sentence ("flat for several minutes").
-_CONTEXT_DEFAULTS: dict[str, Any] = {"minutes": "several", "age_days": "many"}
+_CONTEXT_DEFAULTS: dict[str, Any] = {
+    "minutes": "several",
+    "age_days": "many",
+    "ssid": "this network",
+    "rssi": "an unknown",
+}
 
 
 class _SafeDict(dict):
