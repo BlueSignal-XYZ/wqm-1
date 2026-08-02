@@ -89,8 +89,8 @@ class TestNoChannelStillClamps:
 
     @pytest.mark.parametrize("module", ["ph", "tds", "turbidity"])
     def test_no_clamping_to_a_boundary(self, module):
-        import inspect
         import importlib
+        import inspect
 
         src = inspect.getsource(importlib.import_module(f"sensors.{module}"))
         assert "max(0.0, min(" not in src, f"{module} clamps into range again"
