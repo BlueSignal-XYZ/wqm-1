@@ -28,7 +28,8 @@ def app(tmp_path):
             "CONFIG_PATH": config_path,
             "CAL_PATH": cal_path,
             "CMD_SOCK": str(tmp_path / "cmd.sock"),
-            "PIN": "1234",
+            # Non-factory PIN: the setup wizard force-redirects units still on 1234.
+            "PIN": "4321",
             "SECRET_KEY": "test-secret",
         }
     )

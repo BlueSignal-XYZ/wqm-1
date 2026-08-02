@@ -162,3 +162,34 @@ class TestCayenneLPPEncodeClamp:
         assert len(payload) == 0
         payload = encode({"lon": -100.0})
         assert len(payload) == 0
+
+
+class TestRs485Channels:
+    """CH10-CH12 (chlorine, conductivity, salinity) — additive, round-trip."""
+
+    def test_new_channels_round_trip(self):
+        from radio.cayenne import decode, encode
+
+        reading = {
+            "temp_c": 25.0,
+            "ph": 6.86,
+            "chlorine_mgl": 0.35,
+            "conductivity_uscm": 480.0,
+            "salinity_ppt": 0.24,
+        }
+        decoded = decode(encode(reading))
+        assert decoded["chlorine_mgl"] == 0.35
+        assert decoded["conductivity_uscm"] == 480.0  # mS/cm on air, µS/cm back
+        assert decoded["salinity_ppt"] == 0.24
+
+    def test_ec_full_scale_survives_int16(self):
+        from radio.cayenne import decode, encode
+
+        decoded = decode(encode({"conductivity_uscm": 10000.0}))
+        assert decoded["conductivity_uscm"] == 10000.0
+
+    def test_absent_rs485_fields_add_no_bytes(self):
+        from radio.cayenne import encode
+
+        baseline = encode({"temp_c": 25.0})
+        assert encode({"temp_c": 25.0, "chlorine_mgl": None}) == baseline

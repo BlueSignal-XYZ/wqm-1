@@ -10,21 +10,25 @@
             V@4={{ cal.get('ph_v_at_4', 1.04) }}
             V@7={{ cal.get('ph_v_at_7', 1.50) }}
         </div>
+        <div class="health-message">{% if ages.ph is not none %}Last calibrated {{ ages.ph }} day{{ '' if ages.ph == 1 else 's' }} ago.{% else %}Never calibrated on this unit.{% endif %}</div>
         <a href="{{ url_for('calibration.ph') }}" class="btn">Calibrate pH</a>
     </div>
     <div class="card">
         <div class="card-label">TDS (k-factor)</div>
         <div class="card-value card-value-sm">k={{ cal.get('tds_k', 500.0) }}</div>
+        <div class="health-message">{% if ages.tds is not none %}Last calibrated {{ ages.tds }} day{{ '' if ages.tds == 1 else 's' }} ago.{% else %}Never calibrated on this unit.{% endif %}</div>
         <a href="{{ url_for('calibration.tds') }}" class="btn">Calibrate TDS</a>
     </div>
     <div class="card">
         <div class="card-label">Turbidity (clear water)</div>
         <div class="card-value card-value-sm">V_clear={{ cal.get('turbidity_v_clear', 4.1) }}</div>
+        <div class="health-message">{% if ages.turbidity is not none %}Last calibrated {{ ages.turbidity }} day{{ '' if ages.turbidity == 1 else 's' }} ago.{% else %}Never calibrated on this unit.{% endif %}</div>
         <a href="{{ url_for('calibration.turbidity') }}" class="btn">Calibrate Turbidity</a>
     </div>
     <div class="card">
         <div class="card-label">ORP (offset)</div>
         <div class="card-value card-value-sm">offset={{ cal.get('orp_offset_mv', 0.0) }} mV</div>
+        <div class="health-message">{% if ages.orp is not none %}Last calibrated {{ ages.orp }} day{{ '' if ages.orp == 1 else 's' }} ago.{% else %}Never calibrated on this unit.{% endif %}</div>
         <a href="{{ url_for('calibration.orp') }}" class="btn">Calibrate ORP</a>
     </div>
 </div>

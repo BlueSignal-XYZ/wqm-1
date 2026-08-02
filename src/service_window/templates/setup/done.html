@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "_health.html" import steps_bar, health_card %}
+{% block title %}Setup — Finish{% endblock %}
+{% block content %}
+{{ steps_bar(steps, step) }}
+<h1>Go / no-go checklist</h1>
+{% if overall == 'ok' %}
+<p class="lead">Everything checks out. Finish setup and this unit is on its own.</p>
+{% else %}
+<p class="lead">You can finish now and fix the flagged items later — the unit
+keeps monitoring either way.</p>
+{% endif %}
+<div class="grid">
+    {% for name, card in checklist.items() %}
+    {{ health_card(name|capitalize, card) }}
+    {% endfor %}
+</div>
+<form method="post">
+    <button type="submit" class="btn btn-primary">Finish setup</button>
+</form>
+{% endblock %}

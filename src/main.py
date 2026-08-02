@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-WQM-1 Firmware — Main Entry Point
+WQM-1 Firmware — Main Entry Point (v2)
 
-Initialises all hardware, runs the sensor loop, and coordinates
-LoRaWAN transmission, GPS fixes, cloud sync, and database storage.
+Initialises hardware, wires the worker threads, and hands control to the
+Supervisor. The v1 single-threaded 1s-tick loop is replaced by supervised
+workers (see src/app/): sampling, GPS, LoRa radio, cloud sync, command poll,
+heartbeat — so a slow GPS fix or a cloud retry can never stall sensor reads,
+relay rules, or LoRa receive windows. The supervisor pets the systemd
+watchdog only while every worker is provably alive.
 
 Designed for Raspberry Pi Zero 2W + WQM-1 HAT (PCBA rev Fin_3).
 """
@@ -16,16 +20,24 @@ import signal
 import socket
 import sys
 import threading
-import time
 import types
-from collections.abc import Callable
-from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from app.state import StateStore
+from app.supervisor import Supervisor
+from app.workers import (
+    CloudSyncWorker,
+    CommandWorker,
+    GpsWorker,
+    HeartbeatWorker,
+    RadioWorker,
+    SamplingWorker,
+    Worker,
+)
 from calibration.calibrate import CalibrationManager
 from control.led import StatusLEDs
 from control.relay import RelayController
@@ -41,25 +53,19 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
-from utils.config import get_settings
+from utils.config import FIRMWARE_VERSION, get_config_manager, hot_keys, restart_keys
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
-from utils.watchdog import FanController
+from utils.sdnotify import SdNotifier
+from utils.watchdog import FanController, HardwareWatchdog
 
 logger = logging.getLogger("wqm1")
 
+FW_VERSION = FIRMWARE_VERSION
 
-def _read_version() -> str:
-    """Read firmware version from VERSION file."""
-    version_file = Path(__file__).parent.parent / "VERSION"
-    try:
-        return version_file.read_text().strip()
-    except Exception as e:
-        logger.debug("Could not read VERSION file: %s", e)
-        return "1.0.0"
-
-
-FW_VERSION = _read_version()
+# The OTA agent (separate service) polls this flag file for "check now" nudges
+# from the command channel / otaPending hints.
+OTA_CHECK_FLAG = Path("/var/lib/bluesignal/ota-check-now")
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +74,7 @@ FW_VERSION = _read_version()
 
 
 def _setup_logging() -> None:
-    settings = get_settings()
+    settings = get_config_manager().settings
     root = logging.getLogger("wqm1")
     root.setLevel(logging.INFO)
 
@@ -101,25 +107,13 @@ def _setup_logging() -> None:
 
 
 class WQM1App:
-    """Main firmware application."""
+    """Firmware wiring: builds hardware + workers, runs the supervisor."""
 
     def __init__(self) -> None:
-        self._running = False
-        self._settings = get_settings()
-
-        # Timestamps for interval tracking
-        self._last_sensor_read = 0.0
-        self._last_lora_tx = 0.0
-        self._last_gps_fix = 0.0
-        self._last_db_rotate = 0.0
-        self._last_cloud_sync = 0.0
-        self._last_cmd_poll = 0.0
-
-        # GPS cache
-        self._gps_lat: float | None = None
-        self._gps_lon: float | None = None
-        self._gps_alt: float | None = None
-        self._gps_sats: int | None = None
+        self._config = get_config_manager()
+        self._settings_provider = lambda: self._config.settings
+        self._state = StateStore()
+        self._supervisor: Supervisor | None = None
 
         # Device identity
         self._device_id = get_device_id()
@@ -139,46 +133,103 @@ class WQM1App:
         self._tds: Any = None
         self._turbidity: Any = None
         self._orp: Any = None
+        self._modbus_bus: Any = None
+        self._chlorine: Any = None
+        self._multi: Any = None
         self._db: Any = None
         self._cloud: Any = None
         self._health: Any = None
         self._cal: Any = None
         self._rules: Any = None
+        self._monitor: Any = None
+        self._adaptive: Any = None
+        self._heartbeat_worker: HeartbeatWorker | None = None
         self._cmd_sock: socket.socket | None = None
         self._cmd_thread: threading.Thread | None = None
+        self._running = False
+
+    @property
+    def _settings(self) -> Any:
+        return self._config.settings
 
     def start(self) -> None:
-        """Initialise all hardware and start background threads."""
+        """Initialise all hardware and build the worker set."""
         logger.info("WQM-1 firmware v%s starting (device=%s)", FW_VERSION, self._device_id)
 
-        # --- GPIO outputs ---
-        self._relays = RelayController()
-        self._relays.all_off()
-        self._leds = StatusLEDs()
-        self._leds.startup_test()
-        self._fan = FanController(
-            on_temp=self._settings.fan_on_temp_c,
-            off_temp=self._settings.fan_off_temp_c,
-        )
+        # --- Host board: decides whether Linux can reach the headers ---
+        from platform_support import detect_board
 
-        # --- ADC + sensors ---
-        self._adc = ADS1115()
-        self._temp = DS18B20()
+        self._board = detect_board(override=self._settings.board)
+        direct = self._board.has_direct_headers
+        if not direct:
+            # Arduino Q family (UNO Q / VENTUNO Q): headers belong to the
+            # MCU, so analog probes, LoRa, relays, LEDs, and the fan are
+            # unavailable from Linux. Digital-first mode: RS485 probes over
+            # the USB adapter, USB GPS, and Wi-Fi cloud sync carry the unit.
+            logger.info(
+                "Board %s has no direct header access — running digital-first "
+                "(RS485 + GPS + cloud); analog/LoRa/relay disabled",
+                self._board.name,
+            )
+
+        # --- GPIO outputs (direct-header boards only) ---
+        if direct:
+            self._relays = RelayController()
+            self._relays.all_off()
+            self._leds = StatusLEDs()
+            self._leds.startup_test()
+            self._fan = FanController(
+                on_temp=self._settings.fan_on_temp_c,
+                off_temp=self._settings.fan_off_temp_c,
+            )
+
+        # --- ADC + sensors (direct-header boards only) ---
         self._cal = CalibrationManager()
-        self._ph = PHSensor(self._adc)
-        self._tds = TDSSensor(self._adc)
-        self._turbidity = TurbiditySensor(self._adc)
-        if self._settings.orp_enabled:
-            self._orp = ORPSensor(self._adc)
-        else:
-            logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
+        if direct:
+            self._adc = ADS1115()
+            self._temp = DS18B20()
+            self._ph = PHSensor(self._adc)
+            self._tds = TDSSensor(self._adc)
+            self._turbidity = TurbiditySensor(self._adc)
+            if self._settings.orp_enabled and not self._settings.rs485_orp_enabled:
+                self._orp = ORPSensor(self._adc)
+            elif not self._settings.rs485_orp_enabled:
+                logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
 
-        # Apply calibration to sensors
+        # --- RS485 (Modbus) sensors — Honde probes on the shared USB bus.
+        # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
+        # supersede their analog equivalents inside SamplingWorker.step().
+        s = self._settings
+        if s.rs485_chlorine_enabled or s.rs485_orp_enabled or s.rs485_multi_enabled:
+            from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
+            from sensors.modbus import ModbusBus
+
+            self._modbus_bus = ModbusBus(s.rs485_port)
+            if s.rs485_chlorine_enabled:
+                self._chlorine = HondeChlorineSensor(self._modbus_bus, s.rs485_chlorine_addr)
+            if s.rs485_orp_enabled:
+                self._orp = HondeOrpSensor(self._modbus_bus, s.rs485_orp_addr)
+                logger.info("Digital ORP (RS485 addr %d) supersedes analog", s.rs485_orp_addr)
+            if s.rs485_multi_enabled:
+                self._multi = HondeMultiSensor(self._modbus_bus, s.rs485_multi_addr)
+            logger.info(
+                "RS485 bus on %s (chlorine=%s orp=%s multi=%s)",
+                s.rs485_port,
+                s.rs485_chlorine_enabled,
+                s.rs485_orp_enabled,
+                s.rs485_multi_enabled,
+            )
+
+        # Apply calibration to the analog sensors (digital probes hold their
+        # own calibration state on the probe itself)
         cal = self._cal.data
-        self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
-        self._tds.set_calibration(cal.tds_k)
-        self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
-        if self._orp:
+        if self._ph:
+            self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
+        if self._tds:
+            self._tds.set_calibration(cal.tds_k)
+        if self._turbidity:
+            self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
+        if self._orp and hasattr(self._orp, "set_offset"):
             self._orp.set_offset(cal.orp_offset_mv, 0.0)
 
         # --- Database ---
@@ -187,20 +238,35 @@ class WQM1App:
         # --- Health reporter ---
         self._health = HealthReporter(FW_VERSION)
 
+        # --- Smarter sensing (v2.1 modules; optional so a partial install
+        # degrades to fixed-cadence sampling rather than failing to boot) ---
+        try:
+            from sensing.adaptive import AdaptiveSampler
+            from sensing.monitor import SensorMonitor
+
+            self._adaptive = AdaptiveSampler(self._settings_provider)
+            self._monitor = SensorMonitor(self._settings_provider)
+            logger.info("Sensing modules enabled (adaptive + monitor)")
+        except ImportError:
+            logger.info("Sensing modules not present — fixed-cadence sampling")
+
         # --- GPS ---
         try:
             self._gps = GPS(baud=self._settings.gps_baud)
         except Exception as e:
             logger.warning("GPS init failed: %s", e)
 
-        # --- LoRa + LoRaWAN ---
+        # --- LoRa + LoRaWAN (direct-header boards only: SX1262 is SPI) ---
         try:
+            if not direct:
+                raise RuntimeError("no direct SPI on this board")
             self._radio = SX1262()
             self._radio.init()
             app_key = bytes.fromhex(self._settings.app_key)
             self._lorawan = LoRaWANMAC(self._radio, self._dev_eui, APP_EUI, app_key)
 
-            # Restore session from DB
+            # Restore session from DB (join, if needed, happens on the radio
+            # worker's thread so a missing gateway can't stall boot).
             saved = self._db.load_session()
             if saved and saved.get("joined"):
                 session = LoRaWANSession(
@@ -212,14 +278,10 @@ class WQM1App:
                     joined=True,
                 )
                 self._lorawan.restore_session(session)
-            else:
-                self._otaa_join()
         except Exception as e:
             logger.warning("LoRa init failed: %s", e)
 
         # --- Cloud (HTTP/WiFi) transport — coexists with LoRaWAN ---
-        # Native store-and-forward uplink + relay command polling. Enabled once
-        # the unit is commissioned with an API key (service window /provision/cloud).
         if self._settings.cloud_enabled and self._settings.api_key:
             from cloud import CloudClient
 
@@ -227,12 +289,14 @@ class WQM1App:
                 device_id=self._device_id,
                 ingest_url=self._settings.cloud_ingest_url,
                 command_url=self._settings.cloud_command_url,
+                api_base=self._settings.cloud_api_base,
                 api_key=self._settings.api_key,
                 fw_version=FW_VERSION,
                 batch_size=self._settings.batch_size,
                 max_retries=self._settings.max_retries,
                 retry_delays=self._settings.retry_delays,
                 radios_provider=self._radios_snapshot,
+                health_provider=self._health.get_report,
             )
             logger.info("Cloud HTTP transport enabled (ingest=%s)", self._settings.cloud_ingest_url)
         else:
@@ -248,7 +312,21 @@ class WQM1App:
         self._start_cmd_listener()
 
         # --- Heartbeat LED ---
-        self._leds.heartbeat_start()
+        if self._leds:
+            self._leds.heartbeat_start()
+
+        # --- Supervisor + workers ---
+        self._supervisor = Supervisor(
+            workers=self._build_workers(),
+            state=self._state,
+            fan=self._fan,
+            leds=self._leds,
+            db=self._db,
+            notifier=SdNotifier(),
+            hw_watchdog=(
+                HardwareWatchdog() if direct and self._settings.hardware_watchdog_enabled else None
+            ),
+        )
 
         # --- Signal handlers ---
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -256,6 +334,75 @@ class WQM1App:
         atexit.register(self._shutdown)
 
         logger.info("All subsystems initialised")
+
+    def _build_workers(self) -> list[Worker]:
+        workers: list[Worker] = [
+            SamplingWorker(
+                self._settings_provider,
+                sensors={
+                    "temperature": self._temp,
+                    "ph": self._ph,
+                    "tds": self._tds,
+                    "turbidity": self._turbidity,
+                    "orp": self._orp,
+                    "chlorine": self._chlorine,
+                    "multi485": self._multi,
+                },
+                db=self._db,
+                rules=self._rules,
+                relays=self._relays,
+                leds=self._leds,
+                health=self._health,
+                state=self._state,
+                monitor=self._monitor,
+                adaptive=self._adaptive,
+            )
+        ]
+        if self._gps is not None:
+            workers.append(GpsWorker(self._settings_provider, self._gps, self._leds, self._state))
+        if self._lorawan is not None:
+            workers.append(
+                _JoiningRadioWorker(
+                    self._settings_provider,
+                    lorawan=self._lorawan,
+                    radio=self._radio,
+                    db=self._db,
+                    rules=self._rules,
+                    leds=self._leds,
+                    health=self._health,
+                    state=self._state,
+                    persist_session=self._persist_session,
+                    cayenne_encode=cayenne_encode,
+                    fport_app=FPORT_APP,
+                )
+            )
+        if self._cloud is not None:
+            workers.append(CloudSyncWorker(self._settings_provider, self._cloud, self._db))
+            workers.append(
+                CommandWorker(
+                    self._settings_provider,
+                    self._cloud,
+                    self._state,
+                    apply_command=self._apply_cloud_command,
+                    on_config_version=self._reconcile_remote_config,
+                    on_ota_pending=self._nudge_ota_agent,
+                )
+            )
+            self._heartbeat_worker = HeartbeatWorker(
+                self._settings_provider,
+                self._cloud,
+                self._db,
+                self._health,
+                self._state,
+                config_version_provider=lambda: self._config.remote_version,
+                sensor_health_provider=(
+                    self._monitor.health if self._monitor is not None else None
+                ),
+            )
+            workers.append(self._heartbeat_worker)
+        return workers
+
+    # -- service-window command socket ---------------------------------------
 
     _CMD_SOCK_PATH = "/var/run/bluesignal/cmd.sock"
 
@@ -311,6 +458,14 @@ class WQM1App:
                 self._relays.set(channel, state)
                 return {"ok": True, "channel": channel, "state": state}
             return {"ok": False, "error": "relays not initialised"}
+        if action == "restart":
+            self._state.request_restart()
+            return {"ok": True, "restarting": True}
+        if action == "config_reload":
+            self._config.reload()
+            return {"ok": True, "configVersion": self._config.remote_version}
+        if action == "health":
+            return {"ok": True, "health": self._health.get_report()}
         return {"ok": False, "error": f"unknown action: {action}"}
 
     _POLICIES_PATHS: list[str | Path] = [
@@ -336,174 +491,10 @@ class WQM1App:
                     logger.warning("Failed to load policies from %s: %s", path, e)
         logger.info("No policies.yaml found, using defaults")
 
-    def _otaa_join(self) -> None:
-        """Attempt OTAA join with backoff."""
-        for attempt in range(5):
-            logger.info("OTAA join attempt %d/5", attempt + 1)
-            try:
-                if self._lorawan.join(timeout_s=10.0):
-                    self._persist_session()
-                    return
-            except Exception as e:
-                logger.warning("Join attempt %d failed: %s", attempt + 1, e)
-            time.sleep(min(30 * (2**attempt), 300))
-        logger.error("OTAA join failed after 5 attempts")
-
     def _persist_session(self) -> None:
         """Save LoRaWAN session to database."""
         s = self._lorawan.session
         self._db.save_session(s.dev_addr, s.nwk_skey, s.app_skey, s.fcnt_up, s.fcnt_down, s.joined)
-
-    def run(self) -> None:
-        """Main loop."""
-        self._running = True
-        self._do_sensor_read()
-        self._last_sensor_read = time.monotonic()
-
-        while self._running:
-            now = time.monotonic()
-
-            try:
-                self._fan.update()
-            except Exception as e:
-                logger.error("Fan update error: %s", e)
-
-            if now - self._last_sensor_read >= self._settings.sensor_read_s:
-                self._do_sensor_read()
-                self._last_sensor_read = now
-
-            if now - self._last_gps_fix >= self._settings.gps_fix_s:
-                self._do_gps_fix()
-                self._last_gps_fix = now
-
-            if self._lorawan and now - self._last_lora_tx >= self._settings.lora_tx_s:
-                self._do_lora_tx()
-                self._last_lora_tx = now
-
-            if self._cloud and now - self._last_cloud_sync >= self._settings.sync_interval_s:
-                self._do_cloud_sync()
-                self._last_cloud_sync = now
-
-            if self._cloud and now - self._last_cmd_poll >= self._settings.command_poll_s:
-                self._do_command_poll()
-                self._last_cmd_poll = now
-
-            if now - self._last_db_rotate >= 600:
-                try:
-                    self._db.rotate()
-                except Exception as e:
-                    logger.error("DB rotate error: %s", e)
-                self._last_db_rotate = now
-
-            time.sleep(1.0)
-
-    def _do_sensor_read(self) -> None:
-        """Read all sensors, apply rules, store in DB."""
-        logger.info("Reading sensors...")
-
-        temp_c = None
-        try:
-            temp_c = self._temp.read_temp_c()
-        except Exception as e:
-            logger.warning("Temperature read failed: %s", e)
-
-        ph = self._safe_read("pH", lambda: self._ph.read(temp_c=temp_c))
-        tds = self._safe_read("TDS", lambda: self._tds.read(temp_c=temp_c))
-        turb = self._safe_read("Turbidity", lambda: self._turbidity.read())
-        orp = self._safe_read("ORP", lambda: self._orp.read()) if self._orp else None
-
-        reading = {
-            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "ph": ph,
-            "tds_ppm": tds,
-            "turbidity_ntu": turb,
-            "orp_mv": orp,
-            "temp_c": temp_c,
-            "lat": self._gps_lat,
-            "lon": self._gps_lon,
-            "alt_m": self._gps_alt,
-            "battery_v": None,
-            "relay_state": self._relays.get_state_bitmask() if self._relays else 0,
-        }
-
-        if self._rules:
-            try:
-                self._rules.evaluate(reading)
-            except Exception as e:
-                logger.error("Rules evaluation error: %s", e)
-
-        try:
-            row_id = self._db.insert_reading(reading)
-            self._health.update_last_seen()
-            logger.info(
-                "Stored id=%d: pH=%s TDS=%s Turb=%s ORP=%s T=%s",
-                row_id,
-                f"{ph:.2f}" if ph is not None else "N/A",
-                f"{tds:.1f}" if tds is not None else "N/A",
-                f"{turb:.1f}" if turb is not None else "N/A",
-                f"{orp:.1f}" if orp is not None else "N/A",
-                f"{temp_c:.1f}°C" if temp_c is not None else "N/A",
-            )
-        except Exception as e:
-            logger.error("DB insert failed: %s", e)
-            self._leds.error_pattern(3)
-
-    def _safe_read(self, name: str, fn: Callable[[], float | None]) -> float | None:
-        try:
-            return fn()
-        except Exception as e:
-            logger.warning("%s read failed: %s", name, e)
-            self._leds.error_pattern(2)
-            return None
-
-    def _do_gps_fix(self) -> None:
-        if self._gps is None:
-            return
-        self._leds.gps_fix_on()
-        try:
-            fix = self._gps.get_fix(timeout_s=self._settings.gps_fix_timeout_s)
-            if fix:
-                self._gps_lat = fix.latitude
-                self._gps_lon = fix.longitude
-                self._gps_alt = fix.altitude
-                self._gps_sats = fix.satellites
-                logger.info("GPS fix: %.6f, %.6f", fix.latitude, fix.longitude)
-            else:
-                if self._gps_lat is None:
-                    self._gps.power_cycle()
-        except Exception as e:
-            logger.warning("GPS error: %s", e)
-        finally:
-            self._leds.gps_fix_off()
-
-    def _do_lora_tx(self) -> None:
-        if not self._lorawan or not self._lorawan.session.joined:
-            return
-
-        latest = self._db.get_latest()
-        if not latest:
-            return
-
-        payload = cayenne_encode(latest)
-        if not payload:
-            return
-
-        self._leds.lora_tx_on()
-        try:
-            downlink = self._lorawan.send_uplink(payload, fport=FPORT_APP)
-            self._persist_session()
-
-            if self._radio:
-                self._health.update_rssi(self._radio.get_rssi())
-
-            if downlink and self._rules:
-                fport = downlink[0]
-                data = downlink[1:]
-                self._rules.process_downlink_command(fport, data)
-        except Exception as e:
-            logger.error("LoRa TX failed: %s", e)
-        finally:
-            self._leds.lora_tx_off()
 
     def _radios_snapshot(self) -> dict[str, Any] | None:
         """Current radio status for the cloud Radios card — LoRa presence + GPS
@@ -517,62 +508,125 @@ class WQM1App:
                 "cs": 0,
             }
         if self._gps is not None:
+            gps = self._state.gps()
             snap["gps"] = {
-                "fix": self._gps_lat is not None and self._gps_lon is not None,
-                "sats": self._gps_sats,
-                "lat": self._gps_lat,
-                "lon": self._gps_lon,
+                "fix": gps.lat is not None and gps.lon is not None,
+                "sats": gps.sats,
+                "lat": gps.lat,
+                "lon": gps.lon,
             }
         return snap or None
 
-    def _do_cloud_sync(self) -> None:
-        """Upload buffered readings to the cloud over HTTP (store-and-forward)."""
-        try:
-            n = self._cloud.sync_readings(self._db)
-            if n:
-                logger.info("Cloud sync: uploaded %d reading(s)", n)
-        except Exception as e:
-            logger.error("Cloud sync failed: %s", e)
-
-    def _do_command_poll(self) -> None:
-        """Poll the cloud for queued relay commands and apply them."""
-        try:
-            for cmd in self._cloud.poll_commands():
-                self._apply_cloud_command(cmd)
-        except Exception as e:
-            logger.error("Cloud command poll failed: %s", e)
+    # -- cloud command handling ------------------------------------------------
 
     def _apply_cloud_command(self, cmd: dict) -> None:
-        """Actuate a single cloud relay command via the shared dispatcher, then ack."""
+        """Actuate a single cloud command via the shared dispatcher, then ack."""
         cmd_id = cmd.get("id")
-        if cmd.get("type") != "relay":
-            self._cloud.ack_command(cmd_id, "error", f"unsupported type: {cmd.get('type')}")
-            return
+        cmd_type = cmd.get("type")
         try:
-            channel = int(cmd.get("channel") or 1)
-            state = bool(cmd.get("state"))
-            result = self._handle_cmd({"action": "relay_set", "channel": channel, "state": state})
-            if not result.get("ok"):
-                raise ValueError(result.get("error", "relay_set failed"))
-            # Optional auto-off after a duration (cloud sends durationSeconds).
-            duration = cmd.get("durationSeconds")
-            if state and duration:
-                threading.Timer(
-                    float(duration),
-                    lambda ch=channel: self._handle_cmd(
-                        {"action": "relay_set", "channel": ch, "state": False}
-                    ),
-                ).start()
-            self._cloud.ack_command(cmd_id, "done")
-            logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
+            if cmd_type == "relay":
+                channel = int(cmd.get("channel") or 1)
+                state = bool(cmd.get("state"))
+                result = self._handle_cmd(
+                    {"action": "relay_set", "channel": channel, "state": state}
+                )
+                if not result.get("ok"):
+                    raise ValueError(result.get("error", "relay_set failed"))
+                # Optional auto-off after a duration (cloud sends durationSeconds).
+                duration = cmd.get("durationSeconds")
+                if state and duration:
+                    threading.Timer(
+                        float(duration),
+                        lambda ch=channel: self._handle_cmd(
+                            {"action": "relay_set", "channel": ch, "state": False}
+                        ),
+                    ).start()
+                self._cloud.ack_command(cmd_id, "done")
+                logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
+            elif cmd_type == "restart":
+                self._cloud.ack_command(cmd_id, "done")
+                self._state.request_restart()
+            elif cmd_type == "config_reload":
+                self._config.reload()
+                self._cloud.ack_command(cmd_id, "done")
+            elif cmd_type == "ota_check":
+                self._nudge_ota_agent()
+                self._cloud.ack_command(cmd_id, "done")
+            elif cmd_type == "diagnostics":
+                ok = self._heartbeat_worker.send_now() if self._heartbeat_worker else False
+                self._cloud.ack_command(
+                    cmd_id, "done" if ok else "error", None if ok else "heartbeat send failed"
+                )
+            else:
+                self._cloud.ack_command(cmd_id, "error", f"unsupported type: {cmd_type}")
         except Exception as e:
             logger.error("Apply cloud command %s failed: %s", cmd_id, e)
             with contextlib.suppress(Exception):
                 self._cloud.ack_command(cmd_id, "error", str(e))
 
+    def _reconcile_remote_config(self, cloud_version: int) -> None:
+        """Fetch + validate + apply desired config when the poll reports a new
+        version. Rejection keeps last-known-good and tells the cloud why."""
+        if cloud_version == self._config.remote_version:
+            return
+        fetched = self._cloud.fetch_config()
+        if not fetched:
+            return
+        version, values = fetched
+        ok, errors = self._config.apply_remote_config(version, values)
+        if ok:
+            logger.info("Remote config v%d applied (%d keys)", version, len(values))
+            self._state.emit_event(
+                {
+                    "type": "config_applied",
+                    "message": f"Applied remote config v{version}",
+                    "details": {"version": version, "keys": sorted(values.keys())},
+                }
+            )
+            applied_hot = hot_keys(values)
+            needs_restart = restart_keys(values)
+            if applied_hot:
+                logger.info("Hot-applied: %s", ", ".join(sorted(applied_hot)))
+            if needs_restart:
+                logger.info(
+                    "Restart-required keys applied (%s) — requesting graceful restart",
+                    ", ".join(sorted(needs_restart)),
+                )
+                self._state.request_restart()
+        else:
+            logger.warning("Remote config v%d rejected: %s", version, "; ".join(errors))
+            self._state.emit_event(
+                {
+                    "type": "config_rejected",
+                    "message": f"Rejected remote config v{version}",
+                    "details": {"version": version, "errors": errors[:5]},
+                }
+            )
+
+    def _nudge_ota_agent(self) -> None:
+        """Touch the flag file the OTA agent watches for an immediate check."""
+        try:
+            OTA_CHECK_FLAG.parent.mkdir(parents=True, exist_ok=True)
+            OTA_CHECK_FLAG.touch()
+        except OSError as e:
+            logger.warning("Could not nudge OTA agent: %s", e)
+
+    # -- lifecycle ---------------------------------------------------------------
+
+    def run(self) -> None:
+        """Start workers and block in the supervisor loop."""
+        assert self._supervisor is not None
+        self._running = True
+        self._supervisor.start()
+        self._supervisor.run()
+        self._running = False
+        self._supervisor.stop()
+
     def _handle_signal(self, signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
+        if self._supervisor:
+            self._supervisor.stop_event.set()
 
     def _shutdown(self) -> None:
         logger.info("Shutting down...")
@@ -590,6 +644,7 @@ class WQM1App:
             (self._relays, "all_off"),
             (self._radio, "close"),
             (self._gps, "close"),
+            (self._modbus_bus, "close"),
             (self._adc, "close"),
             (self._db, "close"),
             (self._leds, "cleanup"),
@@ -598,6 +653,24 @@ class WQM1App:
                 with contextlib.suppress(Exception):
                     getattr(obj, method)()
         logger.info("Shutdown complete")
+
+
+class _JoiningRadioWorker(RadioWorker):
+    """RadioWorker that performs the OTAA join on its own thread first, so a
+    missing gateway delays LoRa only — never sampling or cloud sync."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._join_attempts = 0
+
+    def step(self) -> None:
+        if not self._lorawan.session.joined:
+            self._join_attempts += 1
+            logger.info("OTAA join attempt %d", self._join_attempts)
+            if self._lorawan.join(timeout_s=10.0):
+                self._persist_session()
+            return
+        super().step()
 
 
 def main() -> None:

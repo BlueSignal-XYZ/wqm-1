@@ -10,9 +10,12 @@ import logging
 import threading
 import time
 
-import lgpio
-import RPi.GPIO as GPIO
-import spidev
+try:
+    import lgpio
+    import RPi.GPIO as GPIO
+    import spidev
+except ImportError:  # non-Pi host (e.g. Arduino UNO Q): SPI belongs to the
+    lgpio = GPIO = spidev = None  # MCU — the board gate never builds SX1262
 
 from utils.config import (
     LORA_BANDWIDTH,
@@ -109,6 +112,8 @@ class SX1262:
     """SX1262 LoRa transceiver via SPI."""
 
     def __init__(self) -> None:
+        if spidev is None or GPIO is None or lgpio is None:
+            raise RuntimeError("spidev/RPi.GPIO/lgpio not installed — no direct SPI on this host")
         self._spi: spidev.SpiDev | None = None
         self._tx_done_event = threading.Event()
         self._last_rssi = -120

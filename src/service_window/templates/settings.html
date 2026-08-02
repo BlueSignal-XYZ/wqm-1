@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="lead">The essentials. Everything else is managed from the cloud or the
+advanced configuration file.</p>
+<form method="post" class="setup-form">
+    {% for key, (label, help) in simple.items() %}
+    <label>
+        {{ label }}
+        {% if specs[key].type.__name__ == 'bool' %}
+        <input type="checkbox" name="{{ key }}" {% if values[key] %}checked{% endif %}>
+        {% else %}
+        <input type="number" name="{{ key }}" value="{{ values[key] }}"
+               {% if specs[key].min is not none %}min="{{ specs[key].min }}"{% endif %}
+               {% if specs[key].max is not none %}max="{{ specs[key].max }}"{% endif %}
+               {% if specs[key].type.__name__ == 'float' %}step="0.5"{% endif %}>
+        {% endif %}
+        <small>{{ help }}</small>
+    </label>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Save</button>
+</form>
+<hr>
+<form method="post">
+    <p><small>Applies saved settings that need a restart. The unit keeps its data;
+    monitoring resumes in about a minute.</small></p>
+    <button type="submit" name="restart" value="1" class="btn btn-secondary">Restart monitoring service</button>
+</form>
+{% endblock %}

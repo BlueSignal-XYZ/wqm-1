@@ -11,11 +11,14 @@ import contextlib
 import logging
 from typing import IO
 
-import RPi.GPIO as GPIO
-
 from utils.config import FAN_EN
 
 logger = logging.getLogger("wqm1.fan")
+
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # non-Pi host (e.g. Arduino UNO Q): fan pin belongs to
+    GPIO = None  # the MCU — the board gate never constructs FanController
 
 
 def get_cpu_temp() -> float:
@@ -31,6 +34,8 @@ class FanController:
     """On/off fan with temperature hysteresis."""
 
     def __init__(self, on_temp: float = 60.0, off_temp: float = 55.0) -> None:
+        if GPIO is None:
+            raise RuntimeError("RPi.GPIO not installed — no direct GPIO on this host")
         self._on_temp = on_temp
         self._off_temp = off_temp
         self._is_on = False

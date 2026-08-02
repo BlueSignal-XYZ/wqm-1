@@ -1,0 +1,22 @@
+[Unit]
+Description=BlueSignal WQM-1 OTA Update Agent
+# Root is required: the agent flips the /opt/bluesignal/current symlink and
+# restarts the firmware services. It holds no other privileges by design.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 -m ota
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Restart=always
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

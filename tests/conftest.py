@@ -36,6 +36,10 @@ _bus.read_i2c_block_data.return_value = [0x85, 0x83]
 _smbus2.SMBus.return_value = _bus
 sys.modules["smbus2"] = _smbus2
 
+# lgpio (sx1262 DIO1 edge detection; imported defensively since HW1)
+_lgpio = MagicMock()
+sys.modules["lgpio"] = _lgpio
+
 # spidev
 _spidev = MagicMock()
 _spi = MagicMock()

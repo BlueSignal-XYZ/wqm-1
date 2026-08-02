@@ -1,7 +1,8 @@
 {% extends "base.html" %}
+{% from "_health.html" import health_card, health_dot %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<h1>Dashboard</h1>
+<h1>{{ health_dot(overall) }} Device status</h1>
 
 <div class="info-bar">
     <span>Firmware v{{ fw_version }}</span>
@@ -10,48 +11,40 @@
     <span>LoRa: {{ 'Joined' if lora_joined else 'Not joined' }} (fcnt={{ lora_fcnt }})</span>
 </div>
 
-{% if reading %}
+<h2>Sensors</h2>
 <div class="grid">
-    <div class="card">
-        <div class="card-label">pH</div>
-        <div class="card-value">{{ "%.2f"|format(reading.ph) if reading.ph is not none else "N/A" }}</div>
-    </div>
-    <div class="card">
-        <div class="card-label">TDS</div>
-        <div class="card-value">{{ "%.1f"|format(reading.tds_ppm) if reading.tds_ppm is not none else "N/A" }} ppm</div>
-    </div>
-    <div class="card">
-        <div class="card-label">Turbidity</div>
-        <div class="card-value">{{ "%.1f"|format(reading.turbidity_ntu) if reading.turbidity_ntu is not none else "N/A" }} NTU</div>
-    </div>
-    <div class="card">
-        <div class="card-label">ORP</div>
-        <div class="card-value">{{ "%.1f"|format(reading.orp_mv) if reading.orp_mv is not none else "N/A" }} mV</div>
-    </div>
-    <div class="card">
-        <div class="card-label">Temperature</div>
-        <div class="card-value">{{ "%.1f"|format(reading.temp_c) if reading.temp_c is not none else "N/A" }}&deg;C</div>
-    </div>
-    <div class="card">
-        <div class="card-label">GPS</div>
-        <div class="card-value">
-            {% if reading.lat is not none %}
-            {{ "%.6f"|format(reading.lat) }}, {{ "%.6f"|format(reading.lon) }}
-            {% else %}
-            No fix
-            {% endif %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-label">Relays</div>
-        <div class="card-value">0x{{ "%02X"|format(reading.relay_state or 0) }}</div>
-    </div>
-    <div class="card">
-        <div class="card-label">Last Reading</div>
-        <div class="card-value card-value-sm">{{ reading.timestamp }}</div>
-    </div>
+    {% for name, card in sensor_cards.items() %}
+    {{ health_card(name|capitalize, card) }}
+    {% endfor %}
+</div>
+
+<h2>Connections</h2>
+<div class="grid">
+    {% for name, card in system_cards.items() %}
+    {{ health_card(name|capitalize, card) }}
+    {% endfor %}
+</div>
+
+{% if reading %}
+<h2>Latest reading</h2>
+<div class="grid">
+    <div class="card"><div class="card-label">pH</div>
+        <div class="card-value">{{ "%.2f"|format(reading.ph) if reading.ph is not none else "—" }}</div></div>
+    <div class="card"><div class="card-label">TDS</div>
+        <div class="card-value">{{ "%.1f"|format(reading.tds_ppm) if reading.tds_ppm is not none else "—" }} ppm</div></div>
+    <div class="card"><div class="card-label">Turbidity</div>
+        <div class="card-value">{{ "%.1f"|format(reading.turbidity_ntu) if reading.turbidity_ntu is not none else "—" }} NTU</div></div>
+    <div class="card"><div class="card-label">Temperature</div>
+        <div class="card-value">{{ "%.1f"|format(reading.temp_c) if reading.temp_c is not none else "—" }}&deg;C</div></div>
+    <div class="card"><div class="card-label">GPS</div>
+        <div class="card-value">{% if reading.lat is not none %}{{ "%.5f"|format(reading.lat) }}, {{ "%.5f"|format(reading.lon) }}{% else %}No fix{% endif %}</div></div>
+    <div class="card"><div class="card-label">Recorded</div>
+        <div class="card-value">{{ reading.timestamp }}</div></div>
 </div>
 {% else %}
-<p>No sensor data yet.</p>
+<p>No readings recorded yet — make sure the probes are in the water.</p>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>setTimeout(function () { window.location.reload(); }, 30000);</script>
 {% endblock %}

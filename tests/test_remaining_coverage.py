@@ -8,6 +8,21 @@ import pytest
 import yaml
 
 
+def _setup_done_config(tmp_path):
+    """A config.yaml with the setup wizard marked complete.
+
+    v2's before_request funnel redirects EVERY route into /setup while the
+    factory PIN is in place and setup_completed is unset — these tests are
+    about diagnostics/provisioning/relays, not the wizard, so they must opt
+    out or every request under test lands on the wizard instead.
+    """
+    import yaml as _yaml
+
+    p = tmp_path / "config.yaml"
+    p.write_text(_yaml.safe_dump({"service_window": {"setup_completed": True}}))
+    return str(p)
+
+
 # ---------------------------------------------------------------------------
 # calibrate.py:77 — _save() error path, tmp cleanup
 # ---------------------------------------------------------------------------
@@ -145,9 +160,14 @@ class TestDiagnosticsEdgeCases:
         conn.close()
         app = create_app(
             {
+                # Non-factory PIN: units on 1234 are force-redirected to /setup.
+                "PIN": "9999",
                 "db_path": db_path,
-                "pin": "1234",
-                "config_path": str(tmp_path / "config.yaml"),
+                # Non-factory PIN: needs_setup() short-circuits on it WITHOUT reading
+                # config.yaml — several tests here patch Path.exists globally, which
+                # would otherwise re-engage the setup funnel mid-test.
+                "pin": "9999",
+                "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }
@@ -241,9 +261,14 @@ class TestProvisionEdgeCases:
         conn.close()
         app = create_app(
             {
+                # Non-factory PIN: units on 1234 are force-redirected to /setup.
+                "PIN": "9999",
                 "db_path": db_path,
-                "pin": "1234",
-                "config_path": str(tmp_path / "config.yaml"),
+                # Non-factory PIN: needs_setup() short-circuits on it WITHOUT reading
+                # config.yaml — several tests here patch Path.exists globally, which
+                # would otherwise re-engage the setup funnel mid-test.
+                "pin": "9999",
+                "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }
@@ -359,9 +384,14 @@ class TestRelaySuccessFlash:
         conn.close()
         app = create_app(
             {
+                # Non-factory PIN: units on 1234 are force-redirected to /setup.
+                "PIN": "9999",
                 "db_path": db_path,
-                "pin": "1234",
-                "config_path": str(tmp_path / "config.yaml"),
+                # Non-factory PIN: needs_setup() short-circuits on it WITHOUT reading
+                # config.yaml — several tests here patch Path.exists globally, which
+                # would otherwise re-engage the setup funnel mid-test.
+                "pin": "9999",
+                "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }

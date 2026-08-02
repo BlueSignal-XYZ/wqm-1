@@ -8,6 +8,7 @@ the platform commissioning workflow (step 6).
 
 import logging
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,9 @@ import yaml
 logger = logging.getLogger("wqm1.calibration")
 
 _DEFAULT_CAL_PATH = "/etc/bluesignal/calibration.yaml"
+
+# Sensors that have calibration coefficients (temperature has none).
+CALIBRATABLE_SENSORS = ("ph", "tds", "turbidity", "orp")
 
 
 @dataclass
@@ -38,6 +42,11 @@ class CalibrationData:
 
     # Platform-applied offsets (from commissioning step 6)
     platform_offsets: dict[str, float] = field(default_factory=dict)
+
+    # Per-sensor last-calibration timestamps (ISO 8601, UTC). Added v2.1 —
+    # older calibration.yaml files simply lack this key and load as {}
+    # (calibrated_at for every sensor is then None).
+    calibrated_at: dict[str, str] = field(default_factory=dict)
 
 
 class CalibrationManager:
@@ -101,6 +110,7 @@ class CalibrationManager:
         self._data.ph_v_at_4 = v_ph4
         self._data.ph_v_at_7 = v_ph7
         self._data.ph_slope = slope
+        self._stamp("ph")
         self._save()
         logger.info("pH calibrated: V@4=%.4f V@7=%.4f slope=%.4f", v_ph4, v_ph7, slope)
         return slope
@@ -121,6 +131,7 @@ class CalibrationManager:
             return self._data.tds_k
         k = known_ppm / measured_v
         self._data.tds_k = k
+        self._stamp("tds")
         self._save()
         logger.info("TDS calibrated: k=%.2f (known=%s ppm, V=%.4f)", k, known_ppm, measured_v)
         return k
@@ -128,6 +139,7 @@ class CalibrationManager:
     def calibrate_turbidity(self, clear_water_v: float) -> None:
         """Set clear water voltage for turbidity zero-point."""
         self._data.turbidity_v_clear = clear_water_v
+        self._stamp("turbidity")
         self._save()
         logger.info("Turbidity calibrated: clear water V=%.3f", clear_water_v)
 
@@ -140,6 +152,7 @@ class CalibrationManager:
         """
         offset = known_mv - measured_mv
         self._data.orp_offset_mv = offset
+        self._stamp("orp")
         self._save()
         logger.info("ORP calibrated: offset=%.1f mV", offset)
         return offset
@@ -152,9 +165,92 @@ class CalibrationManager:
             offsets: Dict from platform (e.g. {"ph": 0.1, "tds": -5.0})
         """
         self._data.platform_offsets = offsets
+        for sensor in offsets:
+            if sensor in CALIBRATABLE_SENSORS:
+                self._stamp(sensor)
         self._save()
         logger.info("Platform calibration offsets applied: %s", offsets)
 
     def get_platform_offset(self, sensor: str) -> float:
         """Get platform-applied offset for a sensor. Returns 0.0 if not set."""
         return float(self._data.platform_offsets.get(sensor, 0.0))
+
+    # ------------------------------------------------------------------
+    # Calibration age (v2.1) — powers "calibration overdue" diagnostics
+    # ------------------------------------------------------------------
+
+    def _stamp(self, sensor: str, now: datetime | None = None) -> None:
+        """Record the calibration timestamp in memory (saved by callers)."""
+        if not isinstance(self._data.calibrated_at, dict):
+            self._data.calibrated_at = {}
+        self._data.calibrated_at[sensor] = (now or datetime.now(UTC)).isoformat()
+
+    def set_calibrated(self, sensor: str, now: datetime | None = None) -> None:
+        """Record that ``sensor`` was calibrated now (persists immediately)."""
+        self._stamp(sensor, now)
+        self._save()
+
+    def calibration_age_days(self, sensor: str, now: datetime | None = None) -> float | None:
+        """Days since the sensor was last calibrated, or None if unknown
+        (never calibrated, or calibrated before timestamps existed)."""
+        calibrated_at = self._data.calibrated_at
+        raw = calibrated_at.get(sensor) if isinstance(calibrated_at, dict) else None
+        if not raw:
+            return None
+        try:
+            ts = datetime.fromisoformat(str(raw))
+        except ValueError:
+            logger.warning("Unparseable calibrated_at for %s: %r", sensor, raw)
+            return None
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        ref = now or datetime.now(UTC)
+        if ref.tzinfo is None:
+            ref = ref.replace(tzinfo=UTC)
+        return max((ref - ts).total_seconds() / 86400.0, 0.0)
+
+    def _ever_calibrated(self, sensor: str) -> bool:
+        """Has any calibration value ever been set for this sensor?
+
+        True if a timestamp exists, a platform offset was applied, or the
+        stored coefficients differ from factory defaults (a legacy
+        calibration that predates timestamping).
+        """
+        calibrated_at = self._data.calibrated_at
+        if isinstance(calibrated_at, dict) and calibrated_at.get(sensor):
+            return True
+        if sensor in (self._data.platform_offsets or {}):
+            return True
+        defaults = CalibrationData()
+        d = self._data
+        if sensor == "ph":
+            return (d.ph_v_at_4, d.ph_v_at_7) != (defaults.ph_v_at_4, defaults.ph_v_at_7)
+        if sensor == "tds":
+            return d.tds_k != defaults.tds_k
+        if sensor == "turbidity":
+            return d.turbidity_v_clear != defaults.turbidity_v_clear
+        if sensor == "orp":
+            return d.orp_offset_mv != defaults.orp_offset_mv
+        return False
+
+    def overdue_sensors(self, max_age_days: int, now: datetime | None = None) -> list[str]:
+        """Sensors whose calibration is older than ``max_age_days``.
+
+        Never-calibrated policy (documented choice): a sensor with no
+        ``calibrated_at`` timestamp counts as overdue ONLY if a calibration
+        value was ever set — i.e. its coefficients differ from factory
+        defaults or a platform offset exists. Such legacy calibrations
+        predate timestamping, so their age is unknown-but-old. A sensor
+        still on pure factory defaults has never been commissioned;
+        flagging it "overdue" would nag installers before first calibration,
+        which the commissioning flow (step 6) already covers.
+        """
+        overdue: list[str] = []
+        for sensor in CALIBRATABLE_SENSORS:
+            age = self.calibration_age_days(sensor, now=now)
+            if age is None:
+                if self._ever_calibrated(sensor):
+                    overdue.append(sensor)
+            elif age > max_age_days:
+                overdue.append(sensor)
+        return overdue

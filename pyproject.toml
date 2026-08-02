@@ -1,6 +1,6 @@
 [project]
 name = "bluesignal-wqm1"
-version = "1.0.0"
+version = "2.0.0"
 description = "BlueSignal WQM-1 Water Quality Monitor — open-source firmware"
 requires-python = ">=3.11"
 license = {text = "GPL-3.0-or-later"}
@@ -29,6 +29,9 @@ skips = ["B101", "B104", "B110", "B404", "B413", "B603", "B607"]
 [tool.coverage.run]
 source = ["src"]
 omit = [
+    # main.py is thin wiring since v2 — the orchestration logic it used to
+    # hold lives in src/app/ (fully covered). Hardware-bound modules stay
+    # omitted; process entry points have no measurable logic.
     "src/main.py",
     "src/control/led.py",
     "src/radio/sx1262.py",
@@ -36,6 +39,7 @@ omit = [
     "src/sensors/temperature.py",
     "src/utils/watchdog.py",
     "src/service_window/__main__.py",
+    "src/ota/__main__.py",
 ]
 
 [tool.pytest.ini_options]

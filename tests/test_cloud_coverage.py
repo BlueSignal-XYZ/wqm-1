@@ -13,6 +13,8 @@ def _make_client(**kw):
         ingest_url="https://example.test/ingest",
         command_url="https://example.test/commands",
         api_key="testkey0123456789",
+        fw_version="9.9.9",
+        api_base="https://example.test/app",
     )
     defaults.update(kw)
     c = CloudClient(**defaults)

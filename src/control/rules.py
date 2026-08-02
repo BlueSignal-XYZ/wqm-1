@@ -66,6 +66,34 @@ class RulesEngine:
         # relay → monotonic time when it was last turned ON (for accumulation)
         self._on_since: dict[int, float] = {}
 
+        # --- Sensor-health suspension: reading columns whose rules are paused
+        # because the sensor monitor flagged the probe as stuck/faulted. A
+        # flatlined probe must never keep (or start) actuating a relay on
+        # frozen data.
+        self._suspended_columns: set[str] = set()
+
+    # Canonical monitor sensor names -> reading/rule column names.
+    _SENSOR_TO_COLUMN = {
+        "ph": "ph",
+        "tds": "tds_ppm",
+        "turbidity": "turbidity_ntu",
+        "temperature": "temp_c",
+        "orp": "orp_mv",
+        "chlorine": "chlorine_mgl",
+        "conductivity": "conductivity_uscm",
+        "salinity": "salinity_ppt",
+    }
+
+    def set_suspended_sensors(self, sensors: set[str]) -> None:
+        """Pause rules for the given canonical sensor names (from SensorMonitor)."""
+        columns = {self._SENSOR_TO_COLUMN.get(s, s) for s in sensors}
+        if columns != self._suspended_columns:
+            logger.warning(
+                "Rule suspension changed: %s",
+                ", ".join(sorted(columns)) if columns else "none",
+            )
+        self._suspended_columns = columns
+
     def load_policies(self, policies: dict) -> None:
         """Load safety policies from a policies dict (policies.yaml format)."""
         schedule = policies.get("schedule", {})
@@ -190,6 +218,9 @@ class RulesEngine:
             self._on_since[relay] = now_mono
 
         for rule in self._rules:
+            if rule.sensor in self._suspended_columns:
+                logger.debug("Rule for %s suspended (sensor health)", rule.sensor)
+                continue
             value = reading.get(rule.sensor)
             if value is None:
                 continue

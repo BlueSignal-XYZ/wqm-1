@@ -14,17 +14,22 @@ import logging
 import threading
 import time
 
-import RPi.GPIO as GPIO
-
 from utils.config import LED_ERROR, LED_GPS_FIX, LED_HEARTBEAT, LED_LORA_TX, LED_PINS
 
 logger = logging.getLogger("wqm1.leds")
+
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # non-Pi host (e.g. Arduino UNO Q): status LEDs need the
+    GPIO = None  # Bridge companion sketch — the board gate never builds this
 
 
 class StatusLEDs:
     """Controls 4 status LEDs on the WQM-1 HAT."""
 
     def __init__(self) -> None:
+        if GPIO is None:
+            raise RuntimeError("RPi.GPIO not installed — no direct GPIO on this host")
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
         for pin in LED_PINS:

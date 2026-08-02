@@ -3,6 +3,10 @@
 Step-by-step instructions for deploying the WQM-1 firmware onto a
 Raspberry Pi Zero 2W with the WQM-1 HAT.
 
+> Running on an Arduino UNO Q / VENTUNO Q or another non-Pi Linux host?
+> See [platforms.md](platforms.md) — the firmware runs digital-first there
+> (RS485 probes + USB GPS + Wi-Fi cloud sync; no analog/LoRa/relay).
+
 ## Prerequisites
 
 **Hardware:**
@@ -327,4 +331,80 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 - [Hardware Overview](hardware-overview.md) — schematic, pinout, and
   BOM reference
 - See `config/policies.yaml` for relay automation rules (dosing pumps,
-  aerators, valves)
+  aerators, valves). **Relay automation ships inert** (`manual.override: true`)
+  — all four relays stay OFF until you enable rules for the site. The channel
+  assignments in that file are editable examples, not fixed functions; set the
+  real mapping in your cloud rules.
+
+## First-boot setup (v2.2+)
+
+New units are commissioned entirely from a phone browser — no SSH, no config
+files. Power the unit, join its network, and open `http://<unit-ip>:8080`.
+Until setup is completed the unit shows only the guided wizard:
+
+1. **PIN** — replace the factory PIN (1234 is refused).
+2. **Identity** — device ID + DevEUI with a QR code for your install records.
+3. **Cloud** — paste the device API key from cloud.bluesignal.xyz.
+4. **Sensor check** — live traffic-light cards; each problem card says what to
+   check in plain language.
+5. **Go / no-go** — a final checklist covering sensors, cloud, LoRa, GPS and
+   storage. Finish restarts monitoring with everything applied.
+
+The dashboard home page keeps the same traffic-light language afterwards:
+green = fine, amber = worth a look, red = needs attention — every card carries
+the likely cause and the next step. Status LEDs mirror the same states
+(steady heartbeat = ok, error blinks = the dashboard has details).
+
+### Status LEDs
+
+The board has four function LEDs (there is no separate "power" LED and no
+"relay" LED):
+
+| LED | Meaning |
+|---|---|
+| LED 1 — Heartbeat | 1 Hz blink = firmware alive and sampling |
+| LED 2 — LoRa | Lights during each LoRa uplink |
+| LED 3 — GPS | Lights while attempting a GPS fix |
+| LED 4 — Fault | Blinks on a sensor/system fault — details on the dashboard |
+
+## RS485 digital probes (v2.3+)
+
+The unit reads Honde Tech digital probes — residual chlorine, digital ORP,
+and the 5-in-1 (pH/EC/TDS/salinity/temperature) — over a shared RS485
+Modbus bus through the supplied RS485→USB adapter.
+
+### Wiring
+
+The USB adapter carries **data only**. Every probe also needs power from
+the unit's 12V rail:
+
+| Probe wire | Goes to |
+|---|---|
+| Red | +12V rail |
+| Black | Ground |
+| Yellow | RS485 A (adapter A terminal) |
+| Green / White | RS485 B (adapter B terminal) |
+
+All probes share the same two A/B bus wires (multi-drop). Never let the
+A/B lines touch the power wires — that permanently damages the probe's
+transceiver.
+
+### Addresses
+
+Every probe ships at Modbus address **1**, so probes must be added one at
+a time: connect the new probe, open **Service Window → RS485 Sensors →
+Add a new probe**, and the wizard discovers it and assigns the next free
+address before you connect the following one.
+
+### Calibration cadence
+
+| Probe | Method | Cadence |
+|---|---|---|
+| Residual chlorine | Guided zero/slope wizard, flow cell (15–30 L/h), lab-verified sample | Every 1–2 months |
+| 5-in-1 pH | Guided buffer wizard (4.01 / 6.86 / 9.18) | Quarterly, or on drift alert |
+| 5-in-1 EC | Slope against a known-conductivity solution | Quarterly, or on drift alert |
+| Digital ORP | Factory calibrated | Replace electrode per vendor guidance |
+
+Notes for the chlorine probe: activate a new probe in 3M KCL before first
+use, keep sample pH between 5 and 9, and install it in the flow cell —
+immersion installs read unstably and foul quickly.

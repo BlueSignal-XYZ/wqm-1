@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_health.html" import steps_bar %}
+{% block title %}Setup — Cloud{% endblock %}
+{% block content %}
+{{ steps_bar(steps, step) }}
+<h1>Connect to BlueSignal Cloud</h1>
+<p class="lead">Paste the device API key from the cloud dashboard
+(<b>cloud.bluesignal.xyz → Devices → {{ identity.device_id }}</b>). This lets the
+unit send readings and receive remote updates.</p>
+{% if key_set %}
+<div class="flash success">A cloud key is already saved for this unit.</div>
+{% endif %}
+<form method="post" class="setup-form">
+    <label>Device API key
+        <input type="text" name="api_key" autocomplete="off" spellcheck="false"
+               placeholder="paste the key here" {% if not key_set %}required{% endif %}>
+    </label>
+    <button type="submit" class="btn btn-primary">Save and continue</button>
+    <button type="submit" name="skip" value="1" class="btn btn-secondary" formnovalidate>
+        {{ 'Keep current key' if key_set else 'Skip for now' }}
+    </button>
+</form>
+{% endblock %}

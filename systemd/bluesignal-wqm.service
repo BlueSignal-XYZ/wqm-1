@@ -3,20 +3,26 @@ Description=BlueSignal WQM-1 Water Quality Monitor
 After=network.target
 
 [Service]
-Type=simple
+# Type=notify + WatchdogSec: the supervisor sends READY=1 once workers are up
+# and WATCHDOG=1 every tick ONLY while every worker thread is provably alive.
+# A hung worker (blocking call that never returns) starves the pet and systemd
+# restarts the service — Restart=on-failure alone could never catch a hang.
+Type=notify
+NotifyAccess=main
+WatchdogSec=180
 User=pi
 SupplementaryGroups=dialout gpio i2c spi
 RuntimeDirectory=bluesignal
 RuntimeDirectoryMode=0755
-WorkingDirectory=/opt/bluesignal/src
+WorkingDirectory=/opt/bluesignal/current/src
 ExecStart=/usr/bin/python3 -m main
-Restart=on-failure
+Restart=always
 RestartSec=10
 KillSignal=SIGTERM
 TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
-Environment=PYTHONPATH=/opt/bluesignal/src
+Environment=PYTHONPATH=/opt/bluesignal/current/src
 
 [Install]
 WantedBy=multi-user.target

@@ -32,7 +32,14 @@ def readonly_config(tmp_path):
     d = tmp_path / "etc"
     d.mkdir()
     cfg = d / "config.yaml"
-    cfg.write_text(yaml.safe_dump({"app_key": "A" * 32}))
+    cfg.write_text(
+        yaml.safe_dump(
+            # setup_completed: the v2 setup funnel otherwise redirects every
+            # request into /setup, and this file tests the config-write error
+            # path, not the wizard.
+            {"app_key": "A" * 32, "service_window": {"setup_completed": True}}
+        )
+    )
     d.chmod(stat.S_IRUSR | stat.S_IXUSR)  # r-x — no write
     yield cfg
     d.chmod(stat.S_IRWXU)  # restore so tmp_path cleanup can unlink
@@ -56,7 +63,10 @@ class TestConfigWriteError:
         with pytest.raises(ConfigWriteError):
             update_config(str(readonly_config), {"cloud_enabled": True})
 
-        assert yaml.safe_load(readonly_config.read_text()) == {"app_key": "A" * 32}
+        assert yaml.safe_load(readonly_config.read_text()) == {
+            "app_key": "A" * 32,
+            "service_window": {"setup_completed": True},
+        }
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")

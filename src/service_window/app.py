@@ -77,6 +77,14 @@ def create_app(config: dict | None = None) -> Flask:
 
     # Flask-native keys the caller set that this factory has no opinion on —
     # TESTING being the one the suite relies on.
+    #
+    # Merge note (v2 <- master): the v2 branch carried its own fix for the
+    # dropped-override bug — `app.config.update({k: v ... if k.isupper()})` —
+    # written before master's alias-table version landed. Master's preamble
+    # (the _SETTING_ALIASES loop above) already consumed every recognised key
+    # into sw_config and routed the rest into `passthrough`, so the isupper()
+    # variant would re-apply keys the loop already handled. One mechanism, not
+    # two: passthrough wins.
     app.config.update(passthrough)
 
     # Register blueprints
@@ -87,16 +95,36 @@ def create_app(config: dict | None = None) -> Flask:
     from service_window.routes.lora import lora_bp
     from service_window.routes.provision import provision_bp
     from service_window.routes.relays import relays_bp
+    from service_window.routes.rs485 import rs485_bp
     from service_window.routes.sensors import sensors_bp
+    from service_window.routes.settings import settings_bp
+    from service_window.routes.setup import needs_setup, setup_bp
     from service_window.routes.status import status_bp
 
     app.register_blueprint(status_bp)
     app.register_blueprint(sensors_bp)
     app.register_blueprint(calibration_bp)
+    app.register_blueprint(rs485_bp)
     app.register_blueprint(lora_bp)
     app.register_blueprint(relays_bp)
     app.register_blueprint(diagnostics_bp)
     app.register_blueprint(provision_bp)
+    app.register_blueprint(setup_bp)
+    app.register_blueprint(settings_bp)
+
+    # Until the factory PIN is replaced and the setup wizard finished, every
+    # page funnels into /setup — a unit can't be left half-commissioned by
+    # accident, and the shipped PIN can't quietly stay in service.
+    @app.before_request
+    def _force_setup():  # type: ignore[reportUnusedFunction]
+        from flask import redirect, request
+
+        allowed = ("/setup", "/login", "/logout", "/static", "/provision/qr.svg")
+        if request.path.startswith(allowed):
+            return None
+        if needs_setup(app.config):
+            return redirect("/setup/")
+        return None
 
     # One handler rather than a try/except at each of the six update_config
     # call sites. A failed config write used to surface as a bare Flask 500,

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_health.html" import steps_bar %}
+{% block title %}Setup — Identity{% endblock %}
+{% block content %}
+{{ steps_bar(steps, step) }}
+<h1>This unit's identity</h1>
+<p class="lead">Scan or note these for your install records and the cloud
+registration. They're printed nowhere else.</p>
+<div class="grid">
+    <div class="card">
+        <div class="card-label">Device ID</div>
+        <div class="card-value mono">{{ identity.device_id }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">LoRa DevEUI</div>
+        <div class="card-value mono">{{ identity.dev_eui }}</div>
+    </div>
+</div>
+<div class="qr-wrap">
+    <img src="{{ url_for('provision.qr_svg') }}" alt="Device identity QR code" width="220" height="220">
+    <p>Scan with your phone to capture the identity.</p>
+</div>
+<a class="btn btn-primary" href="{{ url_for('setup.cloud') }}">Continue</a>
+{% endblock %}

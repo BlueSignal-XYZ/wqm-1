@@ -1,0 +1,10 @@
+# Raspberry Pi direct-header hardware drivers (analog ADC, 1-Wire temp,
+# SPI LoRa radio, GPIO relays/LEDs/fan). Installed by setup.sh only when the
+# host is a Raspberry Pi — these packages are unavailable or useless on the
+# Arduino UNO Q / VENTUNO Q, where the headers belong to the STM32 MCU.
+# See docs/platforms.md.
+RPi.GPIO==0.7.1
+lgpio
+smbus2==0.6.1
+spidev==3.8
+w1thermsensor==2.3.0

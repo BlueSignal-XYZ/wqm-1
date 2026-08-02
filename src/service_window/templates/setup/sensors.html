@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_health.html" import steps_bar, health_card %}
+{% block title %}Setup — Sensors{% endblock %}
+{% block content %}
+{{ steps_bar(steps, step) }}
+<h1>Sensor check</h1>
+{% if not have_readings %}
+<p class="lead">Waiting for the first readings… make sure the probes are in the
+water. This page refreshes automatically.</p>
+{% elif ready %}
+<p class="lead">All sensors are reading. Nice work.</p>
+{% else %}
+<p class="lead">Some sensors need attention — each card below says what to check.
+This page refreshes automatically as you fix things.</p>
+{% endif %}
+<div class="grid">
+    {% for name, card in cards.items() %}
+    {{ health_card(name|capitalize, card) }}
+    {% endfor %}
+</div>
+<p>Installing digital RS485 probes (chlorine, digital ORP, 5-in-1)?
+   <a href="{{ url_for('rs485.index') }}">Set them up here</a> — you can come back
+   to this check afterwards.</p>
+<a class="btn btn-primary" href="{{ url_for('setup.done') }}">Continue</a>
+{% endblock %}
+{% block scripts %}
+<script>setTimeout(function () { window.location.reload(); }, 15000);</script>
+{% endblock %}
