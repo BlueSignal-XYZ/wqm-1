@@ -50,13 +50,18 @@ class TestPHSensor:
         # slope should be (7.0 - 4.0) / (1.60 - 1.00) = 5.0
         assert abs(ph_sensor._slope - 5.0) < 0.01
 
-    def test_ph_clamped_to_valid_range(self, mock_hardware, mock_adc):
+    def test_ph_out_of_band_reports_nothing_rather_than_a_clamped_value(
+        self, mock_hardware, mock_adc
+    ):
+        """Was `test_ph_clamped_to_valid_range`, which asserted that an extreme
+        input still produced a number in 0-14. That clamp is what let a field
+        unit with no probe publish pH 0.00 and 14.00 as `quality: good` and
+        raise critical alerts from noise. A voltage the electrode cannot have
+        produced now yields no reading at all."""
         from sensors.ph import PHSensor
 
-        mock_adc.read_voltage = MagicMock(return_value=5.0)  # extreme
-        ph_sensor = PHSensor(mock_adc)
-        ph = ph_sensor.read()
-        assert 0.0 <= ph <= 14.0
+        mock_adc.read_voltage = MagicMock(return_value=5.0)  # beyond full scale
+        assert PHSensor(mock_adc).read() is None
 
     def test_returns_none_on_adc_failure(self, mock_hardware, mock_adc):
         from sensors.ph import PHSensor
@@ -92,13 +97,14 @@ class TestTDSSensor:
         # At 35°C, compensation reduces TDS (same voltage, warmer water)
         assert tds_35 < tds_25
 
-    def test_tds_non_negative(self, mock_hardware, mock_adc):
+    def test_tds_open_input_reports_nothing_rather_than_zero(self, mock_hardware, mock_adc):
+        """Was `test_tds_non_negative`. 0 V on AIN0 is an open input, not
+        ultra-pure water; the old `max(0.0, ...)` published a small, plausible
+        ppm from a disconnected probe."""
         from sensors.tds import TDSSensor
 
         mock_adc.read_voltage = MagicMock(return_value=0.0)
-        tds_sensor = TDSSensor(mock_adc)
-        tds = tds_sensor.read()
-        assert tds >= 0.0
+        assert TDSSensor(mock_adc).read() is None
 
     def test_returns_none_on_failure(self, mock_hardware, mock_adc):
         from sensors.tds import TDSSensor
@@ -127,13 +133,17 @@ class TestTurbiditySensor:
         ntu = sensor.read()
         assert abs(ntu - 3000.0) < 10.0
 
-    def test_clamped_range(self, mock_hardware, mock_adc):
+    def test_above_clear_water_reports_nothing_rather_than_zero_ntu(
+        self, mock_hardware, mock_adc
+    ):
+        """Was `test_clamped_range`, which asserted a fabricated 0.0 NTU —
+        "perfectly clear water" — for a voltage above the clear-water point.
+        That reading actually means the calibration is stale, and publishing it
+        as pristine is the same class of lie the pH clamp told."""
         from sensors.turbidity import TurbiditySensor
 
         mock_adc.read_voltage = MagicMock(return_value=5.0)  # above clear
-        sensor = TurbiditySensor(mock_adc)
-        ntu = sensor.read()
-        assert ntu == 0.0  # clamped
+        assert TurbiditySensor(mock_adc).read() is None
 
     def test_returns_none_on_failure(self, mock_hardware, mock_adc):
         from sensors.turbidity import TurbiditySensor

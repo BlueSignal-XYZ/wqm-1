@@ -10,7 +10,13 @@ import logging
 from statistics import median
 
 from sensors.ads1115 import ADS1115
-from utils.config import ADC_CH_TDS, TDS_DIVIDER_RATIO, TDS_TEMP_COEFF
+from utils.config import (
+    ADC_CH_TDS,
+    ADC_FULL_SCALE_V,
+    ADC_RAIL_MARGIN_V,
+    TDS_DIVIDER_RATIO,
+    TDS_TEMP_COEFF,
+)
 
 logger = logging.getLogger("wqm1.tds")
 
@@ -46,6 +52,18 @@ class TDSSensor:
             logger.error("TDS ADC read failed: %s", e)
             return None
 
+        # Same open-input problem as pH: a disconnected TDS probe leaves AIN0
+        # floating at a rail, and `max(0.0, ...)` below used to turn that into
+        # a small, entirely believable ppm figure. Reject it here instead.
+        if adc_voltage <= ADC_RAIL_MARGIN_V or adc_voltage >= ADC_FULL_SCALE_V - ADC_RAIL_MARGIN_V:
+            logger.warning(
+                "TDS input at %.3f V is against a rail (0-%.3f V); probe "
+                "disconnected or dry — reporting no reading",
+                adc_voltage,
+                ADC_FULL_SCALE_V,
+            )
+            return None
+
         # Compensate for voltage divider: actual = adc / ratio
         actual_voltage = adc_voltage / TDS_DIVIDER_RATIO
 
@@ -61,8 +79,17 @@ class TDSSensor:
         # Convert voltage to TDS: ppm = voltage * k
         tds_ppm = compensated_voltage * self._k
 
-        # Clamp to non-negative
-        tds_ppm = max(0.0, tds_ppm)
+        # A negative ppm is not a dilute sample, it is a broken signal path or
+        # a bad calibration constant. Clamping it to 0.0 published a number the
+        # electronics never measured; say nothing instead.
+        if tds_ppm < 0:
+            logger.warning(
+                "TDS %.1f ppm computed from %.3f V is negative; calibration or "
+                "signal path fault — reporting no reading",
+                tds_ppm,
+                adc_voltage,
+            )
+            return None
 
         # Moving median filter
         self._window.append(tds_ppm)

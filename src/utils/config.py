@@ -39,6 +39,22 @@ ADC_CH_TURBIDITY = 1  # AIN1 = VIN1, LMV321 turbidity buffer, 0-4.5 V
 ADC_CH_PH = 2  # AIN2 = PH_INP, LMP91200 pH AFE via R12
 ADC_CH_ORP = 3  # AIN3 = PH_INN / spare (no ORP hardware on Fin_3)
 
+# ADS1115 full scale at the PGA the driver configures (±4.096 V).
+ADC_FULL_SCALE_V = 4.096
+
+# How close to either rail counts as "not a measurement".
+#
+# A disconnected analog probe leaves its ADC input floating and it drifts to a
+# rail. No conditioned probe signal on this board sits within 50 mV of 0 V or
+# of full scale — the TDS chain spans 0-2.3 V and the pH AFE is biased near
+# mid-supply — so a sample this close to either end is an open input, not a
+# reading.
+#
+# BENCH-VALIDATE before relying on this in the field: confirm with a real
+# electrode in pH 4 and pH 10 buffer that neither endpoint lands inside the
+# margin. Widen it only with a measurement to justify the number.
+ADC_RAIL_MARGIN_V = 0.05
+
 # SPI0 — SX1262 LoRa
 SPI_BUS = 0
 SPI_DEVICE = 0
