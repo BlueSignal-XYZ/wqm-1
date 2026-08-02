@@ -298,3 +298,175 @@ pre.output {
 .btn-secondary { background: #eef1f4; color: #2b333b; }
 .qr-wrap { margin: 16px 0; }
 .mono { font-family: ui-monospace, monospace; }
+
+/* ── Setup wizard shell (v2.3) — focused, sidebar-free commissioning ───── */
+.setup-body {
+    display: block;
+    background: linear-gradient(180deg, #eef4f9 0%, var(--bg) 240px);
+    min-height: 100vh;
+}
+
+.setup-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.9rem 1.25rem;
+    background: var(--sidebar-bg);
+    color: var(--sidebar-fg);
+}
+.setup-brand { font-weight: 700; font-size: 1.05rem; letter-spacing: 0.01em; }
+.setup-brand span { font-weight: 400; opacity: 0.7; margin-left: 0.4rem; }
+.setup-exit { color: var(--sidebar-fg); opacity: 0.75; font-size: 0.85rem; text-decoration: none; }
+.setup-exit:hover { opacity: 1; text-decoration: underline; }
+
+.setup-shell {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 3rem;
+}
+
+/* Numbered progress track with connectors */
+.steps-track {
+    display: flex;
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 1.5rem;
+}
+.steps-track li {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    font-size: 0.75rem;
+    color: #5b6570;
+}
+.steps-track li:not(:first-child)::before {
+    content: '';
+    position: absolute;
+    top: 14px;
+    right: 50%;
+    width: 100%;
+    height: 2px;
+    background: #d5dce3;
+    z-index: 0;
+}
+.steps-track li.done:not(:first-child)::before,
+.steps-track li.current:not(:first-child)::before { background: #2c6cb0; }
+.step-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #e3e8ee;
+    color: #5b6570;
+    font-weight: 600;
+    font-size: 0.8rem;
+    position: relative;
+    z-index: 1;
+    border: 2px solid transparent;
+}
+.steps-track li.current .step-dot {
+    background: #2c6cb0;
+    color: #fff;
+    border-color: #bcd3ea;
+    box-shadow: 0 0 0 3px rgba(44, 108, 176, 0.15);
+}
+.steps-track li.done .step-dot { background: #2e9e5b; color: #fff; }
+.steps-track li.current { color: #1a1a1a; font-weight: 600; }
+.step-label { white-space: nowrap; }
+
+/* Card that holds each step's content */
+.setup-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.75rem 1.5rem 2rem;
+    box-shadow: 0 1px 3px rgba(16, 30, 46, 0.06);
+}
+.setup-h1 { font-size: 1.45rem; margin-bottom: 0.6rem; }
+.setup-card .lead { margin-bottom: 1rem; }
+.setup-foot {
+    text-align: center;
+    color: #8a94a0;
+    font-size: 0.8rem;
+    margin-top: 1rem;
+}
+
+.welcome-list { margin: 0 0 1.25rem 1.25rem; line-height: 1.9; }
+.welcome-list li { padding-left: 0.25rem; }
+
+.setup-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.25rem; align-items: center; }
+.btn-lg { padding: 12px 24px; font-size: 1.05rem; }
+.btn-xs { padding: 3px 10px; font-size: 0.78rem; margin-top: 0; }
+.btn-ghost {
+    background: transparent;
+    color: #2c6cb0;
+    border: 1px solid #bcd3ea;
+}
+.btn-ghost:hover { background: #eaf2fa; }
+
+/* Identity blocks — the values an installer must capture */
+.id-block { margin: 0 0 1rem; }
+.id-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #5b6570;
+    margin-bottom: 0.3rem;
+}
+.id-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.id-value {
+    font-family: ui-monospace, monospace;
+    font-size: 1.15rem;
+    background: #f2f5f8;
+    border: 1px solid #dde3e9;
+    border-radius: 8px;
+    padding: 0.55rem 0.8rem;
+    user-select: all;
+    word-break: break-all;
+}
+.qr-detail { margin: 1rem 0 0; }
+.qr-detail summary { cursor: pointer; color: #2c6cb0; font-size: 0.9rem; }
+
+/* Cloud step how-to */
+.howto {
+    background: #f6f9fc;
+    border: 1px solid #dde6ee;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+}
+.howto-title {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #5b6570;
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+}
+.howto-list { margin: 0 0 0 1.1rem; line-height: 1.7; font-size: 0.95rem; }
+.howto-list li { margin-bottom: 0.45rem; }
+.chip-row { display: inline-flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.25rem; }
+.chip-mono {
+    font-family: ui-monospace, monospace;
+    font-size: 0.95rem;
+    background: #fff;
+    border: 1px solid #d5dce3;
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+    user-select: all;
+    word-break: break-all;
+}
+.skip-note { font-size: 0.85rem; color: #5b6570; margin-top: 0.75rem; line-height: 1.5; }
+.refresh-note { font-size: 0.8rem; color: #8a94a0; margin-bottom: 0.75rem; }
+
+@media (max-width: 520px) {
+    .step-label { display: none; }
+    .steps-track li.current .step-label { display: block; position: absolute; top: 34px; }
+    .steps-track { margin-bottom: 2.2rem; }
+    .setup-card { padding: 1.25rem 1rem 1.5rem; }
+}

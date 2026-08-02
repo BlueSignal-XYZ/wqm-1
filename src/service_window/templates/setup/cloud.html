@@ -1,23 +1,45 @@
-{% extends "base.html" %}
-{% from "_health.html" import steps_bar %}
+{% extends "setup_base.html" %}
 {% block title %}Setup — Cloud{% endblock %}
 {% block content %}
-{{ steps_bar(steps, step) }}
-<h1>Connect to BlueSignal Cloud</h1>
-<p class="lead">Paste the device API key from the cloud dashboard
-(<b>cloud.bluesignal.xyz → Devices → {{ identity.device_id }}</b>). This lets the
-unit send readings and receive remote updates.</p>
+<h1 class="setup-h1">Connect to BlueSignal Cloud</h1>
+<p class="lead">The cloud issues this unit a key so it can report readings and
+receive updates. Two minutes on any other device — this page can stay open.</p>
+
 {% if key_set %}
 <div class="flash success">A cloud key is already saved for this unit.</div>
 {% endif %}
+
+<div class="howto">
+    <div class="howto-title">Get the key</div>
+    <ol class="howto-list">
+        <li>On your phone or laptop, sign in at <b>cloud.bluesignal.xyz</b> and open
+            <b>Devices&nbsp;→&nbsp;Commission&nbsp;Device</b>.</li>
+        <li>Enter this device ID (no QR sticker needed):
+            <span class="chip-row">
+                <code class="chip-mono">{{ identity.device_id }}</code>
+                <button type="button" class="btn btn-ghost btn-xs" data-copy="{{ identity.device_id }}">Copy</button>
+            </span></li>
+        <li>When asked for the LoRa DevEUI, enter:
+            <span class="chip-row">
+                <code class="chip-mono">{{ identity.dev_eui }}</code>
+                <button type="button" class="btn btn-ghost btn-xs" data-copy="{{ identity.dev_eui }}">Copy</button>
+            </span></li>
+        <li>The cloud shows the device API key <b>once</b> — copy it and paste it below.</li>
+    </ol>
+</div>
+
 <form method="post" class="setup-form">
     <label>Device API key
         <input type="text" name="api_key" autocomplete="off" spellcheck="false"
                placeholder="paste the key here" {% if not key_set %}required{% endif %}>
     </label>
-    <button type="submit" class="btn btn-primary">Save and continue</button>
-    <button type="submit" name="skip" value="1" class="btn btn-secondary" formnovalidate>
-        {{ 'Keep current key' if key_set else 'Skip for now' }}
-    </button>
+    <div class="setup-actions">
+        <button type="submit" class="btn btn-primary btn-lg">Save and continue</button>
+        <button type="submit" name="skip" value="1" class="btn btn-secondary" formnovalidate>
+            {{ 'Keep current key' if key_set else 'Skip for now' }}
+        </button>
+    </div>
+    <p class="skip-note">Skipping is fine — the unit monitors and logs locally either way.
+    Add the key any time under <b>Provisioning</b>.</p>
 </form>
 {% endblock %}

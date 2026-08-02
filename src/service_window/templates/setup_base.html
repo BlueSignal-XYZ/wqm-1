@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+{# Focused chrome for the first-boot wizard. The dashboard sidebar is noise
+   while a unit is being commissioned — every setup page gets a clean,
+   centered column with a numbered progress track instead. Routes must pass
+   `steps` and `step` (they all do — see routes/setup.py). #}
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Setup{% endblock %} — WQM-1</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="setup-body">
+    <header class="setup-topbar">
+        <div class="setup-brand">BlueSignal <span>WQM-1 setup</span></div>
+        <a class="setup-exit" href="{{ url_for('auth.logout') }}">Log out</a>
+    </header>
+
+    <main class="setup-shell">
+        <ol class="steps-track" aria-label="Setup progress">
+            {% set labels = {'welcome': 'Welcome', 'pin': 'PIN', 'identity': 'Identity',
+                             'cloud': 'Cloud', 'sensors': 'Sensors', 'done': 'Finish'} %}
+            {% for s in steps %}
+            {% set state = 'current' if s == step else ('done' if steps.index(s) < steps.index(step) else '') %}
+            <li class="{{ state }}">
+                <span class="step-dot">{{ '✓' if state == 'done' else loop.index }}</span>
+                <span class="step-label">{{ labels.get(s, s|capitalize) }}</span>
+            </li>
+            {% endfor %}
+        </ol>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        <section class="setup-card">
+            {% block content %}{% endblock %}
+        </section>
+
+        <p class="setup-foot">Progress is saved — you can close this page and come back any time.</p>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
