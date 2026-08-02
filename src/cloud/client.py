@@ -248,12 +248,13 @@ class CloudClient:
             return 0
 
         results = (resp or {}).get("results")
-        indexed = (
+        # Inline guard (not a named boolean) so the type-checker narrows
+        # `results` to a list for everything below the early return.
+        if not (
             isinstance(results, list)
             and len(results) > 0
             and all(isinstance(e, dict) and isinstance(e.get("index"), int) for e in results)
-        )
-        if not indexed:
+        ):
             # Legacy server: keep the old (coarse) behavior rather than lose data.
             db.mark_synced([r["id"] for r in rows])
             return len(rows)

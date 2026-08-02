@@ -9,12 +9,24 @@ import yaml
 
 
 def read_config(path: str) -> dict[str, Any]:
-    """Read YAML config file, returning empty dict if missing."""
+    """Read YAML config file, returning empty dict if missing.
+
+    The open() is guarded as well as the exists() check: the setup funnel calls
+    this on EVERY request, and on a factory-fresh unit config.yaml does not
+    exist until provisioning writes it (atomically, via rename — so a reader
+    can also hit the gap mid-swap). Without the catch, a fresh unit 500s on
+    every page instead of funneling into /setup, which is the one moment the
+    funnel exists for. Found because the test suite patches Path.exists
+    globally and drove a request straight through the guard.
+    """
     p = Path(path)
     if not p.exists():
         return {}
-    with p.open() as f:
-        return yaml.safe_load(f) or {}
+    try:
+        with p.open() as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
 
 
 class ConfigWriteError(RuntimeError):

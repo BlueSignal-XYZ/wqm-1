@@ -212,12 +212,15 @@ class WQM1Database:
     def get_unsynced(self, limit: int = 50) -> list[dict[str, Any]]:
         """Get pending readings ordered by timestamp (excludes rows the cloud
         permanently rejected — those are counted, not retried forever)."""
-        cur = self._conn.execute(
-            f"""SELECT {_READING_COLS}
-               FROM readings WHERE sync_state = 'pending'
-               ORDER BY timestamp ASC LIMIT ?""",
-            (limit,),
+        # Single-quoted fragments, not a triple-quoted block: bandit's nosec must
+        # share a line with the flagged expression, and inside a multi-line SQL
+        # string the marker would be shipped to SQLite as query text.
+        query = (
+            f"SELECT {_READING_COLS} "  # nosec B608 — constant column list; values bound
+            "FROM readings WHERE sync_state = 'pending' "
+            "ORDER BY timestamp ASC LIMIT ?"
         )
+        cur = self._conn.execute(query, (limit,))
         return [dict(row) for row in cur.fetchall()]
 
     def mark_synced(self, ids: list[int]) -> None:
@@ -308,10 +311,11 @@ class WQM1Database:
 
     def get_latest(self) -> dict[str, Any] | None:
         """Get the most recent reading."""
-        cur = self._conn.execute(
-            f"""SELECT {_READING_COLS}, synced, sync_state
-               FROM readings ORDER BY id DESC LIMIT 1"""
+        query = (
+            f"SELECT {_READING_COLS}, synced, sync_state "  # nosec B608 — constant cols
+            "FROM readings ORDER BY id DESC LIMIT 1"
         )
+        cur = self._conn.execute(query)
         row = cur.fetchone()
         return dict(row) if row else None
 

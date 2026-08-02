@@ -108,11 +108,12 @@ def system_cards(
     has_fix = bool(latest and latest.get("lat") is not None and latest.get("lon") is not None)
     cards["gps"] = explain("gps", "ok" if has_fix else "degraded")
 
-    # Storage: readings are landing at all.
-    fresh = bool(latest and _parse_ts(latest.get("timestamp")))
-    if fresh:
-        age_s = (now - _parse_ts(latest["timestamp"])).total_seconds()
-        fresh = age_s <= _RECENT_S
+    # Storage: readings are landing at all. Parse ONCE and keep the result —
+    # the previous double-parse both wasted work and, if the second parse ever
+    # disagreed with the first (timestamp mutated, parse non-deterministic on
+    # bad input), subtracted None from a datetime at runtime.
+    latest_ts = _parse_ts(latest.get("timestamp")) if latest else None
+    fresh = latest_ts is not None and (now - latest_ts).total_seconds() <= _RECENT_S
     cards["storage"] = explain("storage", "ok" if (reading_count and fresh) else "stale")
 
     # RS485 bus: only shown when Modbus probes are enabled. A dead bus is one

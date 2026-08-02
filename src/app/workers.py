@@ -144,7 +144,11 @@ class SamplingWorker(Worker):
         # read falls back to the analog probes for this cycle rather than
         # blanking the reading.
         multi_s = self._sensors.get("multi485")
-        multi = (self._safe_read("5-in-1", multi_s.read_all) if multi_s else None) or {}
+        # isinstance rather than a cast: _safe_read is annotated float|None for
+        # the scalar probes, and a belt-and-braces check here also protects the
+        # cycle if a driver ever returns a scalar where a dict was expected.
+        multi_raw = self._safe_read("5-in-1", multi_s.read_all) if multi_s else None
+        multi: dict = multi_raw if isinstance(multi_raw, dict) else {}
         if multi.get("temp_c") is not None:
             temp_c = multi["temp_c"]
 

@@ -422,7 +422,9 @@ class OTAAgent:
             except TypeError:
                 # Older 3.11 — members were already vetted by
                 # validate_tar_members() during verification.
-                tar.extractall(staging)  # noqa: S202
+                tar.extractall(staging)  # noqa: S202  # nosec B202 — members vetted by
+                # validate_tar_members() during verification, and the bundle's
+                # Ed25519 signature was checked before extraction was reachable.
 
         final = self._releases_dir / version
         if final.exists():
@@ -662,7 +664,9 @@ class OTAAgent:
             except Exception:  # pragma: no cover — check_and_apply never raises
                 logger.exception("OTA cycle crashed")
 
-            wait_s = self._settings.ota_poll_s * random.uniform(0.8, 1.2)
+            # nosec B311 — poll-interval jitter to de-synchronise fleet check-ins;
+            # nothing security-relevant derives from this randomness.
+            wait_s = self._settings.ota_poll_s * random.uniform(0.8, 1.2)  # nosec B311
             deadline = self._clock() + wait_s
             while not stop_event.is_set() and self._clock() < deadline:
                 if self._check_now_flag.exists():
