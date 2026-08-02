@@ -133,9 +133,7 @@ class TestTurbiditySensor:
         ntu = sensor.read()
         assert abs(ntu - 3000.0) < 10.0
 
-    def test_above_clear_water_reports_nothing_rather_than_zero_ntu(
-        self, mock_hardware, mock_adc
-    ):
+    def test_above_clear_water_reports_nothing_rather_than_zero_ntu(self, mock_hardware, mock_adc):
         """Was `test_clamped_range`, which asserted a fabricated 0.0 NTU —
         "perfectly clear water" — for a voltage above the clear-water point.
         That reading actually means the calibration is stale, and publishing it
