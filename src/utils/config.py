@@ -55,6 +55,25 @@ ADC_FULL_SCALE_V = 4.096
 # margin. Widen it only with a measurement to justify the number.
 ADC_RAIL_MARGIN_V = 0.05
 
+# Largest pH spread, across one filter window, that real water can produce.
+#
+# The rail check above catches a probe whose input floats to a supply rail —
+# which is what the TDS chain does, and it works. The pH front-end does not:
+# the LMP91200 biases an open electrode input to MID-SCALE, so a disconnected
+# probe yields voltages that are electrically valid and convert to perfectly
+# in-range pH. A first field unit with no electrode attached published 11.32,
+# 5.80, 9.06 and 10.19 over five minutes and every one passed both guards.
+#
+# What gives it away is the SPREAD. A real electrode in a body of water does
+# not move 5.5 pH in five minutes; a floating input wanders across the scale.
+# 2.0 pH across the window is already far beyond anything chemistry does at a
+# 60 s sample interval, including active dosing.
+#
+# BENCH-VALIDATE before trusting this in the field: dose a test volume as hard
+# as a real site ever would and confirm the window spread stays under the
+# limit. Raising it is cheap; a limit that suppresses real excursions is not.
+PH_MAX_WINDOW_SPAN = 2.0
+
 # SPI0 — SX1262 LoRa
 SPI_BUS = 0
 SPI_DEVICE = 0
