@@ -40,20 +40,18 @@ class TestLoadRulesMalformed:
 
 
 class TestScheduleEdgeCases:
-    def test_overnight_window_in_range(self, mock_hardware):
+    def test_overnight_window_in_range(self, mock_hardware, fixed_clock):
         """Overnight schedule (22:00–06:00) should allow fires at 23:00."""
         from control.rules import Rule, RulesEngine
 
-        engine = RulesEngine()
+        engine = RulesEngine(clock=fixed_clock(23, 0))
         engine._schedule_enabled = True
         engine._schedule_start = dt_time(22, 0)
         engine._schedule_end = dt_time(6, 0)
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
-        # We can't force datetime.now, so just verify the method executes.
-        # Both branches return bool, and this hits the overnight line.
-        result = engine._is_in_schedule()
-        assert isinstance(result, bool)
+        assert engine._is_in_schedule() is True
+        assert (1, True) in engine.evaluate({"ph": 9.0})
 
     def test_schedule_enabled_but_times_none_returns_true(self, mock_hardware):
         from control.rules import RulesEngine

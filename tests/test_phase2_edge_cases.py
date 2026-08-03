@@ -41,10 +41,20 @@ class TestSX1262XferGuard:
 class TestRulesTimezoneAware:
     """Rules engine uses UTC-aware datetimes."""
 
-    def test_schedule_check_uses_utc(self, mock_hardware):
+    def test_default_clock_is_utc_aware(self, mock_hardware):
         from control.rules import RulesEngine
 
+        # The engine's default clock is what makes the schedule check UTC —
+        # assert it directly rather than inferring it from a window match.
         engine = RulesEngine()
+        assert engine._clock().tzinfo is UTC
+
+    def test_schedule_check_uses_utc(self, mock_hardware, fixed_clock):
+        from control.rules import RulesEngine
+
+        # Previously ran against wall time with a 00:00–23:59 window, which
+        # excludes the 23:59 minute — the assertion was false once a day.
+        engine = RulesEngine(clock=fixed_clock(12, 0))
         engine._schedule_enabled = True
         engine._schedule_start = dt_time(0, 0)
         engine._schedule_end = dt_time(23, 59)
@@ -70,23 +80,22 @@ class TestRulesTimezoneAware:
         utc_hour = datetime.now(UTC).hour
         assert engine._on_time[1] == (utc_hour, 10.0)
 
-    def test_overnight_schedule_window(self, mock_hardware):
+    def test_overnight_schedule_window(self, mock_hardware, fixed_clock):
         from control.rules import RulesEngine
 
-        engine = RulesEngine()
-        engine._schedule_enabled = True
-        engine._schedule_start = dt_time(22, 0)
-        engine._schedule_end = dt_time(6, 0)
-        # Test by directly calling the method (uses real UTC time).
-        # If current UTC hour is 22-23 or 0-6, should be True; otherwise False.
-        # Instead, test the logic directly: overnight window means
-        # now >= start OR now <= end
-        utc_now = datetime.now(UTC).time()
-        result = engine._is_in_schedule()
-        if utc_now >= dt_time(22, 0) or utc_now <= dt_time(6, 0):
-            assert result is True
-        else:
-            assert result is False
+        def engine_at(hour: int, minute: int = 0):
+            engine = RulesEngine(clock=fixed_clock(hour, minute))
+            engine._schedule_enabled = True
+            engine._schedule_start = dt_time(22, 0)
+            engine._schedule_end = dt_time(6, 0)
+            return engine
+
+        # An overnight window wraps midnight: in range on both sides of it,
+        # out of range in between. This used to re-derive the expectation from
+        # the wall clock, so it agreed with the implementation by construction.
+        assert engine_at(23, 0)._is_in_schedule() is True
+        assert engine_at(3, 0)._is_in_schedule() is True
+        assert engine_at(12, 0)._is_in_schedule() is False
 
 
 class TestCayenneInt24Boundaries:

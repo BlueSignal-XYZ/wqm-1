@@ -12,12 +12,18 @@ Safety features (loaded from policies.yaml):
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import time as dt_time
 from typing import Any
 
 logger = logging.getLogger("wqm1.rules")
+
+
+def _utc_now() -> datetime:
+    """Default wall clock: timezone-aware UTC."""
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -44,9 +50,21 @@ _OPERATORS = {
 class RulesEngine:
     """Evaluates rules against sensor readings and controls relays."""
 
-    def __init__(self, relay_controller: Any = None) -> None:
+    def __init__(
+        self,
+        relay_controller: Any = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        """
+        Args:
+            relay_controller: Object exposing ``set(channel, state)``.
+            clock: Callable returning the current timezone-aware datetime.
+                Defaults to UTC wall time; inject a fixed clock to make
+                schedule-window and hourly-budget checks deterministic.
+        """
         self._rules: list[Rule] = []
         self._relay = relay_controller
+        self._clock = clock or _utc_now
         # Track auto-shutoff timers: {relay_channel: shutoff_time}
         self._timers: dict[int, float] = {}
 
@@ -149,7 +167,7 @@ class RulesEngine:
             return True
         if self._schedule_start is None or self._schedule_end is None:
             return True
-        now = datetime.now(UTC).time()
+        now = self._clock().time()
         if self._schedule_start <= self._schedule_end:
             return self._schedule_start <= now <= self._schedule_end
         # Overnight window (e.g. 22:00 – 06:00)
@@ -168,7 +186,7 @@ class RulesEngine:
         """Return True if the relay still has on-time budget this hour."""
         if self._max_on_s_per_hour <= 0:
             return True
-        current_hour = datetime.now(UTC).hour
+        current_hour = self._clock().hour
         entry = self._on_time.get(relay)
         if entry is None or entry[0] != current_hour:
             # New hour — reset accumulator
@@ -180,7 +198,7 @@ class RulesEngine:
         """Add seconds to a relay's hourly on-time counter."""
         if self._max_on_s_per_hour <= 0:
             return
-        current_hour = datetime.now(UTC).hour
+        current_hour = self._clock().hour
         entry = self._on_time.get(relay)
         if entry is None or entry[0] != current_hour:
             self._on_time[relay] = (current_hour, seconds)
