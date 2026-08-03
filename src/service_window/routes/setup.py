@@ -206,10 +206,44 @@ def cloud() -> ResponseReturnValue:
     )
 
 
-@setup_bp.route("/sensors")
+# Probes the installer declares on the Sensors step. The analog four are the
+# ones that used to be ASSUMED fitted — the assumption that let a bare board
+# publish pH for nine hours. RS485 probes already had their own toggles.
+FITTABLE_PROBES = (
+    ("ph_enabled", "pH"),
+    ("tds_enabled", "TDS"),
+    ("turbidity_enabled", "Turbidity"),
+    ("temperature_enabled", "Temperature"),
+    ("orp_enabled", "ORP (analog)"),
+)
+
+
+@setup_bp.route("/sensors", methods=["GET", "POST"])
 @login_required
-def sensors() -> str:
-    config = read_config(current_app.config["CONFIG_PATH"])
+def sensors() -> ResponseReturnValue:
+    path = current_app.config["CONFIG_PATH"]
+
+    if request.method == "POST":
+        # An unchecked box is a real declaration of "not fitted", so every key
+        # is written explicitly rather than only the checked ones. Anything
+        # omitted would keep its previous value and the operator would have no
+        # way to un-declare a probe they had removed.
+        updates = {key: (request.form.get(key) == "on") for key, _ in FITTABLE_PROBES}
+        update_config(path, updates)
+        fitted = [label for key, label in FITTABLE_PROBES if updates[key]]
+        flash(
+            (
+                "Fitted probes recorded: " + ", ".join(fitted) + ". "
+                "Takes effect when setup finishes."
+                if fitted
+                else "No probes declared — this unit will record no water data until "
+                "one is fitted and declared here."
+            ),
+            "success" if fitted else "info",
+        )
+        return redirect(url_for("setup.sensors"))
+
+    config = read_config(path)
     db = DBReader(current_app.config["DB_PATH"])
     try:
         readings = db.get_readings(limit=30)
@@ -217,6 +251,9 @@ def sensors() -> str:
         readings = []
     cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
     ready = all(c["status"] in ("ok", "disabled") for c in cards.values())
+    # Absent key = fitted, matching health.py — a unit upgrading from before
+    # these keys existed must not appear to have lost its probes.
+    fitment = {key: bool(config.get(key, key != "orp_enabled")) for key, _ in FITTABLE_PROBES}
     return render_template(
         "setup/sensors.html",
         steps=STEPS,
@@ -224,6 +261,8 @@ def sensors() -> str:
         cards=cards,
         ready=ready,
         have_readings=bool(readings),
+        probes=FITTABLE_PROBES,
+        fitment=fitment,
     )
 
 
