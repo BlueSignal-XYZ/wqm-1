@@ -287,6 +287,32 @@ class WQM1App:
             logger.warning("LoRa init failed: %s", e)
 
         # --- Cloud (HTTP/WiFi) transport — coexists with LoRaWAN ---
+        #
+        # Say why the transport is NOT starting. This used to be a bare `if`
+        # with no else: a unit whose config said cloud_enabled: true but whose
+        # api_key had silently failed to save produced not one line of log, and
+        # sat offline while its dashboard said "no sensor data". The operator
+        # has no way to tell "not configured" from "configured and broken"
+        # without a message, and this is the cheapest message in the system.
+        if self._settings.cloud_enabled and not self._settings.api_key:
+            logger.error(
+                "Cloud reporting is ENABLED but no API key is set — the device "
+                "cannot report. Claim it in the cloud dashboard and paste the "
+                "key into the Service Window (Provisioning, or the setup "
+                "wizard's Cloud step), then restart this service."
+            )
+        elif not self._settings.cloud_enabled and self._settings.api_key:
+            logger.warning(
+                "An API key is set but cloud_enabled is false — readings are "
+                "being stored locally and never uploaded. Enable cloud mode in "
+                "the Service Window to start reporting."
+            )
+        elif not self._settings.cloud_enabled:
+            logger.info(
+                "Cloud reporting disabled (cloud_enabled=false, no API key). "
+                "Readings are stored locally only."
+            )
+
         if self._settings.cloud_enabled and self._settings.api_key:
             from cloud import CloudClient
 

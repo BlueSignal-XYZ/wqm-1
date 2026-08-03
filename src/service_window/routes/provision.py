@@ -125,6 +125,24 @@ def set_cloud() -> ResponseReturnValue:
         flash("Enter the device API key before enabling cloud mode.", "error")
         return redirect(url_for("provision.index"))
 
+    # Pasting a key means "make this work". This form previously wrote whatever
+    # the checkbox said even when a fresh key was supplied, so saving a key with
+    # the box unticked silently set cloud_enabled: false — worse than a no-op,
+    # it turned OFF the thing being configured. A field unit sat offline for
+    # hours on exactly this: key present, cloud disabled, not one line in the
+    # log because the worker never starts unless both are set.
+    #
+    # The key field is never pre-filled (see the template placeholder), so a
+    # non-empty api_key here can only mean the operator just typed one. Blank
+    # key + unchecked box remains a deliberate disable and is still honoured.
+    if api_key and not enabled:
+        updates["cloud_enabled"] = True
+        flash(
+            "Cloud reporting enabled — a device API key was supplied. "
+            "To turn reporting off, save again with the box unticked and the key field blank.",
+            "info",
+        )
+
     update_config(path, updates)
     flash("Cloud settings saved — restart the firmware service to apply.", "success")
     return redirect(url_for("provision.index"))
