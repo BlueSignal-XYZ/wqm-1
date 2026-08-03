@@ -1,18 +1,19 @@
-{% extends "base.html" %}
-{% from "_health.html" import steps_bar %}
+{% extends "setup_base.html" %}
 {% block title %}Setup — PIN{% endblock %}
 {% block content %}
-{{ steps_bar(steps, step) }}
-<h1>Set your access PIN</h1>
-<p class="lead">This PIN protects the unit's local controls. The factory PIN
+<h1 class="setup-h1">Set your access PIN</h1>
+<p class="lead">This PIN protects the unit&rsquo;s local controls. The factory PIN
 (1234) is not allowed — anyone who finds the unit could guess it.</p>
 <form method="post" class="setup-form">
-    <label>New PIN (4–8 digits)
+    <label>New PIN
         <input type="password" name="pin" inputmode="numeric" pattern="\d{4,8}" required autofocus>
+        <small>4–8 digits. Keep it with the site records.</small>
     </label>
     <label>Confirm PIN
         <input type="password" name="pin_confirm" inputmode="numeric" pattern="\d{4,8}" required>
     </label>
-    <button type="submit" class="btn btn-primary">Save and continue</button>
+    <div class="setup-actions">
+        <button type="submit" class="btn btn-primary btn-lg">Save and continue</button>
+    </div>
 </form>
 {% endblock %}

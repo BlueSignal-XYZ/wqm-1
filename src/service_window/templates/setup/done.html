@@ -1,9 +1,8 @@
-{% extends "base.html" %}
-{% from "_health.html" import steps_bar, health_card %}
+{% extends "setup_base.html" %}
+{% from "_health.html" import health_card %}
 {% block title %}Setup — Finish{% endblock %}
 {% block content %}
-{{ steps_bar(steps, step) }}
-<h1>Go / no-go checklist</h1>
+<h1 class="setup-h1">Go / no-go checklist</h1>
 {% if overall == 'ok' %}
 <p class="lead">Everything checks out. Finish setup and this unit is on its own.</p>
 {% else %}
@@ -16,6 +15,10 @@ keeps monitoring either way.</p>
     {% endfor %}
 </div>
 <form method="post">
-    <button type="submit" class="btn btn-primary">Finish setup</button>
+    <div class="setup-actions">
+        <button type="submit" class="btn btn-primary btn-lg">Finish setup</button>
+    </div>
+    <p class="skip-note">Finishing restarts the monitoring service so everything you
+    entered (cloud key, PIN) takes effect immediately.</p>
 </form>
 {% endblock %}

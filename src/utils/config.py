@@ -155,8 +155,14 @@ class Settings:
     # garbled bytes, try the alternative bauds.
     gps_baud: int = 9600
 
-    # LoRaWAN
+    # LoRaWAN OTAA credentials. Both are issued by the cloud when the device is
+    # claimed and must match what is registered on the network server — a unit
+    # whose app_key is still the all-zero sentinel has never been provisioned
+    # and cannot join. app_eui was a hardcoded placeholder in identity.py; it
+    # lives here so a TTN application can be pointed at without a firmware
+    # release.
     app_key: str = "00000000000000000000000000000000"
+    app_eui: str = "0000000000000000"
 
     # Cloud sync (HTTP/WiFi transport — coexists with LoRaWAN). Enable once the
     # device has an api_key; set via the service window /provision/cloud page.
@@ -271,6 +277,7 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     # GPS / radio / credentials — restart-required, never remote
     "gps_baud": SettingSpec(int, hot=False, min=1200, max=921600, remote=False),
     "app_key": SettingSpec(str, hot=False, max_length=32, remote=False),
+    "app_eui": SettingSpec(str, hot=False, max_length=16, remote=False),
     "cloud_enabled": SettingSpec(bool, hot=False, remote=False),
     "cloud_ingest_url": SettingSpec(str, hot=False, max_length=256, remote=False),
     "cloud_command_url": SettingSpec(str, hot=False, max_length=256, remote=False),

@@ -133,6 +133,148 @@ class TestCloudStep:
         assert "/setup/sensors" in resp.headers["Location"]
 
 
+class TestNetworkStep:
+    """The link check the wizard never had — see PR discussion on WiFi vs LoRa."""
+
+    def test_network_step_is_in_the_wizard_before_cloud(self, factory_client):
+        from service_window.routes.setup import STEPS
+
+        assert STEPS.index("network") < STEPS.index("cloud")
+
+    def test_page_reports_the_link(self, factory_client, monkeypatch):
+        import utils.netinfo as netinfo
+
+        monkeypatch.setattr(netinfo, "current_ssid", lambda: "PondHouse")
+        monkeypatch.setattr(netinfo, "local_ip", lambda: "192.168.1.224")
+        monkeypatch.setattr("utils.health.read_wifi_rssi_dbm", lambda: -52)
+
+        client, _ = factory_client
+        resp = client.get("/setup/network")
+        assert resp.status_code == 200
+        assert b"PondHouse" in resp.data
+        assert b"192.168.1.224" in resp.data
+        assert b"-52 dBm" in resp.data
+
+    def test_marginal_signal_tells_the_installer_to_move_it(self, factory_client, monkeypatch):
+        import utils.netinfo as netinfo
+
+        monkeypatch.setattr(netinfo, "current_ssid", lambda: "FarShed")
+        monkeypatch.setattr(netinfo, "local_ip", lambda: "10.0.0.9")
+        monkeypatch.setattr("utils.health.read_wifi_rssi_dbm", lambda: -80)
+
+        client, _ = factory_client
+        resp = client.get("/setup/network")
+        # The point of the step: an actionable instruction, before they leave.
+        assert b"before you leave the site" in resp.data
+
+    def test_offline_unit_still_renders_and_says_monitoring_continues(
+        self, factory_client, monkeypatch
+    ):
+        import utils.netinfo as netinfo
+
+        monkeypatch.setattr(netinfo, "current_ssid", lambda: None)
+        monkeypatch.setattr(netinfo, "local_ip", lambda: None)
+        monkeypatch.setattr("utils.health.read_wifi_rssi_dbm", lambda: None)
+
+        client, _ = factory_client
+        resp = client.get("/setup/network")
+        assert resp.status_code == 200
+        assert b"Not connected" in resp.data
+        assert b"monitoring" in resp.data.lower() or b"locally" in resp.data
+
+
+class TestCloudKeyVerification:
+    """Saving a key must prove it works, not just report 'saved'."""
+
+    def _patch_probe(self, monkeypatch, state, detail="x"):
+        import service_window.routes.setup as setup_mod  # noqa: F401
+        import utils.netinfo as netinfo
+
+        monkeypatch.setattr(
+            netinfo,
+            "verify_device_key",
+            lambda *a, **k: {"state": state, "detail": detail, "status": None},
+        )
+
+    def test_accepted_key_reports_verified(self, factory_client, monkeypatch):
+        self._patch_probe(monkeypatch, "ok")
+        client, _ = factory_client
+        resp = client.post("/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True)
+        assert b"verified" in resp.data
+
+    def test_rejected_key_warns_before_leaving(self, factory_client, monkeypatch):
+        self._patch_probe(monkeypatch, "degraded", detail="The cloud rejected this key.")
+        client, app = factory_client
+        resp = client.post("/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True)
+        assert b"rejected this key" in resp.data
+        # Still saved: the installer may be fixing it on the cloud side, and
+        # losing what they pasted would be worse than keeping a suspect key.
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert saved["api_key"] == "k" * 20
+
+    def test_unreachable_cloud_does_not_claim_the_key_is_bad(self, factory_client, monkeypatch):
+        self._patch_probe(monkeypatch, "down")
+        client, _ = factory_client
+        resp = client.post("/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True)
+        assert b"could not be reached" in resp.data
+        assert b"rejected" not in resp.data
+
+
+class TestLoRaCredentials:
+    """A wizard-commissioned unit must be able to join, not just report.
+
+    Before this, the wizard collected only the HTTP api_key, so every unit that
+    finished setup kept app_key = 32 zeros — the same sentinel provision.py
+    treats as 'never provisioned'. It could never complete an OTAA join.
+    """
+
+    KEY = "k" * 20
+    APP_KEY = "b00d95c6cb0d65bc9e57fff1c27afa4b"
+
+    def test_lora_credentials_are_saved_with_the_cloud_key(self, factory_client):
+        client, app = factory_client
+        client.post(
+            "/setup/cloud",
+            data={
+                "api_key": self.KEY,
+                "app_key": self.APP_KEY.upper(),
+                "app_eui": "0000000000000000",
+            },
+            follow_redirects=False,
+        )
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        # Stored lowercase so it round-trips through bytes.fromhex consistently.
+        assert saved["app_key"] == self.APP_KEY
+        assert saved["app_eui"] == "0000000000000000"
+
+    def test_wifi_only_site_may_omit_them(self, factory_client):
+        client, app = factory_client
+        resp = client.post("/setup/cloud", data={"api_key": self.KEY}, follow_redirects=False)
+        assert resp.status_code == 302
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert saved["api_key"] == self.KEY
+
+    def test_malformed_app_key_is_rejected_not_silently_stored(self, factory_client):
+        client, app = factory_client
+        resp = client.post(
+            "/setup/cloud",
+            data={"api_key": self.KEY, "app_key": "nothex"},
+            follow_redirects=True,
+        )
+        assert b"32 hex characters" in resp.data
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert saved.get("app_key") != "nothex"
+
+    def test_malformed_join_eui_is_rejected(self, factory_client):
+        client, _ = factory_client
+        resp = client.post(
+            "/setup/cloud",
+            data={"api_key": self.KEY, "app_eui": "123"},
+            follow_redirects=True,
+        )
+        assert b"16 hex characters" in resp.data
+
+
 class TestDoneStep:
     def test_finish_marks_setup_completed(self, factory_client):
         client, app = factory_client

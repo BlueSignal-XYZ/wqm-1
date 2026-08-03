@@ -36,9 +36,13 @@ setup_bp = Blueprint("setup", __name__, url_prefix="/setup")
 
 _PIN_RE = re.compile(r"^\d{4,8}$")
 _CLOUD_KEY_RE = re.compile(r"^[0-9a-zA-Z]{16,128}$")
+# LoRaWAN OTAA credentials, both issued by the cloud at claim time.
+_APP_KEY_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+_APP_EUI_RE = re.compile(r"^[0-9a-fA-F]{16}$")
+_ZERO_APP_KEY = "00000000000000000000000000000000"
 _FACTORY_PIN = "1234"
 
-STEPS = ["welcome", "pin", "identity", "cloud", "sensors", "done"]
+STEPS = ["welcome", "pin", "identity", "network", "cloud", "sensors", "done"]
 
 
 def setup_completed(config_path: str) -> bool:
@@ -97,6 +101,39 @@ def identity() -> str:
     )
 
 
+@setup_bp.route("/network")
+@login_required
+def network() -> str:
+    """
+    Link check at the mounting location, before the cloud key is asked for.
+
+    Two things go wrong here and both are invisible until the next day: the
+    unit associates at a signal level that won't survive the enclosure being
+    closed, and the site's network has no route out. Both are cheap to see now
+    and expensive to diagnose from a desk later.
+    """
+    from diagnostics.explain import explain
+    from utils.netinfo import wifi_status
+
+    config = read_config(current_app.config["CONFIG_PATH"])
+    wifi = wifi_status()
+    cards = {
+        "wifi": explain(
+            "wifi",
+            wifi["state"],
+            {"ssid": wifi["ssid"], "rssi": wifi["rssi_dbm"]},
+        )
+    }
+    return render_template(
+        "setup/network.html",
+        steps=STEPS,
+        step="network",
+        wifi=wifi,
+        cards=cards,
+        lora_enabled=bool(config.get("lora_enabled", True)),
+    )
+
+
 @setup_bp.route("/cloud", methods=["GET", "POST"])
 @login_required
 def cloud() -> ResponseReturnValue:
@@ -108,13 +145,57 @@ def cloud() -> ResponseReturnValue:
             )
             return redirect(url_for("setup.sensors"))
         key = request.form.get("api_key", "").strip()
+        # LoRaWAN OTAA credentials come from the same claim as the HTTP key.
+        # Optional: a WiFi-only site never needs them, but a unit that finishes
+        # setup without them can never join — the wizard used to omit them
+        # entirely, so every wizard-commissioned unit had the all-zero sentinel.
+        app_key = request.form.get("app_key", "").strip()
+        app_eui = request.form.get("app_eui", "").strip()
+        lora_updates: dict[str, str] = {}
+        lora_error = None
+        if app_key:
+            if _APP_KEY_RE.match(app_key):
+                lora_updates["app_key"] = app_key.lower()
+            else:
+                lora_error = "The LoRa AppKey must be exactly 32 hex characters."
+        if app_eui:
+            if _APP_EUI_RE.match(app_eui):
+                lora_updates["app_eui"] = app_eui.lower()
+            else:
+                lora_error = "The JoinEUI must be exactly 16 hex characters."
+
         if not _CLOUD_KEY_RE.match(key):
             flash("That doesn't look like a device API key (16–128 letters/numbers).", "error")
+        elif lora_error:
+            flash(lora_error, "error")
         else:
             update_config(
-                current_app.config["CONFIG_PATH"], {"cloud_enabled": True, "api_key": key}
+                current_app.config["CONFIG_PATH"],
+                {"cloud_enabled": True, "api_key": key, **lora_updates},
             )
-            flash("Cloud key saved — it takes effect when setup finishes.", "success")
+            # Verify the key against the cloud NOW rather than reporting
+            # "saved" and letting a mistyped key surface as a device that
+            # simply never appears online. The probe is read-only.
+            from utils.netinfo import verify_device_key
+
+            check = verify_device_key(
+                config.get(
+                    "cloud_api_base",
+                    "https://us-central1-waterquality-trading.cloudfunctions.net/app",
+                ),
+                _identity()["device_id"],
+                key,
+            )
+            if check["state"] == "ok":
+                flash("Cloud key saved and verified — the cloud accepted this unit.", "success")
+            elif check["state"] == "degraded":
+                flash(f"Key saved, but {check['detail']} Check it before you leave.", "error")
+            else:
+                flash(
+                    "Key saved, but the cloud could not be reached to verify it. "
+                    "Re-check on the Finish step.",
+                    "info",
+                )
             return redirect(url_for("setup.sensors"))
     return render_template(
         "setup/cloud.html",

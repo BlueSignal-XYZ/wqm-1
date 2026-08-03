@@ -263,7 +263,12 @@ class WQM1App:
             self._radio = SX1262()
             self._radio.init()
             app_key = bytes.fromhex(self._settings.app_key)
-            self._lorawan = LoRaWANMAC(self._radio, self._dev_eui, APP_EUI, app_key)
+            # Config wins over the compiled-in placeholder so a TTN application
+            # can be pointed at without cutting a firmware release. The join
+            # will not be accepted unless this matches the JoinEUI the device
+            # is registered under on the network server.
+            app_eui = bytes.fromhex(self._settings.app_eui) if self._settings.app_eui else APP_EUI
+            self._lorawan = LoRaWANMAC(self._radio, self._dev_eui, app_eui, app_key)
 
             # Restore session from DB (join, if needed, happens on the radio
             # worker's thread so a missing gateway can't stall boot).

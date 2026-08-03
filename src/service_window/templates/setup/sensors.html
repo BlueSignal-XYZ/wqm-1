@@ -1,27 +1,29 @@
-{% extends "base.html" %}
-{% from "_health.html" import steps_bar, health_card %}
+{% extends "setup_base.html" %}
+{% from "_health.html" import health_card %}
 {% block title %}Setup — Sensors{% endblock %}
 {% block content %}
-{{ steps_bar(steps, step) }}
-<h1>Sensor check</h1>
+<h1 class="setup-h1">Sensor check</h1>
 {% if not have_readings %}
-<p class="lead">Waiting for the first readings… make sure the probes are in the
-water. This page refreshes automatically.</p>
+<p class="lead">Waiting for the first readings — make sure the probes are in the
+water. This can take a minute or two after power-on.</p>
 {% elif ready %}
 <p class="lead">All sensors are reading. Nice work.</p>
 {% else %}
-<p class="lead">Some sensors need attention — each card below says what to check.
-This page refreshes automatically as you fix things.</p>
+<p class="lead">Some sensors need attention — each card below says what to check.</p>
 {% endif %}
+<p class="refresh-note">This page refreshes itself every 15 seconds.</p>
 <div class="grid">
     {% for name, card in cards.items() %}
     {{ health_card(name|capitalize, card) }}
     {% endfor %}
 </div>
-<p>Installing digital RS485 probes (chlorine, digital ORP, 5-in-1)?
+<p class="skip-note">Installing digital RS485 probes (chlorine, digital ORP, 5-in-1)?
    <a href="{{ url_for('rs485.index') }}">Set them up here</a> — you can come back
    to this check afterwards.</p>
-<a class="btn btn-primary" href="{{ url_for('setup.done') }}">Continue</a>
+<div class="setup-actions">
+    <a class="btn {{ 'btn-primary' if ready else 'btn-secondary' }} btn-lg"
+       href="{{ url_for('setup.done') }}">{{ 'Continue' if ready else 'Continue anyway' }}</a>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>setTimeout(function () { window.location.reload(); }, 15000);</script>

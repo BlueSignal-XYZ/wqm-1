@@ -1,16 +1,15 @@
-{% extends "base.html" %}
-{% from "_health.html" import steps_bar %}
+{% extends "setup_base.html" %}
 {% block title %}Setup{% endblock %}
 {% block content %}
-{{ steps_bar(steps, step) }}
-<h1>Welcome — let's set this unit up</h1>
-<p class="lead">This takes about five minutes, right from your phone. You'll:</p>
-<ul class="setup-list">
-    <li>Set your own access PIN</li>
-    <li>Register the unit's identity with your records</li>
-    <li>Connect it to BlueSignal Cloud</li>
-    <li>Watch every sensor come up green</li>
-</ul>
-<p>You can leave this page and come back — your progress is saved.</p>
-<a class="btn btn-primary" href="{{ url_for('setup.pin') }}">Start setup</a>
+<h1 class="setup-h1">Let&rsquo;s set this unit up</h1>
+<p class="lead">About five minutes, right from your phone. Four things happen:</p>
+<ol class="welcome-list">
+    <li><b>Secure it</b> — replace the factory PIN with your own.</li>
+    <li><b>Record its identity</b> — device ID and radio address for your install records.</li>
+    <li><b>Connect the cloud</b> — claim the unit at cloud.bluesignal.xyz and paste its key.</li>
+    <li><b>Watch it come alive</b> — every sensor checked live before you walk away.</li>
+</ol>
+<div class="setup-actions">
+    <a class="btn btn-primary btn-lg" href="{{ url_for('setup.pin') }}">Start setup</a>
+</div>
 {% endblock %}
