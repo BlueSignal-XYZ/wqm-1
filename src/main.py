@@ -187,10 +187,25 @@ class WQM1App:
         self._cal = CalibrationManager()
         if direct:
             self._adc = ADS1115()
-            self._temp = DS18B20()
-            self._ph = PHSensor(self._adc)
-            self._tds = TDSSensor(self._adc)
-            self._turbidity = TurbiditySensor(self._adc)
+            # Only build a sensor for a probe that is declared FITTED. An
+            # undeclared channel is left as None, and SamplingWorker skips a
+            # None sensor — so an open input can never be read, converted, and
+            # published as a measurement. The alternative (read everything and
+            # try to spot nonsense downstream) is what let a probe-less unit
+            # emit pH for nine hours and raise 38 threshold alerts.
+            s0 = self._settings
+            self._temp = DS18B20() if s0.temperature_enabled else None
+            self._ph = PHSensor(self._adc) if s0.ph_enabled else None
+            self._tds = TDSSensor(self._adc) if s0.tds_enabled else None
+            self._turbidity = TurbiditySensor(self._adc) if s0.turbidity_enabled else None
+            for name, fitted in (
+                ("temperature", s0.temperature_enabled),
+                ("pH", s0.ph_enabled),
+                ("TDS", s0.tds_enabled),
+                ("turbidity", s0.turbidity_enabled),
+            ):
+                if not fitted:
+                    logger.info("%s probe not fitted (declared in config) — not sampled", name)
             if self._settings.orp_enabled and not self._settings.rs485_orp_enabled:
                 self._orp = ORPSensor(self._adc)
             elif not self._settings.rs485_orp_enabled:

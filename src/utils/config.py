@@ -227,6 +227,25 @@ class Settings:
     # Sensors
     orp_enabled: bool = False  # No ORP hardware on PCBA Fin_3; enable when connected
 
+    # Which of the four core analog probes are PHYSICALLY FITTED.
+    #
+    # These used to be assumed present — health.py said so outright ("core
+    # analog probes are always fitted") — so the firmware read them whatever
+    # was attached. An unfitted channel is an open input, and an open input is
+    # noise the conversion happily turns into a number: a bench unit with no
+    # electrode published pH for nine hours and raised 38 threshold alerts.
+    #
+    # A declared probe is read. An undeclared one is not read at all, so it
+    # cannot invent data. Same contract ORP, chlorine and the 5-in-1 already
+    # have; the core four were the exception, and the exception was the bug.
+    #
+    # Defaults stay True so an existing unit that IS fitted keeps reporting
+    # across an upgrade. Commissioning sets them honestly per site.
+    ph_enabled: bool = True
+    tds_enabled: bool = True
+    turbidity_enabled: bool = True
+    temperature_enabled: bool = True
+
     # RS485 (Modbus-RTU) sensors — Honde probes via the USB adapter.
     # Data over USB; the probes take 12V from the unit's rail. Each probe
     # ships at address 1: multi-drop requires re-addressing during setup
@@ -317,6 +336,12 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     # Sensors
     "board": SettingSpec(str, hot=False, max_length=32, remote=False),
     "orp_enabled": SettingSpec(bool, hot=False),
+    # Physical fitment — a restart is required because the sensor objects are
+    # constructed at start-up, exactly like orp_enabled above.
+    "ph_enabled": SettingSpec(bool, hot=False),
+    "tds_enabled": SettingSpec(bool, hot=False),
+    "turbidity_enabled": SettingSpec(bool, hot=False),
+    "temperature_enabled": SettingSpec(bool, hot=False),
     "rs485_port": SettingSpec(str, hot=False, max_length=64, remote=False),
     "rs485_chlorine_enabled": SettingSpec(bool, hot=False),
     "rs485_chlorine_addr": SettingSpec(int, hot=False, min=1, max=247),

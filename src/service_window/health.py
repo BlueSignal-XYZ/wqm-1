@@ -41,7 +41,14 @@ def _sensor_enabled(sensor: str, orp_enabled: bool, config: dict[str, Any] | Non
         return bool(cfg.get("rs485_chlorine_enabled"))
     if sensor in ("conductivity", "salinity"):
         return bool(cfg.get("rs485_multi_enabled"))
-    return True  # core analog probes are always fitted
+    # The core four are no longer assumed fitted. Treating them as always
+    # present is what made a disconnected electrode look like a working one on
+    # this very page: it reported "pH probe is reading normally" for a channel
+    # with nothing attached. Absent from config = fitted, so units upgrading
+    # from before these keys existed keep their current behaviour.
+    if sensor in ("ph", "tds", "turbidity", "temperature"):
+        return bool(cfg.get(f"{sensor}_enabled", True))
+    return True
 
 
 def sensor_cards(
