@@ -17,6 +17,7 @@ from utils.config import (
     NERNST_F,
     NERNST_R,
     NERNST_SLOPE_25C,
+    PH_MAX_WINDOW_SPAN,
 )
 
 logger = logging.getLogger("wqm1.ph")
@@ -123,5 +124,28 @@ class PHSensor:
         self._window.append(ph)
         if len(self._window) > self._window_size:
             self._window = self._window[-self._window_size :]
+
+        # Volatility gate — the guard the rail check cannot provide for pH.
+        # An open electrode input sits at mid-scale and wanders; real water
+        # does not. See PH_MAX_WINDOW_SPAN for the field data behind this.
+        #
+        # Three samples is the smallest window that can distinguish a wander
+        # from a step: two points differ, three establish that they keep
+        # differing. Gating on a FULL window instead would have meant reporting
+        # nothing until five samples had accumulated — a five-minute blind spot
+        # at startup, and it breaks the read-once contract that calibration and
+        # temperature-compensation checks legitimately rely on.
+        span = max(self._window) - min(self._window)
+        if len(self._window) >= 3 and span > PH_MAX_WINDOW_SPAN:
+            logger.warning(
+                "pH spread %.2f over the last %d samples exceeds %.2f (values "
+                "%s) — electrode disconnected, loose, or not yet settled; "
+                "reporting no reading",
+                span,
+                len(self._window),
+                PH_MAX_WINDOW_SPAN,
+                ", ".join(f"{v:.2f}" for v in self._window),
+            )
+            return None
 
         return round(float(median(self._window)), 2)
