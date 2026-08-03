@@ -2,7 +2,7 @@
 
 import time
 from datetime import time as dt_time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 class TestRulesEngine:
@@ -103,10 +103,13 @@ class TestDownlinkCommand:
 
 
 class TestScheduleWindow:
-    def test_rules_fire_inside_schedule(self, mock_hardware):
+    def test_rules_fire_inside_schedule(self, mock_hardware, fixed_clock):
         from control.rules import Rule, RulesEngine
 
-        engine = RulesEngine()
+        # 12:00 is inside the window by construction. Against the wall clock
+        # this test failed for the 23:59 minute each day, since an inclusive
+        # 00:00–23:59 window excludes its own final minute.
+        engine = RulesEngine(clock=fixed_clock(12, 0))
         engine.load_policies(
             {
                 "schedule": {"enabled": True, "start": "00:00", "end": "23:59"},
@@ -117,22 +120,18 @@ class TestScheduleWindow:
         actions = engine.evaluate({"ph": 9.0})
         assert (1, True) in actions
 
-    def test_rules_blocked_outside_schedule(self, mock_hardware):
+    def test_rules_blocked_outside_schedule(self, mock_hardware, fixed_clock):
         from control.rules import Rule, RulesEngine
 
-        engine = RulesEngine()
-        # Set a window that is definitely not now (1 minute in the past)
+        # Clock reads 12:00; the window closed at 00:01.
+        engine = RulesEngine(clock=fixed_clock(12, 0))
         engine._schedule_enabled = True
         engine._schedule_start = dt_time(0, 0)
         engine._schedule_end = dt_time(0, 1)
         engine.add_rule(Rule(sensor="ph", operator=">", threshold=8.0, relay=1, action="on"))
 
-        # Mock datetime.now() to return 12:00
-        with patch("control.rules.datetime") as mock_dt:
-            mock_dt.now.return_value.time.return_value = dt_time(12, 0)
-            mock_dt.now.return_value.hour = 12
-            actions = engine.evaluate({"ph": 9.0})
-            assert len(actions) == 0
+        actions = engine.evaluate({"ph": 9.0})
+        assert len(actions) == 0
 
     def test_schedule_disabled_allows_all(self, mock_hardware):
         from control.rules import Rule, RulesEngine

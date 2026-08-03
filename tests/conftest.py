@@ -6,6 +6,8 @@ platform without RPi.GPIO, smbus2, spidev, or w1thermsensor installed.
 """
 
 import sys
+from collections.abc import Callable
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,6 +106,23 @@ def mock_hardware():
         "w1": _w1,
         "w1_sensor": _w1_sensor,
     }
+
+
+@pytest.fixture
+def fixed_clock():
+    """
+    Factory for a frozen UTC clock to inject as ``RulesEngine(clock=...)``.
+
+    Schedule windows and hourly on-time budgets are evaluated against this
+    instead of wall time, so a test asserting "inside the window" cannot be
+    falsified by the minute it happens to run at.
+    """
+
+    def _make(hour: int, minute: int = 0) -> Callable[[], datetime]:
+        moment = datetime(2026, 1, 1, hour, minute, tzinfo=UTC)
+        return lambda: moment
+
+    return _make
 
 
 @pytest.fixture(autouse=True)
