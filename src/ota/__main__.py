@@ -2,9 +2,11 @@
 OTA agent entry point — ``python3 -m ota``.
 
 Run by systemd (``bluesignal-ota.service``) as root: the agent needs to flip
-the /opt/bluesignal/current symlink and restart services. Exits cleanly when
-OTA is disabled or the device has no API key (not yet commissioned) —
-systemd's Restart=always + RestartSec then acts as a slow re-check.
+the /opt/bluesignal/current symlink, restart services, and reboot the host on
+request from the Service Window. When OTA is disabled or the device has no API
+key (not yet commissioned) it watches for reboot requests for one restart
+interval and then exits — systemd's Restart=always + RestartSec acts as a slow
+re-check of the settings, and the reboot path stays alive in the meantime.
 """
 
 import logging
@@ -20,6 +22,12 @@ from utils.config import Settings, get_settings
 from utils.identity import get_device_id
 
 logger = logging.getLogger("wqm1.ota")
+
+# How long to keep watching for host-reboot requests when OTA polling is off,
+# before exiting so systemd restarts us and the settings are re-read. Matched to
+# the unit's RestartSec=30, so the reboot button is live roughly half the time
+# and worst-case latency on an OTA-disabled unit is about half a minute.
+IDLE_REBOOT_WATCH_S = 30
 
 
 def _setup_logging(settings: Settings) -> None:
@@ -54,13 +62,6 @@ def main() -> int:
     settings = get_settings()
     _setup_logging(settings)
 
-    if not settings.ota_enabled:
-        logger.info("OTA disabled (ota_enabled=false) — exiting")
-        return 0
-    if not settings.api_key:
-        logger.info("No device API key configured — OTA agent idle, exiting")
-        return 0
-
     device_id = get_device_id()
     agent = OTAAgent(settings, device_id)
     stop_event = threading.Event()
@@ -71,6 +72,17 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # Idle on OTA, but still the only root process that can reboot this host.
+    idle_reason = None
+    if not settings.ota_enabled:
+        idle_reason = "OTA disabled (ota_enabled=false)"
+    elif not settings.api_key:
+        idle_reason = "no device API key configured"
+    if idle_reason:
+        logger.info("%s — not polling; watching for reboot requests", idle_reason)
+        agent.watch_reboot_requests(stop_event, IDLE_REBOOT_WATCH_S)
+        return 0
 
     logger.info(
         "OTA agent starting (device=%s, poll=%ds, installed=%s)",

@@ -27,6 +27,7 @@ from typing import Any
 
 import yaml
 
+from app.reboot import REBOOT_REQUEST_FLAG, request_host_reboot
 from app.state import StateStore
 from app.supervisor import Supervisor
 from app.workers import (
@@ -507,6 +508,12 @@ class WQM1App:
         if action == "restart":
             self._state.request_restart()
             return {"ok": True, "restarting": True}
+        if action == "reboot":
+            # Whole-host reboot, not just this service — the Service Window's
+            # break-glass path when a unit is reachable on :8080 but its sshd
+            # is not. We hold no privilege to do it ourselves: relays go to
+            # fail-safe here, the root OTA agent does the reboot.
+            return request_host_reboot(self._relays, REBOOT_REQUEST_FLAG)
         if action == "config_reload":
             self._config.reload()
             return {"ok": True, "configVersion": self._config.remote_version}

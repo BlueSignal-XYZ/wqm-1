@@ -13,14 +13,17 @@ import os
 import sqlite3
 import tarfile
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from Crypto.PublicKey import ECC
 from Crypto.Signature import eddsa
 
 from ota.agent import (
+    REBOOT_REQUEST_MAX_AGE_S,
     OTAAgent,
     sha256_file,
     validate_tar_members,
@@ -204,18 +207,29 @@ class Env:
         self.run_cmd = FakeRunCmd()
         self.clock = FakeClock()
 
-    def agent(self, opener: FakeOpener, pubkey_path: Path | None = "default") -> OTAAgent:
-        return OTAAgent(
-            self.settings,
-            DEVICE_ID,
-            opener=opener,
-            run_cmd=self.run_cmd,
-            clock=self.clock,
-            sleep=self.clock.sleep,
-            root=self.root,
-            state_dir=self.state_dir,
-            pubkey_path=self.pubkey if pubkey_path == "default" else pubkey_path,
-        )
+    def agent(
+        self, opener: FakeOpener, pubkey_path: Path | None = "default", **over: object
+    ) -> OTAAgent:
+        kwargs: dict = {
+            "opener": opener,
+            "run_cmd": self.run_cmd,
+            "clock": self.clock,
+            "sleep": self.clock.sleep,
+            "root": self.root,
+            "state_dir": self.state_dir,
+            "pubkey_path": self.pubkey if pubkey_path == "default" else pubkey_path,
+        }
+        kwargs.update(over)
+        return OTAAgent(self.settings, DEVICE_ID, **kwargs)
+
+    def request_reboot(self, age_s: float = 0.0) -> Path:
+        """Drop a reboot-request flag as the firmware would, optionally aged."""
+        flag = self.state_dir / "reboot-request"
+        flag.touch()
+        if age_s:
+            stamp = time.time() - age_s
+            os.utime(flag, (stamp, stamp))
+        return flag
 
     def current_release(self) -> str:
         return Path(os.path.realpath(self.root / "current")).name
@@ -582,6 +596,115 @@ class TestRunForever:
         assert opener.poll_count == 2
         elapsed = env.clock.now - start
         assert 0.8 * env.settings.ota_poll_s <= elapsed <= 1.2 * env.settings.ota_poll_s + 1
+
+
+# ---------------------------------------------------------------------------
+# Host reboot: the agent is the only root process that can perform one
+# ---------------------------------------------------------------------------
+
+
+class TestHostReboot:
+    def test_no_request_does_nothing(self, env):
+        agent = env.agent(FakeOpener())
+
+        assert agent.poll_reboot_request() is False
+        assert env.run_cmd.calls == []
+
+    def test_request_reboots_the_host(self, env):
+        flag = env.request_reboot()
+        agent = env.agent(FakeOpener())
+
+        assert agent.poll_reboot_request() is True
+        assert env.run_cmd.calls == [["systemctl", "reboot"]]
+        assert not flag.exists(), "the request must be consumed"
+
+    def test_flag_is_consumed_before_the_reboot_is_ordered(self, env):
+        """Otherwise a reboot that is ordered but never completes leaves the
+        flag behind and the unit reboots again, and again."""
+        flag = env.request_reboot()
+        agent = env.agent(FakeOpener())
+        seen = {}
+
+        def record(argv, **kwargs):
+            seen["flag_still_there"] = flag.exists()
+            return env.run_cmd(argv, **kwargs)
+
+        agent._run_cmd = record
+        agent.poll_reboot_request()
+
+        assert seen["flag_still_there"] is False
+
+    def test_stale_request_is_dropped_not_executed(self, env):
+        """A flag that survived a power cut must not reboot the unit hours
+        later, out of nowhere."""
+        flag = env.request_reboot(age_s=REBOOT_REQUEST_MAX_AGE_S + 60)
+        agent = env.agent(FakeOpener())
+
+        assert agent.poll_reboot_request() is False
+        assert env.run_cmd.calls == []
+        assert not flag.exists(), "a stale request is still cleared away"
+
+    def test_request_just_inside_the_window_is_honoured(self, env):
+        env.request_reboot(age_s=REBOOT_REQUEST_MAX_AGE_S - 30)
+        agent = env.agent(FakeOpener())
+
+        assert agent.poll_reboot_request() is True
+
+    def test_failed_reboot_does_not_kill_the_agent(self, env):
+        env.request_reboot()
+        agent = env.agent(FakeOpener())
+        agent._run_cmd = MagicMock(side_effect=OSError("systemctl missing"))
+
+        assert agent.poll_reboot_request() is False
+
+    def test_run_forever_reboots_between_cycles(self, env):
+        """The flag is read in the wait loop, never mid-apply: the update poll
+        for this cycle happens first, then the reboot."""
+        opener = FakeOpener(poll_data=None)
+        env.request_reboot()
+        stop = threading.Event()
+
+        env.agent(opener).run_forever(stop)
+
+        assert opener.poll_count == 1
+        assert env.run_cmd.calls == [["systemctl", "reboot"]]
+
+    def test_run_forever_stops_after_ordering_a_reboot(self, env):
+        """The reboot itself ends the loop — nothing sets the stop event, and
+        the agent must not sit there polling (or reboot again) while systemd
+        tears the host down."""
+        opener = FakeOpener(poll_data=None)
+        env.request_reboot()
+        stop = threading.Event()
+
+        env.agent(opener).run_forever(stop)
+
+        assert not stop.is_set()
+        assert env.clock.now == 1000.0, "returned immediately, never waited out a cycle"
+
+    def test_idle_watch_honours_a_request(self, env):
+        """OTA off or unit not commissioned: the reboot button still works."""
+        env.request_reboot()
+        stop = threading.Event()
+
+        assert env.agent(FakeOpener()).watch_reboot_requests(stop, 30) is True
+        assert env.run_cmd.calls == [["systemctl", "reboot"]]
+
+    def test_idle_watch_returns_after_its_window(self, env):
+        """Bounded so the caller can exit and let systemd re-read settings."""
+        stop = threading.Event()
+        start = env.clock.now
+
+        assert env.agent(FakeOpener()).watch_reboot_requests(stop, 30) is False
+        assert 30 <= env.clock.now - start <= 31
+        assert env.run_cmd.calls == []
+
+    def test_idle_watch_stops_on_signal(self, env):
+        stop = threading.Event()
+        stop.set()
+
+        assert env.agent(FakeOpener()).watch_reboot_requests(stop, 30) is False
+        assert env.clock.now == 1000.0, "must not sleep once stopped"
 
 
 # ---------------------------------------------------------------------------

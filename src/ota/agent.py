@@ -57,6 +57,17 @@ CHECK_NOW_FLAG = "ota-check-now"
 STATE_FILE = "ota-state.json"
 DOWNLOAD_DIR = "ota-download"
 
+# Written by the firmware on a Service Window reboot request (see
+# app.reboot.REBOOT_REQUEST_FLAG — same file). Rebooting the host needs root,
+# which on this unit only the OTA agent has; it is deliberately not granted to
+# the firmware or the Service Window via sudo.
+REBOOT_FLAG = "reboot-request"
+REBOOT_POLL_S = 1
+# A request older than this is ignored. The flag sits on persistent storage, so
+# one that outlived a power cut (or an agent that was down) must not turn into a
+# surprise reboot hours later — the operator can simply press the button again.
+REBOOT_REQUEST_MAX_AGE_S = 300
+
 REQUEST_TIMEOUT_S = 30
 DOWNLOAD_TIMEOUT_S = 120
 SELF_TEST_POLL_S = 10
@@ -163,6 +174,7 @@ class OTAAgent:
         root: Path = DEFAULT_ROOT,
         state_dir: Path = DEFAULT_STATE_DIR,
         pubkey_path: Path | None = None,
+        wall_clock: Any = time.time,
     ) -> None:
         self._settings = settings
         self._device_id = device_id
@@ -170,6 +182,9 @@ class OTAAgent:
         self._run_cmd = run_cmd
         self._clock = clock
         self._sleep = sleep
+        # Separate from `clock` (monotonic): the only wall-clock comparison is
+        # against a flag file's mtime, which monotonic time cannot be compared to.
+        self._wall_clock = wall_clock
         self._root = Path(root)
         self._state_dir = Path(state_dir)
         self._pubkey_path = Path(pubkey_path) if pubkey_path else None
@@ -192,6 +207,67 @@ class OTAAgent:
     @property
     def _check_now_flag(self) -> Path:
         return self._state_dir / CHECK_NOW_FLAG
+
+    @property
+    def _reboot_flag(self) -> Path:
+        return self._state_dir / REBOOT_FLAG
+
+    # -- host reboot ---------------------------------------------------------
+
+    def _claim_reboot_request(self) -> bool:
+        """Consume a pending reboot request, if there is a fresh one.
+
+        The flag is removed *before* the caller reboots, so a reboot that is
+        ordered but never completes cannot put the unit in a reboot loop.
+        """
+        flag = self._reboot_flag
+        try:
+            age = self._wall_clock() - flag.stat().st_mtime
+        except OSError:
+            return False
+        try:
+            flag.unlink()
+        except OSError as e:
+            logger.warning("Could not consume reboot request %s: %s", flag, e)
+            return False
+        if age > REBOOT_REQUEST_MAX_AGE_S:
+            logger.warning("Ignoring reboot request written %.0fs ago (stale)", age)
+            return False
+        return True
+
+    def reboot_host(self) -> None:
+        """Reboot the host. Root-only — this is the second reason the agent
+        runs as root, alongside the release symlink flip."""
+        logger.warning("Rebooting host on request from the Service Window")
+        self._run_cmd(["systemctl", "reboot"])
+
+    def poll_reboot_request(self) -> bool:
+        """Execute a pending host-reboot request. True when one was ordered."""
+        if not self._claim_reboot_request():
+            return False
+        try:
+            self.reboot_host()
+        except Exception as e:  # noqa: BLE001 — never let this kill the agent
+            logger.error("Host reboot failed: %s", e)
+            return False
+        return True
+
+    def watch_reboot_requests(self, stop_event: Any, duration_s: float) -> bool:
+        """Watch only for host-reboot requests, for at most ``duration_s``.
+
+        Used when OTA polling is off — disabled by config, or the unit is not
+        commissioned yet. The agent used to just exit in that case, which
+        silently took the reboot button with it: nothing else on the unit can
+        reboot the host. Bounded rather than endless so the caller can exit and
+        let systemd's ``Restart=always`` re-read the settings, keeping the
+        "commissioned after boot starts polling within a minute" behaviour.
+        """
+        deadline = self._clock() + duration_s
+        while not stop_event.is_set() and self._clock() < deadline:
+            if self.poll_reboot_request():
+                return True
+            self._sleep(REBOOT_POLL_S)
+        return False
 
     # -- identity / versions -------------------------------------------------
 
@@ -653,7 +729,10 @@ class OTAAgent:
         """Poll on ``ota_poll_s`` with +/-20% jitter until ``stop_event`` is
         set. A ``{state_dir}/ota-check-now`` flag file (touched by the main
         firmware on an ota_check command / otaPending) triggers an immediate
-        poll — checked every wait tick."""
+        poll — checked every wait tick, as is the reboot request flag.
+
+        Both flags are only read between cycles, never during one: a reboot
+        must not land in the middle of an apply."""
         with contextlib.suppress(Exception):
             self.recover_incomplete_apply()
 
@@ -669,6 +748,8 @@ class OTAAgent:
             wait_s = self._settings.ota_poll_s * random.uniform(0.8, 1.2)  # nosec B311
             deadline = self._clock() + wait_s
             while not stop_event.is_set() and self._clock() < deadline:
+                if self.poll_reboot_request():
+                    return  # host is going down; don't order a second one
                 if self._check_now_flag.exists():
                     with contextlib.suppress(OSError):
                         self._check_now_flag.unlink()

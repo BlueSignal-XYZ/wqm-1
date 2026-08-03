@@ -27,4 +27,20 @@ advanced configuration file.</p>
     monitoring resumes in about a minute.</small></p>
     <button type="submit" name="restart" value="1" class="btn btn-secondary">Restart monitoring service</button>
 </form>
+<hr>
+<h2>Reboot the unit</h2>
+<p class="lead"><small>Restarts the whole device, not just the monitoring service.
+Use this when the unit answers here but not over SSH. Relays are switched off
+first; sampling and control rules stop until the unit is back, about a minute.</small></p>
+<form method="post" class="setup-form">
+    <label>
+        Type {{ reboot_word }} to confirm
+        <input type="text" name="reboot_confirm" placeholder="{{ reboot_word }}"
+               autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false">
+        <small>Deliberate on purpose — a reboot interrupts monitoring. If this
+        page is still answering a minute from now, the reboot did not happen:
+        press again.</small>
+    </label>
+    <button type="submit" name="reboot" value="1" class="btn btn-danger">Reboot unit</button>
+</form>
 {% endblock %}

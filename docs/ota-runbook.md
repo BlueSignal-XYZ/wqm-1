@@ -182,13 +182,56 @@ so the first 2.0.0 install is manual:
 changes go through the signed OTA path — an unsigned change made over SSH is
 invisible to the audit trail and gets clobbered by the next release anyway.
 
-## 8. Device-side settings reference
+## 8. Remote host reboot (recovery)
+
+The OTA agent has a second job: it is the only root-resident process on a unit,
+so it is what performs a **host reboot** requested from the Service Window
+(Settings → Reboot the unit, typed confirmation required).
+
+This exists because SSH is not always the break-glass path it is assumed to be.
+A unit seen in the field on 2026-08-02 had an sshd that reset every connection
+(`kex_exchange_identification: Connection reset by peer`, a dirty filesystem
+after a hot SD-card pull) while the Service Window on :8080 kept serving fine —
+it was already resident in memory. With SSH dead there was no remote recovery
+at all: only a site visit or a re-image.
+
+**Privilege path — no new sudo rights.** The firmware and the Service Window
+both run as the install user and stay that way:
+
+1. Service Window POSTs `reboot` to the firmware's command socket.
+2. The firmware drives the relays to fail-safe (`RelayController.all_off()`)
+   and touches `/var/lib/bluesignal/reboot-request`.
+3. The OTA agent (root) sees the flag between poll cycles — never mid-apply —
+   removes it, and runs `systemctl reboot`.
+4. systemd SIGTERMs the firmware on the way down, which drops the coils a
+   second time via `_shutdown()` and the `atexit` handler.
+
+Requests older than 5 minutes are ignored, so a flag that outlived a power cut
+cannot reboot a unit out of nowhere; the flag is removed *before* the reboot is
+ordered, so a reboot that fails cannot loop. When OTA polling is off (disabled,
+or the unit is not commissioned) the agent no longer exits outright — it watches
+for reboot requests for 30 s, then exits so `Restart=always` re-reads the
+settings, which keeps the reboot button working with a worst-case latency of
+about half a minute.
+
+Operating notes:
+
+```bash
+journalctl -u bluesignal-ota -f          # "Rebooting host on request..."
+sudo touch /var/lib/bluesignal/reboot-request   # same thing, by hand
+```
+
+If the button reports success and nothing happens, the agent is down — check
+`systemctl status bluesignal-ota`. A reboot is not a substitute for a rollback:
+if a unit is unhealthy after an update, use §5.
+
+## 9. Device-side settings reference
 
 All in `/etc/bluesignal/config.yaml` (schema-validated; hot-reloadable):
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `ota_enabled` | `true` | Master switch; agent exits when false |
+| `ota_enabled` | `true` | Master switch; agent stops polling when false (still serves reboot requests, §8) |
 | `ota_poll_s` | `900` | Poll interval, ±20% jitter |
 | `ota_max_bundle_bytes` | `67108864` | Hard bundle size cap (64 MB) |
 | `ota_self_test_timeout_s` | `600` | Self-test window before rollback |
