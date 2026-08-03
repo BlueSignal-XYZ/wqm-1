@@ -474,3 +474,15 @@ pre.output {
     .steps-track { margin-bottom: 2.2rem; }
     .setup-card { padding: 1.25rem 1rem 1.5rem; }
 }
+
+/* Probe fitment checklist (Sensors step) */
+.fitment-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #e6ebf0;
+    font-size: 0.95rem;
+}
+.fitment-row:last-of-type { border-bottom: none; }
+.fitment-row input[type="checkbox"] { width: 20px; height: 20px; flex-shrink: 0; }

@@ -11,6 +11,23 @@ water. This can take a minute or two after power-on.</p>
 {% else %}
 <p class="lead">Some sensors need attention — each card below says what to check.</p>
 {% endif %}
+<form method="post" class="howto">
+    <div class="howto-title">Which probes are fitted?</div>
+    <p class="skip-note" style="margin-top:0">
+        Tick only what is <b>physically connected</b>. An unfitted channel is an open
+        input, and an open input produces convincing numbers out of electrical noise —
+        a unit left undeclared published pH for nine hours with nothing attached.
+        Undeclared probes are not sampled at all.
+    </p>
+    {% for key, label in probes %}
+    <label class="fitment-row">
+        <input type="checkbox" name="{{ key }}" {{ 'checked' if fitment[key] else '' }}>
+        <span>{{ label }}</span>
+    </label>
+    {% endfor %}
+    <button type="submit" class="btn btn-secondary">Save fitted probes</button>
+</form>
+
 <p class="refresh-note">This page refreshes itself every 15 seconds.</p>
 <div class="grid">
     {% for name, card in cards.items() %}
@@ -26,5 +43,15 @@ water. This can take a minute or two after power-on.</p>
 </div>
 {% endblock %}
 {% block scripts %}
-<script>setTimeout(function () { window.location.reload(); }, 15000);</script>
+<script>
+// Don't reload out from under someone mid-declaration — a refresh that eats a
+// half-ticked form is how an installer gives up on a page.
+(function () {
+  var editing = false;
+  document.addEventListener('change', function (e) {
+    if (e.target.type === 'checkbox') editing = true;
+  });
+  setTimeout(function () { if (!editing) window.location.reload(); }, 15000);
+})();
+</script>
 {% endblock %}
