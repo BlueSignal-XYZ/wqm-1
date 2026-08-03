@@ -10,7 +10,14 @@ import logging
 from statistics import median
 
 from sensors.ads1115 import ADS1115
-from utils.config import ADC_CH_PH, NERNST_F, NERNST_R, NERNST_SLOPE_25C
+from utils.config import (
+    ADC_CH_PH,
+    ADC_FULL_SCALE_V,
+    ADC_RAIL_MARGIN_V,
+    NERNST_F,
+    NERNST_R,
+    NERNST_SLOPE_25C,
+)
 
 logger = logging.getLogger("wqm1.ph")
 
@@ -81,11 +88,36 @@ class PHSensor:
         else:
             temp_factor = 1.0
 
+        # A disconnected electrode leaves AIN2 floating and it drifts toward a
+        # rail. That is not a measurement, and it must not be dressed up as
+        # one: reject it before the conversion can make it look plausible.
+        if voltage <= ADC_RAIL_MARGIN_V or voltage >= ADC_FULL_SCALE_V - ADC_RAIL_MARGIN_V:
+            logger.warning(
+                "pH input at %.3f V is against a rail (0-%.3f V); electrode "
+                "disconnected or front-end fault — reporting no reading",
+                voltage,
+                ADC_FULL_SCALE_V,
+            )
+            return None
+
         # pH = 7.0 + (V_measured - V_ph7) * slope * temp_factor
         ph = 7.0 + (voltage - self._v_ph7) * self._slope * temp_factor
 
-        # Clamp to valid range
-        ph = max(0.0, min(14.0, ph))
+        # NOT clamped. Clamping is what turned a floating input into a
+        # confident, in-range lie: a first field unit with no probe attached
+        # reported pH 0.00 and pH 14.00 — the clamp rails — and the cloud
+        # raised four critical threshold alerts from pure noise. A value
+        # outside 0-14 is not a pH the electrode could produce, so the honest
+        # answer is "no reading", exactly as turbidity already does for its
+        # own out-of-band rail.
+        if not 0.0 <= ph <= 14.0:
+            logger.warning(
+                "pH %.2f computed from %.3f V is outside 0-14; probe "
+                "disconnected or calibration invalid — reporting no reading",
+                ph,
+                voltage,
+            )
+            return None
 
         # Moving median filter
         self._window.append(ph)

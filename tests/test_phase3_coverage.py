@@ -280,12 +280,14 @@ class TestPHSensorCompensation:
         from sensors.ads1115 import ADS1115
         from sensors.ph import PHSensor
 
-        mock_hardware["bus"].read_i2c_block_data.side_effect = [
-            [0x85, 0x83],  # config read during init
-            [0x85, 0x83],  # OS poll
-            [0x30, 0x00],  # conversion result
-        ]
+        # read_voltage is stubbed directly rather than driven through the I2C
+        # register mock: the side_effect list above was misaligned, so the
+        # config word (0x8583) was consumed as the conversion result and the
+        # sensor actually saw -3.920 V. The old clamp laundered that into a
+        # valid-looking pH, which is why this passed. This test is about
+        # temperature compensation, not ADS1115 register decoding.
         adc = ADS1115()
+        adc.read_voltage = MagicMock(return_value=1.536)  # mid-scale, valid
         ph = PHSensor(adc)
         ph.set_calibration(1.04, 1.50)
 
@@ -301,12 +303,10 @@ class TestTDSSensorEdgeCases:
         from sensors.ads1115 import ADS1115
         from sensors.tds import TDSSensor
 
-        mock_hardware["bus"].read_i2c_block_data.side_effect = [
-            [0x85, 0x83],  # init
-            [0x85, 0x83],  # OS poll
-            [0x10, 0x00],  # conversion result
-        ]
+        # Stubbed for the same reason as the pH case above — the register
+        # mock delivered -3.920 V, not the intended 0x1000 conversion.
         adc = ADS1115()
+        adc.read_voltage = MagicMock(return_value=0.512)  # valid mid-scale
         tds = TDSSensor(adc)
 
         result = tds.read(temp_c=-10.0)
@@ -317,12 +317,8 @@ class TestTDSSensorEdgeCases:
         from sensors.ads1115 import ADS1115
         from sensors.tds import TDSSensor
 
-        mock_hardware["bus"].read_i2c_block_data.side_effect = [
-            [0x85, 0x83],
-            [0x85, 0x83],
-            [0x10, 0x00],
-        ]
         adc = ADS1115()
+        adc.read_voltage = MagicMock(return_value=0.512)  # valid mid-scale
         tds = TDSSensor(adc)
 
         result = tds.read(temp_c=None)

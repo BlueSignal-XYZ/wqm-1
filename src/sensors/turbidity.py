@@ -69,8 +69,21 @@ class TurbiditySensor:
 
         ntu = (self._v_clear - voltage) * TURB_NTU_MAX / v_range
 
-        # Clamp
-        ntu = max(0.0, min(TURB_NTU_MAX, ntu))
+        # The rail guard above already rejects a disconnected probe, but this
+        # clamp still fabricated a boundary value from the other direction: a
+        # voltage above v_clear computes negative NTU and was published as a
+        # confident 0.0 — "perfectly clear water" — when it actually means the
+        # clear-water calibration is stale or the buffer drifted. Same fix as
+        # pH and TDS: out of band means no reading, not a tidy endpoint.
+        if not 0.0 <= ntu <= TURB_NTU_MAX:
+            logger.warning(
+                "Turbidity %.1f NTU computed from %.3f V is outside 0-%.0f; "
+                "calibration invalid — reporting no reading",
+                ntu,
+                voltage,
+                TURB_NTU_MAX,
+            )
+            return None
 
         # Moving median filter
         self._window.append(ntu)
