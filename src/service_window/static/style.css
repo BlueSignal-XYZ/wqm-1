@@ -296,6 +296,10 @@ pre.output {
        font-size: 1rem; cursor: pointer; text-decoration: none; }
 .btn-primary { background: #2c6cb0; color: #fff; }
 .btn-secondary { background: #eef1f4; color: #2b333b; }
+/* Later than the shared `.btn:hover` above and equally specific, so a
+   destructive button does not turn accent-blue under the finger. */
+.btn-danger { background: var(--error); color: #fff; }
+.btn-danger:hover { background: #b91c1c; }
 .qr-wrap { margin: 16px 0; }
 .mono { font-family: ui-monospace, monospace; }
 

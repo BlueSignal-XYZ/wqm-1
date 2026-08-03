@@ -72,6 +72,9 @@ sys.modules["w1thermsensor"] = _w1
 def mock_hardware():
     """Provide access to mock hardware objects and reset between tests."""
     _gpio.reset_mock()
+    # reset_mock() leaves side_effect in place, so a test that makes a pin
+    # write fail would otherwise leak that failure into every later test.
+    _gpio.output.side_effect = None
     _smbus2.reset_mock()
     _bus.reset_mock()
     _smbus2.SMBus.side_effect = None

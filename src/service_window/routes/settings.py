@@ -41,6 +41,12 @@ SIMPLE_SETTINGS: dict[str, tuple[str, str]] = {
 
 _DEFAULTS = Settings()
 
+# Typed rather than clicked: a reboot stops sampling and suspends every control
+# rule for about a minute, so it must not be one mis-tap away on a phone held
+# in one hand at a wet install. Case-insensitive — the word is the deliberate
+# act, not the shift key.
+REBOOT_CONFIRMATION = "REBOOT"
+
 
 @settings_bp.route("/", methods=["GET", "POST"])
 @login_required
@@ -58,6 +64,9 @@ def index() -> ResponseReturnValue:
                 "success" if result.get("ok") else "error",
             )
             return redirect(url_for("settings.index"))
+
+        if request.form.get("reboot"):
+            return _reboot()
 
         raw: dict = {}
         for key in SIMPLE_SETTINGS:
@@ -93,4 +102,47 @@ def index() -> ResponseReturnValue:
     for key in SIMPLE_SETTINGS:
         values[key] = config.get(key, getattr(_DEFAULTS, key))
     specs = {key: SETTINGS_SCHEMA[key] for key in SIMPLE_SETTINGS}
-    return render_template("settings.html", simple=SIMPLE_SETTINGS, values=values, specs=specs)
+    return render_template(
+        "settings.html",
+        simple=SIMPLE_SETTINGS,
+        values=values,
+        specs=specs,
+        reboot_word=REBOOT_CONFIRMATION,
+    )
+
+
+def _reboot() -> ResponseReturnValue:
+    """Reboot the whole unit — the recovery path when the Service Window is
+    reachable but SSH is not.
+
+    Nothing here holds root. The firmware drives the relays to fail-safe and
+    leaves a request the root OTA agent executes; see `app.reboot`.
+    """
+    typed = request.form.get("reboot_confirm", "").strip()
+    if typed.upper() != REBOOT_CONFIRMATION:
+        flash(
+            f"Type {REBOOT_CONFIRMATION} in the box to confirm — nothing was rebooted.",
+            "error",
+        )
+        return redirect(url_for("settings.index"))
+
+    result = send_command(current_app.config["CMD_SOCK"], "reboot")
+    if not result.get("ok"):
+        flash(
+            "Could not reboot: the monitoring service did not accept the request "
+            f"({result.get('error', 'no reason given')}). The unit is still running.",
+            "error",
+        )
+    elif result.get("relaysSafe") is False:
+        flash(
+            "Rebooting — but the relays could not be confirmed off. Check them "
+            "when the unit comes back, in about a minute.",
+            "error",
+        )
+    else:
+        flash(
+            "Relays are off and the unit is rebooting. This page will not "
+            "respond for about a minute.",
+            "success",
+        )
+    return redirect(url_for("settings.index"))
