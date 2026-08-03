@@ -199,33 +199,23 @@ class TestCloudKeyVerification:
     def test_accepted_key_reports_verified(self, factory_client, monkeypatch):
         self._patch_probe(monkeypatch, "ok")
         client, _ = factory_client
-        resp = client.post(
-            "/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True
-        )
+        resp = client.post("/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True)
         assert b"verified" in resp.data
 
     def test_rejected_key_warns_before_leaving(self, factory_client, monkeypatch):
-        self._patch_probe(
-            monkeypatch, "degraded", detail="The cloud rejected this key."
-        )
+        self._patch_probe(monkeypatch, "degraded", detail="The cloud rejected this key.")
         client, app = factory_client
-        resp = client.post(
-            "/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True
-        )
+        resp = client.post("/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True)
         assert b"rejected this key" in resp.data
         # Still saved: the installer may be fixing it on the cloud side, and
         # losing what they pasted would be worse than keeping a suspect key.
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["api_key"] == "k" * 20
 
-    def test_unreachable_cloud_does_not_claim_the_key_is_bad(
-        self, factory_client, monkeypatch
-    ):
+    def test_unreachable_cloud_does_not_claim_the_key_is_bad(self, factory_client, monkeypatch):
         self._patch_probe(monkeypatch, "down")
         client, _ = factory_client
-        resp = client.post(
-            "/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True
-        )
+        resp = client.post("/setup/cloud", data={"api_key": "k" * 20}, follow_redirects=True)
         assert b"could not be reached" in resp.data
         assert b"rejected" not in resp.data
 
@@ -259,9 +249,7 @@ class TestLoRaCredentials:
 
     def test_wifi_only_site_may_omit_them(self, factory_client):
         client, app = factory_client
-        resp = client.post(
-            "/setup/cloud", data={"api_key": self.KEY}, follow_redirects=False
-        )
+        resp = client.post("/setup/cloud", data={"api_key": self.KEY}, follow_redirects=False)
         assert resp.status_code == 302
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["api_key"] == self.KEY
