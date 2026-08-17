@@ -122,14 +122,26 @@ auto-shutoff timer loop runs outside the suspension check, so only rules with
 Section 11's wording is accurate — "that channel's relay rules are suspended".
 The checklist and the handover record overstate it.
 
-**Rev H:** either (a) reword checks 18 to "rule suspension tested — driving
-probe pulled, channel's rules suspend and the cause is logged; verify the
-channel's held state is safe", or (b) implement reversion in firmware and keep
-the wording. (b) is the better product; (a) is what is true today. Do not ship
-a customer signature line for (b) while (a) is the behaviour.
+**RESOLVED — the firmware was fixed rather than the manual reworded.** The two
+options were (a) reword checks 18 down to what the code did, or (b) implement
+reversion and keep the wording. (b) shipped, because the manual was describing
+the right product: a newly suspended sensor now queues every channel its rules
+drive for a one-shot de-energize, and **de-energizing is the fail-safe state by
+construction** — fail-safe direction lives in the field wiring (COM→NO stops,
+COM→NC runs), so dropping the coil puts each channel exactly where its installer
+decided a dead controller should leave it, with no firmware-side table of
+wiring choices to go stale.
 
-Related: §15.3(09) voids the warranty for "defeat, bypass, or override of ...
-staleness reversion" — an exclusion for defeating something not yet implemented.
+Fixed in the same change: the auto-shutoff sweep sat below the schedule guard's
+early return, so a relay switched on at 20:59 with a 30 s duration stayed on
+until the window reopened. Both de-energizing paths now run ahead of the
+schedule and manual-override guards.
+
+Six tests added, five of which fail against the previous `rules.py`.
+
+**Rev H:** no wording change needed to checks 18 or Appendix E — they are now
+true. §15.3(09)'s exclusion for defeating staleness reversion is likewise now
+an exclusion for defeating something real.
 
 ### 4. The one-year suit limitation is void under the manual's own governing law
 
@@ -142,23 +154,40 @@ Section 15, p26:
 shortens the limitations period to less than **two years**. The clause is
 unenforceable under the law the same sentence selects.
 
-This is the identical defect already logged against `/warranty` in the
-marketplace CLAUDE.md. Both documents carry it; fix them together. Not legal
-advice — this is on the list for the Texas attorney review the AWG brief already
-mandates.
+**`/warranty` is fixed** — changed to two years, the shortest period Texas will
+actually enforce, with the statute cited in a comment so it does not get
+shortened back. **Rev H must make the same change**, or the printed warranty and
+the published one will disagree about the deadline to sue, which is a worse
+position than either number alone.
+
+Not legal advice — still on the list for the Texas attorney review the AWG brief
+mandates, but a void clause should not sit in a public document while waiting
+for a lawyer to say it is void.
 
 ---
 
 ## MEDIUM
 
-### 5. Input voltage conflicts with the published warranty page
+### 5. ~~Input voltage conflicts with the published warranty page~~ — WITHDRAWN
 
-Manual: "VIN is **24 V DC nominal**", "Confirm the supply is 24 V DC, 2 A
-minimum", plus an over-voltage warning box. The `/warranty` page excludes
-"damage from use outside the specified input voltage range (**9–24 V DC**)",
-which reads as an endorsement of 12 V operation. Decide which is true and make
-both documents say it. If 9 V really is supported, the manual's power section
-should say so; if not, `/warranty` is inviting a claim.
+I raised this as a conflict between the manual's "24 V DC nominal" and
+`/warranty`'s "9–24 V DC". It is not one, and the answer was already written
+down: the header comment in `WarrantyPage.jsx` records the founder's decision of
+2026-08-01 — the manual specifies what to **install** (a listed 24 V 2 A Class-2
+supply), the page states what the board **tolerates**, and the range reaches
+below 24 V because the compute module's USB input is used for bench work. Both
+are true of the same hardware.
+
+That comment also says, in terms, not to reconcile the two numbers by narrowing
+the range, because a published voltage range is an express warranty by
+description and narrowing it would strand legitimately bench-powered units
+outside coverage. Correct, and left alone.
+
+**Rev H should say this out loud** so the next reader does not re-derive it as a
+bug: one sentence in Section 07 noting that the tolerated input range is wider
+than the specified install voltage, and that the warranty page states the former.
+An audit finding that keeps getting re-raised and re-dismissed costs more over
+time than the sentence does.
 
 ### 6. Three different response commitments, two for the same channel
 
@@ -187,7 +216,15 @@ control-tier subscription." Conditioning a hardware warranty on the purchase of
 a service is close to the tie-in prohibition in **15 U.S.C. §2302(c)** for
 consumer products. The safety-practice exclusions (suppression, contactors,
 NC on life-critical) are ordinary and defensible; this one is different in kind.
-For the attorney list.
+
+**`/warranty` is fixed**, and the replacement is better targeted rather than
+merely safer: the exclusion now names *the commissioning procedure* — declared
+contact type, fail-safe direction, load current, dwell times, and the logged
+test-fire from Section 11. What wears out a relay is an uncommissioned channel,
+not an unpaid invoice. The subscription can still gate the *feature* in
+software; it just should not gate the *warranty*.
+
+**Rev H:** replace §15.3(08) with the same commissioning-based wording.
 
 ### 9. Appendix A calls AIN3 "spare" — it is PH_INN
 
@@ -271,6 +308,125 @@ and third-party retail ranges. Safe to publish on that count once the technical
 findings are resolved.
 
 ---
+
+## Rev H regeneration brief
+
+Hand the fenced block below to whoever (or whatever) regenerates the manual. It
+is self-contained and assumes no access to this repo.
+
+```
+ROLE: Update the BlueSignal WQM-1 Product & Installer Manual from Rev G to
+Rev H (doc WQM1-IM-100). Preserve structure, voice, visual system, section
+order, drawing set, and page count as closely as possible. Rev H is a
+correctness pass, not a redesign.
+
+=== A. REMOVE ANALOG ORP FROM THE BNC (the reason this revision exists) ===
+The BNC accepts a pH electrode ONLY. There is no pH/ORP mode switch, in
+firmware or hardware, on PCBA Fin_3 — the revision this manual documents.
+Rev G reintroduced a claim that Rev E had deliberately removed.
+
+ORP is available exactly one way: the optional RS485 digital ORP probe
+(RD-ORP-WE-01, +/-1999 mV) on the Modbus bus, which Section 08 already
+documents correctly and which should now be the ONLY place ORP appears as an
+available measurement.
+
+Edit every one of these:
+ - p2 changelog: delete the "ORP restored as a selectable mode" line. Rev H's
+   changelog should say ORP on the BNC was removed in error-correction, and
+   that ORP is RS485-only.
+ - p6 Section 01 channel table: the row becomes "pH" alone. Keep the separate
+   RS485 row that lists chlorine / EC / ORP as optional digital probes.
+ - p7 Section 03 spec: the front-end row describes a pH AFE. DELETE the
+   sentence "accepts a pH or an ORP electrode on the same BNC; usable ORP span
+   approximately +/-1 V, which covers the full practical range for water
+   treatment."
+ - p8 FIG 4.1 callout 11 and p9 board map row 11: "pH BNC" / "pH electrode".
+ - p11 Section 06 and p15 Section 08: "pH BNC", not "pH or ORP BNC".
+ - p22 Section 12: DELETE the "ORP (BNC)" calibration row. Keep the RS485
+   chlorine and 5-in-1 rows. In the recalibrate table, "pH or ORP (BNC)"
+   becomes "pH (BNC)".
+ - p27 Appendix A: delete "and is selectable between pH and ORP in firmware".
+   Change "AIN3 spare" to "AIN3 — reserved (carries PH_INN, the pH front end's
+   reference leg); do not drive." Keep the existing sentence pointing
+   integrators at the RS485 probe for ORP.
+ - p29 Appendix B.5: the cable row is "pH (BNC coax)".
+ - p30 Appendix C right-edge callout: "pH BNC".
+
+=== B. WARRANTY AND LEGAL (Section 15) ===
+1. LIMITATIONS PERIOD: change "within one (1) year after the cause of action
+   accrues" to "within TWO (2) YEARS". Tex. Civ. Prac. & Rem. Code 16.070
+   voids any contractual period under two years, and Texas is the governing
+   law this same clause selects. bluesignal.xyz/warranty has already been
+   changed to two years; the two documents must agree.
+2. FIRMWARE LICENCE (15.4): the WQM-1 firmware is GPL-3.0. Replace "grants the
+   purchaser a non-exclusive, non-transferable license to use the embedded
+   software solely as installed on the unit" with a statement that the
+   firmware is licensed under GPL-3.0, that source is available at the public
+   BlueSignal repository, and that the licence grants the right to use, study,
+   modify and redistribute on its terms. Keep the existing sentence about
+   open-source components retaining their own licences. Keep "licensed, not
+   sold" ONLY for genuinely proprietary components, if any remain. GPL-3.0
+   section 10 forbids the further restrictions the current wording imposes,
+   so the paragraph is not merely inaccurate, it is ineffective.
+3. SUBSCRIPTION TIE-IN (15.3 item 08): replace "Relay-based control operated
+   without an active control-tier subscription" with "Relay channels actuated
+   without completing the commissioning steps in Section 11 — declared contact
+   type, fail-safe direction, load current, dwell times, and the logged
+   test-fire." Conditioning a hardware warranty on buying a service is the
+   tie-in 15 U.S.C. 2302(c) prohibits for consumer products; conditioning it
+   on correct commissioning is both lawful and better aimed. The subscription
+   may still gate the feature in software.
+4. SUPPORT RESPONSE TIME: Section 14 escalation step 02 promises "response
+   within one business day"; Section 15 promises two business days for the
+   same channel (a ticket opened from the site record). Make both TWO business
+   days, matching the published warranty page. The 10-business-day RMA
+   processing commitment in 15.2 is a different thing and stays.
+
+=== C. THINGS THAT ARE TRUE NOW AND WERE NOT WHEN REV G WAS WRITTEN ===
+Commissioning check 18, Appendix F check 18, and the Appendix E handover line
+about staleness reversion are CORRECT as printed and must be kept. The firmware
+now de-energizes every channel driven by a sensor that has just been suspended,
+which puts the channel in whatever state its wiring defines as safe. Optionally
+add one clarifying sentence to Section 11: "Reversion de-energizes the channel.
+Because fail-safe direction is set by your wiring, a load on NO stops and a load
+on NC runs — the same behaviour as a dead controller, which is what Section 05's
+NC rule is for."
+
+=== D. SMALLER CORRECTIONS ===
+5. SLD-001 note 6 reads "SUPPRESSION ON ALL INDUCTIVE LOADS AND COILS. 12 AWG
+   CU MIN." The same sheet shows 14 AWG on CB1 and Section 07 specifies 18 AWG
+   minimum for the DC feed. Delete "12 AWG CU MIN" — Appendix B sizes
+   conductors and the note contradicts both the drawing and Section 07.
+6. Appendix B.1, 18 AWG row: at the stated basis (stranded uncoated copper,
+   75 C, NEC Ch.9 Table 8, 8.45 ohm/kft) 1 A gives 43 ft, not 45. Change the
+   cell to 43 and the "past 45 ft on a 1 A DC load" callout to 43 ft. Every
+   other cell in B.1 and B.2 is exactly right; do not touch them.
+7. Section 07: add one sentence noting that the board TOLERATES a wider input
+   range than the 24 V DC install specification, and that the published
+   warranty page states the tolerated range. This is not a contradiction and
+   should stop being re-raised as one.
+8. Appendix B.4: "never fit a DC-blocking inline attenuator or surge arrestor"
+   parses two ways. Rephrase to "any inline device on the GPS run must be
+   DC-passing — a DC-blocking arrestor or attenuator will kill the active
+   antenna", matching Section 7.1 which REQUIRES a DC-passing GPS arrestor.
+9. Appendix F (Spanish) rule 04 omits the English Section 05.07 detail about
+   switching a contactor coil through NC where load current exceeds the 3 A NC
+   rating. Add it — it is safety-relevant.
+10. Appendix A is split across pp27 and 35 and the contents page renders this
+    as "27 · 35", which reads as a typo. Either give the regulatory block its
+    own appendix letter or label it "27, 35".
+11. VERIFY BEFORE PUBLISHING: the FCC ID printed on p35 (2AD66-1262) must match
+    the actual grant for the LoRa module as shipped, and Part 15 Subpart B
+    normally requires the Class A/B statement alongside the two Part 15
+    conditions. This is a compliance check, not a copy edit.
+
+=== E. DO NOT CHANGE ===
+Everything in the "verified correct" list of docs/manual-errata-revG.md,
+which includes every GPIO in Appendix A, the 60 s / 300 s / 300 s timing
+constants, the relay ratings and active-high optoisolated drive, "ships inert",
+the NEC and Texas licensing citations, the cloud tier prices, and all of
+Appendix B other than the single 18 AWG cell above.
+```
 
 ## Publishing it
 
