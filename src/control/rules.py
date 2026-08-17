@@ -89,6 +89,9 @@ class RulesEngine:
         # flatlined probe must never keep (or start) actuating a relay on
         # frozen data.
         self._suspended_columns: set[str] = set()
+        # Channels awaiting a one-shot drop to fail-safe because the sensor
+        # driving them was just suspended. See _revert_suspended_to_failsafe.
+        self._pending_failsafe: set[int] = set()
 
     # Canonical monitor sensor names -> reading/rule column names.
     _SENSOR_TO_COLUMN = {
@@ -103,13 +106,23 @@ class RulesEngine:
     }
 
     def set_suspended_sensors(self, sensors: set[str]) -> None:
-        """Pause rules for the given canonical sensor names (from SensorMonitor)."""
+        """
+        Pause rules for the given canonical sensor names (from SensorMonitor),
+        and queue every channel they drive to drop to its fail-safe state.
+
+        Only *newly* suspended columns queue a reversion. A sensor that stays
+        suspended across cycles must not re-issue OFF every 60 s — the operator
+        may deliberately be holding a channel on by hand while swapping a probe.
+        """
         columns = {self._SENSOR_TO_COLUMN.get(s, s) for s in sensors}
+        newly = columns - self._suspended_columns
         if columns != self._suspended_columns:
             logger.warning(
                 "Rule suspension changed: %s",
                 ", ".join(sorted(columns)) if columns else "none",
             )
+        if newly:
+            self._pending_failsafe |= {r.relay for r in self._rules if r.sensor in newly}
         self._suspended_columns = columns
 
     def load_policies(self, policies: dict) -> None:
@@ -216,18 +229,29 @@ class RulesEngine:
             List of (relay_channel, state) actions to take.
         """
         actions: list[tuple[int, bool]] = []
+        now_mono = time.monotonic()
+
+        # --- De-energizing runs BEFORE the guards, always ---
+        #
+        # Both of the calls below can only ever turn a channel OFF, so neither
+        # the schedule window nor manual override may skip them. Turning things
+        # on is discretionary; letting go of a load is not.
+        #
+        # Without this, a relay switched on at 20:59 with a 30 s duration and a
+        # window closing at 21:00 stayed on until the window reopened, because
+        # the timer sweep sat below an early `return`.
+        actions.extend(self._revert_suspended_to_failsafe())
+        actions.extend(self._expire_timers(now_mono))
 
         # --- Guard: schedule window ---
         if not self._is_in_schedule():
             logger.debug("Outside schedule window, skipping rules")
-            return actions
+            return self._apply(actions)
 
         # --- Guard: manual override ---
         if self._manual_override:
             logger.debug("Manual override active, skipping rules")
-            return actions
-
-        now_mono = time.monotonic()
+            return self._apply(actions)
 
         # Accumulate on-time for relays that are currently on
         for relay, since in list(self._on_since.items()):
@@ -279,22 +303,72 @@ class RulesEngine:
                     self._last_off[rule.relay] = now_mono
                     self._on_since.pop(rule.relay, None)
 
-        # Check auto-shutoff timers
-        expired = [ch for ch, t in self._timers.items() if now_mono >= t]
-        for ch in expired:
+        return self._apply(actions)
+
+    def _expire_timers(self, now_mono: float) -> list[tuple[int, bool]]:
+        """Auto-shutoff sweep: channels whose ``duration_s`` has elapsed."""
+        actions: list[tuple[int, bool]] = []
+        for ch in [ch for ch, t in self._timers.items() if now_mono >= t]:
             actions.append((ch, False))
             self._last_off[ch] = now_mono
             self._on_since.pop(ch, None)
             del self._timers[ch]
+        return actions
 
-        # Apply actions to relay controller
+    def _revert_suspended_to_failsafe(self) -> list[tuple[int, bool]]:
+        """
+        De-energize every channel driven by a sensor that has just been
+        suspended, and forget its auto-shutoff timer.
+
+        **De-energizing IS the fail-safe state, and that is the whole design.**
+        Fail-safe direction is set by the wiring, not by firmware: a load on
+        COM→NO stops when the coil drops, a load on COM→NC runs. Section 05 of
+        the installer manual requires life-critical loads (aeration,
+        circulation) on NC precisely so that a dead controller leaves them
+        running. Dropping the coil therefore puts every channel in exactly the
+        state its installer chose for "the controller is not to be trusted right
+        now" — without firmware needing to know, or be told correctly, which way
+        each channel was wired. A firmware-side fail-safe table would be a
+        second copy of a fact that already exists in the field wiring, and the
+        copy would be the one that goes stale.
+
+        Suspension alone used to just stop evaluating the rule, which left the
+        relay wherever it happened to be. For a rule with ``duration_s: 0``
+        ("hold until the condition clears" — what the shipped dosing examples
+        use), a channel energized at the moment its probe froze stayed energized
+        indefinitely, because the rule that would have released it no longer
+        ran. On a dosing pump that is a chemical overfeed driven by a reading
+        that stopped being true.
+
+        Fires once per suspension transition, not every cycle: re-issuing OFF
+        every 60 s would bury the log and defeat the operator's ability to
+        override a channel by hand while a probe is being replaced.
+        """
+        if not self._pending_failsafe:
+            return []
+        actions: list[tuple[int, bool]] = []
+        for ch in sorted(self._pending_failsafe):
+            actions.append((ch, False))
+            self._last_off[ch] = time.monotonic()
+            self._on_since.pop(ch, None)
+            self._timers.pop(ch, None)
+        logger.warning(
+            "Sensor health: reverting relay(s) %s to fail-safe (de-energized) — "
+            "driving sensor(s) %s suspended",
+            ", ".join(str(c) for c in sorted(self._pending_failsafe)),
+            ", ".join(sorted(self._suspended_columns)) or "none",
+        )
+        self._pending_failsafe.clear()
+        return actions
+
+    def _apply(self, actions: list[tuple[int, bool]]) -> list[tuple[int, bool]]:
+        """Push actions to the relay controller and return them."""
         if self._relay and actions:
             for channel, state in actions:
                 try:
                     self._relay.set(channel, state)
                 except Exception as e:
                     logger.error("Relay %d action failed: %s", channel, e)
-
         return actions
 
     def process_downlink_command(self, fport: int, payload: bytes) -> bool:

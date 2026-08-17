@@ -397,3 +397,130 @@ class TestMultipleRules:
         assert (1, True) in actions  # pH high
         assert (4, True) in actions  # TDS high and temp high
         assert (3, True) in actions  # ORP low and turbidity high
+
+
+class TestFailSafeReversion:
+    """
+    A suspended sensor must not strand a relay in whatever state it happened
+    to be in — see RulesEngine._revert_suspended_to_failsafe. These are the
+    tests the installer manual's commissioning check 18 asserts against, and
+    the behaviour a customer signs for at handover.
+    """
+
+    def _engine(self, duration_s=0):
+        from control.rules import Rule, RulesEngine
+
+        from unittest.mock import MagicMock
+
+        relay = MagicMock()
+        engine = RulesEngine(relay)
+        engine.add_rule(
+            Rule(
+                sensor="ph",
+                operator=">",
+                threshold=9.0,
+                relay=1,
+                action="on",
+                duration_s=duration_s,
+            )
+        )
+        return engine, relay
+
+    def test_suspension_drops_the_coil(self, mock_hardware):
+        """The regression: duration_s=0 held a dosing pump on forever."""
+        engine, relay = self._engine()
+        assert (1, True) in engine.evaluate({"ph": 9.5})
+
+        engine.set_suspended_sensors({"ph"})
+        actions = engine.evaluate({"ph": 9.5})
+
+        assert (1, False) in actions, "stuck probe must de-energize the channel"
+        relay.set.assert_called_with(1, False)
+
+    def test_reversion_fires_once_not_every_cycle(self, mock_hardware):
+        """
+        An operator holding a channel on by hand while swapping a probe must
+        not be fought by the controller every 60 s.
+        """
+        engine, _ = self._engine()
+        engine.evaluate({"ph": 9.5})
+        engine.set_suspended_sensors({"ph"})
+
+        assert (1, False) in engine.evaluate({"ph": 9.5})
+        assert engine.evaluate({"ph": 9.5}) == [], "must not re-issue OFF while suspended"
+
+    def test_reversion_happens_outside_the_schedule_window(self, mock_hardware):
+        """De-energizing is never discretionary; the window only gates turning on."""
+        from datetime import datetime
+        from datetime import time as dt_time
+        from datetime import UTC
+
+        engine, _ = self._engine()
+        engine.evaluate({"ph": 9.5})
+        engine._schedule_enabled = True
+        engine._schedule_start = dt_time(7, 0)
+        engine._schedule_end = dt_time(8, 0)
+        engine._clock = lambda: datetime(2026, 8, 17, 23, 0, tzinfo=UTC)
+
+        engine.set_suspended_sensors({"ph"})
+        assert (1, False) in engine.evaluate({"ph": 9.5})
+
+    def test_a_second_sensor_going_stuck_reverts_only_its_own_channel(self, mock_hardware):
+        from control.rules import Rule
+
+        engine, _ = self._engine()
+        engine.add_rule(
+            Rule(sensor="tds_ppm", operator=">", threshold=100.0, relay=2, action="on")
+        )
+        engine.evaluate({"ph": 9.5, "tds_ppm": 500.0})
+
+        engine.set_suspended_sensors({"tds"})
+        actions = engine.evaluate({"ph": 9.5, "tds_ppm": 500.0})
+
+        assert (2, False) in actions
+        assert (1, False) not in actions, "a healthy channel must keep running"
+
+    def test_recovery_lets_rules_drive_the_channel_again(self, mock_hardware):
+        engine, _ = self._engine()
+        engine.evaluate({"ph": 9.5})
+        engine.set_suspended_sensors({"ph"})
+        engine.evaluate({"ph": 9.5})
+
+        engine.set_suspended_sensors(set())
+        assert (1, True) in engine.evaluate({"ph": 9.5})
+
+
+class TestAutoShutoffOutsideWindow:
+    def test_timer_expires_even_after_the_window_closes(self, mock_hardware):
+        """
+        A relay switched on at 20:59 with a 30 s duration used to stay on until
+        the window reopened: the timer sweep sat below the schedule guard's
+        early return.
+        """
+        import time as _time
+        from datetime import datetime
+        from datetime import time as dt_time
+        from datetime import UTC
+
+        from control.rules import Rule, RulesEngine
+
+        engine = RulesEngine()
+        engine.add_rule(
+            Rule(
+                sensor="ph",
+                operator=">",
+                threshold=9.0,
+                relay=1,
+                action="on",
+                duration_s=1,
+            )
+        )
+        engine.evaluate({"ph": 9.5})
+
+        engine._schedule_enabled = True
+        engine._schedule_start = dt_time(7, 0)
+        engine._schedule_end = dt_time(8, 0)
+        engine._clock = lambda: datetime(2026, 8, 17, 23, 0, tzinfo=UTC)
+        engine._timers[1] = _time.monotonic() - 1  # already due
+
+        assert (1, False) in engine.evaluate({"ph": 9.5})
