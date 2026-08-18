@@ -93,7 +93,11 @@ print(c.get('app_key', ''))
 fi
 
 # --- Policies file ---
-POLICIES="/opt/bluesignal/config/policies.yaml"
+# Since the OTA releases/ layout, the active tree is /opt/bluesignal/current.
+# The pre-OTA flat path is still checked so an un-migrated unit reports
+# honestly rather than claiming automation is disabled when it is not.
+POLICIES="/opt/bluesignal/current/config/policies.yaml"
+[ -f "$POLICIES" ] || POLICIES="/opt/bluesignal/config/policies.yaml"
 if [ -f "$POLICIES" ]; then
     RULE_COUNT=$(python3 -c "
 import yaml
