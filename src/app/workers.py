@@ -115,6 +115,7 @@ class SamplingWorker(Worker):
         self._state = state
         self.monitor = monitor
         self.adaptive = adaptive
+        self._no_sensor_cycles = 0
 
     def interval_s(self) -> float:
         if self.adaptive is not None:
@@ -135,6 +136,38 @@ class SamplingWorker(Worker):
             return None
 
     def step(self) -> None:
+        # No probe is fitted at all — record nothing.
+        #
+        # A reading with every sensor field null is not a measurement, and
+        # manufacturing one has a cost that is invisible until you go looking:
+        # the cloud rejects a sensor-less row outright, the firmware marks it
+        # failed_permanent, and it is never retried. A unit sitting with no
+        # probes connected quietly builds a graveyard — one field unit reached
+        # 13,938 dead rows that way while every heartbeat and diagnostic
+        # reported healthy.
+        #
+        # Deliberately keyed on "nothing is fitted" rather than "every read
+        # returned None". Those are different: the first is an unequipped unit
+        # with nothing to say, the second is a fitted probe that just failed,
+        # which must still be stored and surfaced as the fault it is.
+        if not any(self._sensors.values()):
+            if self._no_sensor_cycles == 0:
+                logger.warning(
+                    "No probes declared fitted — not recording readings. "
+                    "Declare the fitted probes in the Service Window "
+                    "(Sensors) or in /etc/bluesignal/config.yaml."
+                )
+            self._no_sensor_cycles += 1
+            # Roughly hourly at the default 60 s cadence, so the reason stays
+            # discoverable in the journal without flooding it.
+            if self._no_sensor_cycles % 60 == 0:
+                logger.warning(
+                    "Still no probes declared fitted — %d cycles with nothing to record.",
+                    self._no_sensor_cycles,
+                )
+            return
+        self._no_sensor_cycles = 0
+
         temp = self._sensors.get("temperature")
         temp_c = self._safe_read("Temperature", temp.read_temp_c) if temp else None
 

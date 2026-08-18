@@ -347,3 +347,85 @@ class TestGpsWorker:
         worker = GpsWorker(make_settings(), gps, None, state)
         worker.step()
         assert cycles == [1]
+
+
+class TestUnequippedUnitRecordsNothing:
+    """A unit with no probe fitted must not manufacture empty reading rows.
+
+    The cloud rejects a sensor-less row and the firmware marks it
+    failed_permanent, so every such row is a permanent dead entry that is
+    never retried.
+    """
+
+    def _worker(self, sensors):
+        from app.workers import SamplingWorker
+
+        db = FakeDB()
+        worker = SamplingWorker(
+            make_settings(),
+            sensors=sensors,
+            db=db,
+            rules=None,
+            relays=None,
+            leds=None,
+            health=SimpleNamespace(update_last_seen=lambda: None),
+            state=SimpleNamespace(
+                gps=lambda: SimpleNamespace(lat=None, lon=None, alt_m=None),
+                incr_error=lambda _b: None,
+                emit_event=lambda _e: True,
+            ),
+        )
+        return worker, db
+
+    def test_no_probe_fitted_writes_no_row(self):
+        worker, db = self._worker(
+            {
+                "temperature": None,
+                "ph": None,
+                "tds": None,
+                "turbidity": None,
+                "orp": None,
+                "chlorine": None,
+                "multi485": None,
+            }
+        )
+        for _ in range(5):
+            worker.step()
+        assert db.readings == []
+
+    def test_a_fitted_probe_that_fails_is_still_recorded(self):
+        """The other half of the rule: a fitted probe failing is a fault, and a
+        fault has to be stored and visible, not silently dropped."""
+        worker, db = self._worker(
+            {
+                "temperature": None,
+                "ph": FakeSensor(fail=True),
+                "tds": None,
+                "turbidity": None,
+                "orp": None,
+                "chlorine": None,
+                "multi485": None,
+            }
+        )
+        worker.step()
+        assert len(db.readings) == 1
+        assert db.readings[0]["ph"] is None
+
+    def test_recording_resumes_once_a_probe_is_declared(self):
+        sensors = {
+            "temperature": None,
+            "ph": None,
+            "tds": None,
+            "turbidity": None,
+            "orp": None,
+            "chlorine": None,
+            "multi485": None,
+        }
+        worker, db = self._worker(sensors)
+        worker.step()
+        assert db.readings == []
+
+        sensors["ph"] = FakeSensor(value=7.2)
+        worker.step()
+        assert len(db.readings) == 1
+        assert db.readings[0]["ph"] == 7.2
