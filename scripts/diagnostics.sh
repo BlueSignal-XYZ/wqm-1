@@ -22,11 +22,33 @@ if command -v i2cdetect &>/dev/null; then
     # before probing the bus.
     sudo modprobe i2c-dev 2>/dev/null || true
     sleep 0.5
-    if i2cdetect -y 1 2>/dev/null | grep -q "48"; then
-        pass "I2C:     ADS1115 found at 0x48"
-    else
-        fail "I2C:     ADS1115 not detected at 0x48 — check HAT seating"
-    fi
+    # Capture first, then match. Piping i2cdetect straight into `grep -q` makes
+    # the result depend on the pipeline's exit status under `set -o pipefail`,
+    # so a probe that saw the chip could still be reported as a failure. The
+    # scan is also re-tried: the firmware holds the same bus, and a probe that
+    # lands mid-transaction can miss a device that is present.
+    I2C_SCAN=""
+    for _ in 1 2 3; do
+        I2C_SCAN="$(i2cdetect -y 1 2>/dev/null || true)"
+        case "$I2C_SCAN" in
+            *" 48 "*|*" 48"|*"UU"*) break ;;
+        esac
+        sleep 0.5
+    done
+    case "$I2C_SCAN" in
+        *" 48 "*|*" 48")
+            pass "I2C:     ADS1115 found at 0x48" ;;
+        *)
+            fail "I2C:     ADS1115 not detected at 0x48 — check HAT seating"
+            # Show what the bus actually held; "nothing at 0x48" and "nothing
+            # at all" are different faults and the operator needs to tell them
+            # apart without running the scan again by hand.
+            if [ -n "$I2C_SCAN" ]; then
+                echo "$I2C_SCAN" | sed 's/^/         /'
+            else
+                echo "         (i2cdetect produced no output — is /dev/i2c-1 present?)"
+            fi ;;
+    esac
 else
     fail "I2C:     i2cdetect not installed (run setup.sh)"
 fi
