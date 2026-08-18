@@ -428,6 +428,41 @@ the NEC and Texas licensing citations, the cloud tier prices, and all of
 Appendix B other than the single 18 AWG cell above.
 ```
 
+## What is published today — and the founder's decision on the erratum
+
+**2026-08-18.** The manual now on bluesignal.xyz is the authored Rev G, byte for
+byte, at `/docs/WQM-1-Installer-Manual-RevG-20260818.pdf`. Founder instruction,
+verbatim: *"I dont want the erratum shit, use my latest version."*
+
+That reverses the 2026-08-17 arrangement, where the site served `Rev G-1` — the
+same PDF with a correction page bound in after the cover and a red bar on the
+four pages that instruct action (`marketplace/scripts/build-manual-erratum.py`,
+which still exists and still works but is **out of the publish path**). Do not
+reintroduce it without the same person asking for it.
+
+So the three findings below are, for now, live on a public PDF with nothing
+guarding them:
+
+| Finding | Status on the published PDF | Where it is actually fixed |
+|---|---|---|
+| §1 ORP selectable on the pH BNC (pp. 2, 6, 7, 8, 9, 11, 15, 22, 27, 29, 30) | stated as authored | nowhere yet — **Rev H** |
+| One-year limitations period (p. 26) — void under Tex. Civ. Prac. & Rem. Code §16.070 | stated as authored | `bluesignal.xyz/warranty` (two years), which p. 26 itself names as governing |
+| Exclusion 15.3(08) conditions the relay warranty on a control-tier subscription (p. 25) — 15 U.S.C. §2302(c) tie-in | stated as authored | `bluesignal.xyz/warranty` (keyed to the Section 11 commissioning steps) |
+
+The two warranty rows are half-covered: the manual's own order-of-precedence
+clause (p. 26) points at the published warranty page for hardware terms, and
+that page is correct. §1 has no such backstop — the manual is the only place an
+installer reads how to wire the BNC. **Rev H is now the only fix for it**, which
+makes the regeneration brief above the priority item, not a backlog entry.
+
+Three exports of Rev G exist and they are not interchangeable: 17 Aug, 18 Aug
+(reworded change list p. 2, redrawn FIG 4.1 callouts p. 8), and the published
+one (new p. 2, original p. 8). Each publish takes a **new** filename — Cloudflare
+serves `public/` immutable, so changed bytes at an old path stay invisible for up
+to a year — and the retired paths are 301'd in `marketplace/firebase.json`, with
+`src/pages/landing/manualLink.test.js` failing the build if a redirect ever
+points at a file that does not exist.
+
 ## Publishing it
 
 The manual was staged for the Doc Center's **published** shelf, verified to
