@@ -158,6 +158,7 @@ if RS485 is fitted, and the claim secrets somewhere you can read them offline.
 - [ ] `diagnostics.sh` — zero FAIL
 - [ ] Heartbeat LED (LED 1) blinking at 1 Hz
 - [ ] Every declared probe reading a plausible value; nothing declared that isn't fitted
+- [ ] `journalctl -u bluesignal-wqm` shows `Stored id=` lines — **not** `No probes declared fitted`. See T11.
 - [ ] A reading visible on the device page in the cloud, timestamped in the last few minutes
 - [ ] Wi-Fi signal checked **with the enclosure closed**
 - [ ] GPS fix acquired (LED 3), or knowingly accepted as unavailable
@@ -245,6 +246,19 @@ a time or they collide.
 **T9 — the cloud always acks a relay command as `done`.** It cannot tell whether
 the relay physically moved. The only confirmation is listening for the click at
 the unit. Our boards are active-low.
+
+**T11 — a unit that records nothing looks exactly like a healthy one.** The
+fitment declaration is what decides whether a probe is sampled at all, and an
+undeclared probe is silently not read. Get it wrong and the unit heartbeats,
+passes diagnostics, reports uptime, disk, CPU and link quality, and stores no
+water data at all — while the cloud device page keeps showing whatever it last
+received, with green sensor cards, for as long as you leave it. A field unit ran
+that way for fifteen days: 249 readings stored, 13,938 rejected by the cloud and
+marked permanently failed. Since 2.1.0 the firmware refuses to manufacture the
+empty rows and says `No probes declared fitted` in the journal instead, but the
+declaration is still yours to get right. **Before you leave, confirm the journal
+shows `Stored id=` lines carrying real values** — a green dashboard is not
+evidence.
 
 **T10 — a re-flash does not give you a new device.** The device id derives from
 the Pi's CPU serial, so a re-flashed unit re-attaches to the old record, readings
