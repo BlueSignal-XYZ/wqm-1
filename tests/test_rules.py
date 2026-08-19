@@ -408,9 +408,9 @@ class TestFailSafeReversion:
     """
 
     def _engine(self, duration_s=0):
-        from control.rules import Rule, RulesEngine
-
         from unittest.mock import MagicMock
+
+        from control.rules import Rule, RulesEngine
 
         relay = MagicMock()
         engine = RulesEngine(relay)
@@ -451,9 +451,8 @@ class TestFailSafeReversion:
 
     def test_reversion_happens_outside_the_schedule_window(self, mock_hardware):
         """De-energizing is never discretionary; the window only gates turning on."""
-        from datetime import datetime
+        from datetime import UTC, datetime
         from datetime import time as dt_time
-        from datetime import UTC
 
         engine, _ = self._engine()
         engine.evaluate({"ph": 9.5})
@@ -469,9 +468,7 @@ class TestFailSafeReversion:
         from control.rules import Rule
 
         engine, _ = self._engine()
-        engine.add_rule(
-            Rule(sensor="tds_ppm", operator=">", threshold=100.0, relay=2, action="on")
-        )
+        engine.add_rule(Rule(sensor="tds_ppm", operator=">", threshold=100.0, relay=2, action="on"))
         engine.evaluate({"ph": 9.5, "tds_ppm": 500.0})
 
         engine.set_suspended_sensors({"tds"})
@@ -498,9 +495,8 @@ class TestAutoShutoffOutsideWindow:
         early return.
         """
         import time as _time
-        from datetime import datetime
+        from datetime import UTC, datetime
         from datetime import time as dt_time
-        from datetime import UTC
 
         from control.rules import Rule, RulesEngine
 
