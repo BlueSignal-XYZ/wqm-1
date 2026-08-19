@@ -353,9 +353,14 @@ class CloudClient:
         status, _ = self._post(self._device_url("events"), body)
         return status == 200
 
-    def fetch_config(self) -> tuple[int, dict[str, Any]] | None:
-        """GET the desired remote config. Returns (version, values) or None
-        when nothing is configured / on failure."""
+    def fetch_config(self) -> tuple[int | None, dict[str, Any], dict[str, Any] | None] | None:
+        """GET the desired remote config plus the learned water profile.
+
+        Returns (version, values, water_profile) — version is None when the
+        server holds no config document but a profile exists (the profile
+        rides the same endpoint), water_profile is None when the site has no
+        learned baseline yet. Returns None on 204/failure.
+        """
         if not self._api_base:
             return None
         status, resp = self._request(self._device_url("config"), method="GET")
@@ -363,8 +368,16 @@ class CloudClient:
             data = resp.get("data") or {}
             version = data.get("version")
             values = data.get("values") or {}
-            if isinstance(version, int) and isinstance(values, dict):
-                return version, values
+            profile = resp.get("waterProfile")
+            if not isinstance(version, int):
+                version = None
+            if not isinstance(values, dict):
+                values = {}
+            if not isinstance(profile, dict):
+                profile = None
+            if version is None and profile is None:
+                return None
+            return version, values, profile
         return None
 
     def stop(self) -> None:

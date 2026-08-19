@@ -28,13 +28,22 @@ def _utc_now() -> datetime:
 
 @dataclass
 class Rule:
-    """A threshold rule for relay automation."""
+    """A threshold rule for relay automation.
+
+    Exactly one of ``threshold`` / ``adaptive_k`` must be set. A fixed rule
+    compares against ``threshold``. An adaptive rule compares against the
+    site's own learned normal: median ± k·σ̂ for the current UTC hour, taken
+    from the water profile installed via :meth:`RulesEngine.set_baselines`.
+    An adaptive rule with no established baseline does not fire at all —
+    never actuate a load off a normal we have not established.
+    """
 
     sensor: str  # "ph", "tds_ppm", "turbidity_ntu", "orp_mv", "temp_c"
-    operator: str  # ">", "<", ">=", "<=", "=="
-    threshold: float
+    operator: str  # ">", "<", ">=", "<=", "==" ("==" is fixed-only)
     relay: int  # 1-4
     action: str  # "on" or "off"
+    threshold: float | None = None
+    adaptive_k: float | None = None  # band width in σ̂ units, 0.5–10
     duration_s: int = 0  # 0 = indefinite until condition clears
 
 
@@ -45,6 +54,10 @@ _OPERATORS = {
     "<=": lambda a, b: a <= b,
     "==": lambda a, b: abs(a - b) < 0.01,
 }
+
+# MAD → σ̂ under normality; must match MAD_TO_SIGMA in the cloud engine
+# (functions/v2/baselines.js) so edge and cloud agree on what "unusual" means.
+_MAD_TO_SIGMA = 1.4826
 
 
 class RulesEngine:
@@ -93,6 +106,12 @@ class RulesEngine:
         # driving them was just suspended. See _revert_suspended_to_failsafe.
         self._pending_failsafe: set[int] = set()
 
+        # --- Learned water profile (adaptive rules) ---
+        # Canonical param -> {buckets: [{m, mad, n}|None ×24], overall: {m, mad},
+        # learning?: bool}, as computed by the cloud baseline engine and synced
+        # down through the device config channel. Empty until set_baselines.
+        self._baselines: dict[str, Any] = {}
+
     # Canonical monitor sensor names -> reading/rule column names.
     _SENSOR_TO_COLUMN = {
         "ph": "ph",
@@ -103,6 +122,22 @@ class RulesEngine:
         "chlorine": "chlorine_mgl",
         "conductivity": "conductivity_uscm",
         "salinity": "salinity_ppt",
+    }
+    # Reading column -> canonical name, for water-profile lookups (the cloud
+    # baseline engine keys its params canonically: "tds", not "tds_ppm").
+    _COLUMN_TO_PARAM = {v: k for k, v in _SENSOR_TO_COLUMN.items()}
+
+    # Per-column σ̂ floors, mirroring PROFILE_PARAMS madFloor in
+    # functions/v2/baselines.js. A flat-lined history has MAD 0; without a
+    # floor an adaptive band collapses to zero width and any wiggle actuates.
+    _MAD_FLOORS = {
+        "ph": 0.05,
+        "temp_c": 0.2,
+        "tds_ppm": 5.0,
+        "turbidity_ntu": 0.5,
+        "orp_mv": 5.0,
+        "chlorine_mgl": 0.05,
+        "conductivity_uscm": 10.0,
     }
 
     def set_suspended_sensors(self, sensors: set[str]) -> None:
@@ -154,13 +189,31 @@ class RulesEngine:
         )
 
     def add_rule(self, rule: Rule) -> None:
-        """Add a threshold rule."""
+        """Add a threshold rule (fixed or adaptive). Invalid rules are
+        rejected with a warning rather than raising — one bad rule must not
+        take down the rest of a loaded rule set."""
+        if rule.adaptive_k is not None:
+            if rule.operator == "==":
+                logger.warning(
+                    "Adaptive rule rejected: '==' has no band direction (%s)", rule.sensor
+                )
+                return
+            if not isinstance(rule.adaptive_k, int | float) or not 0.5 <= rule.adaptive_k <= 10:
+                logger.warning(
+                    "Adaptive rule rejected: adaptive_k %r outside 0.5–10 (%s)",
+                    rule.adaptive_k,
+                    rule.sensor,
+                )
+                return
+        elif rule.threshold is None:
+            logger.warning("Rule rejected: neither threshold nor adaptive_k (%s)", rule.sensor)
+            return
         self._rules.append(rule)
         logger.info(
-            "Rule added: %s %s %.2f → relay %d %s",
+            "Rule added: %s %s %s → relay %d %s",
             rule.sensor,
             rule.operator,
-            rule.threshold,
+            f"baseline±{rule.adaptive_k}σ̂" if rule.adaptive_k is not None else rule.threshold,
             rule.relay,
             rule.action,
         )
@@ -170,9 +223,62 @@ class RulesEngine:
         self._rules.clear()
         for r in rules_list:
             try:
+                r = dict(r)
+                # The cloud stores the adaptive width camelCase; accept both.
+                if "adaptiveK" in r:
+                    r.setdefault("adaptive_k", r.pop("adaptiveK"))
                 self.add_rule(Rule(**r))
             except (TypeError, KeyError) as e:
                 logger.warning("Invalid rule %s: %s", r, e)
+
+    def set_baselines(self, profile: dict | None) -> None:
+        """
+        Install the learned water profile (the cloud baseline engine's output,
+        synced down via the device config channel or loaded from local cache).
+
+        Only the ``params`` map is kept. Passing None or a profile without
+        params clears the baselines, which silences every adaptive rule —
+        the safe direction: no established normal, no actuation.
+        """
+        params = (profile or {}).get("params")
+        self._baselines = params if isinstance(params, dict) else {}
+        if self._baselines:
+            established = [k for k, v in self._baselines.items() if not v.get("learning")]
+            logger.info(
+                "Water profile installed: %s established, %d learning",
+                ", ".join(sorted(established)) or "none",
+                len(self._baselines) - len(established),
+            )
+        else:
+            logger.info("Water profile cleared — adaptive rules idle")
+
+    def _resolve_threshold(self, rule: Rule) -> float | None:
+        """
+        The value this rule compares against right now.
+
+        Fixed rules return their threshold. Adaptive rules resolve
+        median ± k·σ̂ for the current UTC hour from the learned baseline —
+        ``+`` for ">"/">=" (fire above the site's normal band), ``-`` for
+        "<"/"<=" (fire below it). Returns None — rule does not fire — when
+        the baseline is absent or still learning.
+        """
+        if rule.adaptive_k is None:
+            return rule.threshold
+        param = self._COLUMN_TO_PARAM.get(rule.sensor, rule.sensor)
+        baseline = self._baselines.get(param)
+        if not isinstance(baseline, dict) or baseline.get("learning"):
+            return None
+        hour = self._clock().astimezone(UTC).hour
+        buckets = baseline.get("buckets") or []
+        stats = buckets[hour] if hour < len(buckets) and buckets[hour] else None
+        stats = stats or baseline.get("overall")
+        if not isinstance(stats, dict) or not isinstance(stats.get("m"), int | float):
+            return None
+        floor = self._MAD_FLOORS.get(rule.sensor, 0.5)
+        sigma = max((stats.get("mad") or 0) * _MAD_TO_SIGMA, floor)
+        if rule.operator in (">", ">="):
+            return stats["m"] + rule.adaptive_k * sigma
+        return stats["m"] - rule.adaptive_k * sigma
 
     def _is_in_schedule(self) -> bool:
         """Check if the current time is within the schedule window."""
@@ -271,7 +377,12 @@ class RulesEngine:
             if op_fn is None:
                 continue
 
-            if op_fn(value, rule.threshold):
+            threshold = self._resolve_threshold(rule)
+            if threshold is None:
+                # Adaptive rule with no established baseline yet — stays quiet.
+                continue
+
+            if op_fn(value, threshold):
                 state = rule.action == "on"
 
                 if state:
