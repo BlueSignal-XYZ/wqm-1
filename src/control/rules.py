@@ -28,13 +28,22 @@ def _utc_now() -> datetime:
 
 @dataclass
 class Rule:
-    """A threshold rule for relay automation."""
+    """A threshold rule for relay automation.
+
+    Exactly one of ``threshold`` / ``adaptive_k`` must be set. A fixed rule
+    compares against ``threshold``. An adaptive rule compares against the
+    site's own learned normal: median ± k·σ̂ for the current UTC hour, taken
+    from the water profile installed via :meth:`RulesEngine.set_baselines`.
+    An adaptive rule with no established baseline does not fire at all —
+    never actuate a load off a normal we have not established.
+    """
 
     sensor: str  # "ph", "tds_ppm", "turbidity_ntu", "orp_mv", "temp_c"
-    operator: str  # ">", "<", ">=", "<=", "=="
-    threshold: float
+    operator: str  # ">", "<", ">=", "<=", "==" ("==" is fixed-only)
     relay: int  # 1-4
     action: str  # "on" or "off"
+    threshold: float | None = None
+    adaptive_k: float | None = None  # band width in σ̂ units, 0.5–10
     duration_s: int = 0  # 0 = indefinite until condition clears
 
 
@@ -45,6 +54,10 @@ _OPERATORS = {
     "<=": lambda a, b: a <= b,
     "==": lambda a, b: abs(a - b) < 0.01,
 }
+
+# MAD → σ̂ under normality; must match MAD_TO_SIGMA in the cloud engine
+# (functions/v2/baselines.js) so edge and cloud agree on what "unusual" means.
+_MAD_TO_SIGMA = 1.4826
 
 
 class RulesEngine:
@@ -89,6 +102,15 @@ class RulesEngine:
         # flatlined probe must never keep (or start) actuating a relay on
         # frozen data.
         self._suspended_columns: set[str] = set()
+        # Channels awaiting a one-shot drop to fail-safe because the sensor
+        # driving them was just suspended. See _revert_suspended_to_failsafe.
+        self._pending_failsafe: set[int] = set()
+
+        # --- Learned water profile (adaptive rules) ---
+        # Canonical param -> {buckets: [{m, mad, n}|None ×24], overall: {m, mad},
+        # learning?: bool}, as computed by the cloud baseline engine and synced
+        # down through the device config channel. Empty until set_baselines.
+        self._baselines: dict[str, Any] = {}
 
     # Canonical monitor sensor names -> reading/rule column names.
     _SENSOR_TO_COLUMN = {
@@ -101,15 +123,41 @@ class RulesEngine:
         "conductivity": "conductivity_uscm",
         "salinity": "salinity_ppt",
     }
+    # Reading column -> canonical name, for water-profile lookups (the cloud
+    # baseline engine keys its params canonically: "tds", not "tds_ppm").
+    _COLUMN_TO_PARAM = {v: k for k, v in _SENSOR_TO_COLUMN.items()}
+
+    # Per-column σ̂ floors, mirroring PROFILE_PARAMS madFloor in
+    # functions/v2/baselines.js. A flat-lined history has MAD 0; without a
+    # floor an adaptive band collapses to zero width and any wiggle actuates.
+    _MAD_FLOORS = {
+        "ph": 0.05,
+        "temp_c": 0.2,
+        "tds_ppm": 5.0,
+        "turbidity_ntu": 0.5,
+        "orp_mv": 5.0,
+        "chlorine_mgl": 0.05,
+        "conductivity_uscm": 10.0,
+    }
 
     def set_suspended_sensors(self, sensors: set[str]) -> None:
-        """Pause rules for the given canonical sensor names (from SensorMonitor)."""
+        """
+        Pause rules for the given canonical sensor names (from SensorMonitor),
+        and queue every channel they drive to drop to its fail-safe state.
+
+        Only *newly* suspended columns queue a reversion. A sensor that stays
+        suspended across cycles must not re-issue OFF every 60 s — the operator
+        may deliberately be holding a channel on by hand while swapping a probe.
+        """
         columns = {self._SENSOR_TO_COLUMN.get(s, s) for s in sensors}
+        newly = columns - self._suspended_columns
         if columns != self._suspended_columns:
             logger.warning(
                 "Rule suspension changed: %s",
                 ", ".join(sorted(columns)) if columns else "none",
             )
+        if newly:
+            self._pending_failsafe |= {r.relay for r in self._rules if r.sensor in newly}
         self._suspended_columns = columns
 
     def load_policies(self, policies: dict) -> None:
@@ -141,13 +189,31 @@ class RulesEngine:
         )
 
     def add_rule(self, rule: Rule) -> None:
-        """Add a threshold rule."""
+        """Add a threshold rule (fixed or adaptive). Invalid rules are
+        rejected with a warning rather than raising — one bad rule must not
+        take down the rest of a loaded rule set."""
+        if rule.adaptive_k is not None:
+            if rule.operator == "==":
+                logger.warning(
+                    "Adaptive rule rejected: '==' has no band direction (%s)", rule.sensor
+                )
+                return
+            if not isinstance(rule.adaptive_k, int | float) or not 0.5 <= rule.adaptive_k <= 10:
+                logger.warning(
+                    "Adaptive rule rejected: adaptive_k %r outside 0.5–10 (%s)",
+                    rule.adaptive_k,
+                    rule.sensor,
+                )
+                return
+        elif rule.threshold is None:
+            logger.warning("Rule rejected: neither threshold nor adaptive_k (%s)", rule.sensor)
+            return
         self._rules.append(rule)
         logger.info(
-            "Rule added: %s %s %.2f → relay %d %s",
+            "Rule added: %s %s %s → relay %d %s",
             rule.sensor,
             rule.operator,
-            rule.threshold,
+            f"baseline±{rule.adaptive_k}σ̂" if rule.adaptive_k is not None else rule.threshold,
             rule.relay,
             rule.action,
         )
@@ -157,9 +223,62 @@ class RulesEngine:
         self._rules.clear()
         for r in rules_list:
             try:
+                r = dict(r)
+                # The cloud stores the adaptive width camelCase; accept both.
+                if "adaptiveK" in r:
+                    r.setdefault("adaptive_k", r.pop("adaptiveK"))
                 self.add_rule(Rule(**r))
             except (TypeError, KeyError) as e:
                 logger.warning("Invalid rule %s: %s", r, e)
+
+    def set_baselines(self, profile: dict | None) -> None:
+        """
+        Install the learned water profile (the cloud baseline engine's output,
+        synced down via the device config channel or loaded from local cache).
+
+        Only the ``params`` map is kept. Passing None or a profile without
+        params clears the baselines, which silences every adaptive rule —
+        the safe direction: no established normal, no actuation.
+        """
+        params = (profile or {}).get("params")
+        self._baselines = params if isinstance(params, dict) else {}
+        if self._baselines:
+            established = [k for k, v in self._baselines.items() if not v.get("learning")]
+            logger.info(
+                "Water profile installed: %s established, %d learning",
+                ", ".join(sorted(established)) or "none",
+                len(self._baselines) - len(established),
+            )
+        else:
+            logger.info("Water profile cleared — adaptive rules idle")
+
+    def _resolve_threshold(self, rule: Rule) -> float | None:
+        """
+        The value this rule compares against right now.
+
+        Fixed rules return their threshold. Adaptive rules resolve
+        median ± k·σ̂ for the current UTC hour from the learned baseline —
+        ``+`` for ">"/">=" (fire above the site's normal band), ``-`` for
+        "<"/"<=" (fire below it). Returns None — rule does not fire — when
+        the baseline is absent or still learning.
+        """
+        if rule.adaptive_k is None:
+            return rule.threshold
+        param = self._COLUMN_TO_PARAM.get(rule.sensor, rule.sensor)
+        baseline = self._baselines.get(param)
+        if not isinstance(baseline, dict) or baseline.get("learning"):
+            return None
+        hour = self._clock().astimezone(UTC).hour
+        buckets = baseline.get("buckets") or []
+        stats = buckets[hour] if hour < len(buckets) and buckets[hour] else None
+        stats = stats or baseline.get("overall")
+        if not isinstance(stats, dict) or not isinstance(stats.get("m"), int | float):
+            return None
+        floor = self._MAD_FLOORS.get(rule.sensor, 0.5)
+        sigma = max((stats.get("mad") or 0) * _MAD_TO_SIGMA, floor)
+        if rule.operator in (">", ">="):
+            return stats["m"] + rule.adaptive_k * sigma
+        return stats["m"] - rule.adaptive_k * sigma
 
     def _is_in_schedule(self) -> bool:
         """Check if the current time is within the schedule window."""
@@ -216,18 +335,29 @@ class RulesEngine:
             List of (relay_channel, state) actions to take.
         """
         actions: list[tuple[int, bool]] = []
+        now_mono = time.monotonic()
+
+        # --- De-energizing runs BEFORE the guards, always ---
+        #
+        # Both of the calls below can only ever turn a channel OFF, so neither
+        # the schedule window nor manual override may skip them. Turning things
+        # on is discretionary; letting go of a load is not.
+        #
+        # Without this, a relay switched on at 20:59 with a 30 s duration and a
+        # window closing at 21:00 stayed on until the window reopened, because
+        # the timer sweep sat below an early `return`.
+        actions.extend(self._revert_suspended_to_failsafe())
+        actions.extend(self._expire_timers(now_mono))
 
         # --- Guard: schedule window ---
         if not self._is_in_schedule():
             logger.debug("Outside schedule window, skipping rules")
-            return actions
+            return self._apply(actions)
 
         # --- Guard: manual override ---
         if self._manual_override:
             logger.debug("Manual override active, skipping rules")
-            return actions
-
-        now_mono = time.monotonic()
+            return self._apply(actions)
 
         # Accumulate on-time for relays that are currently on
         for relay, since in list(self._on_since.items()):
@@ -247,7 +377,12 @@ class RulesEngine:
             if op_fn is None:
                 continue
 
-            if op_fn(value, rule.threshold):
+            threshold = self._resolve_threshold(rule)
+            if threshold is None:
+                # Adaptive rule with no established baseline yet — stays quiet.
+                continue
+
+            if op_fn(value, threshold):
                 state = rule.action == "on"
 
                 if state:
@@ -279,22 +414,72 @@ class RulesEngine:
                     self._last_off[rule.relay] = now_mono
                     self._on_since.pop(rule.relay, None)
 
-        # Check auto-shutoff timers
-        expired = [ch for ch, t in self._timers.items() if now_mono >= t]
-        for ch in expired:
+        return self._apply(actions)
+
+    def _expire_timers(self, now_mono: float) -> list[tuple[int, bool]]:
+        """Auto-shutoff sweep: channels whose ``duration_s`` has elapsed."""
+        actions: list[tuple[int, bool]] = []
+        for ch in [ch for ch, t in self._timers.items() if now_mono >= t]:
             actions.append((ch, False))
             self._last_off[ch] = now_mono
             self._on_since.pop(ch, None)
             del self._timers[ch]
+        return actions
 
-        # Apply actions to relay controller
+    def _revert_suspended_to_failsafe(self) -> list[tuple[int, bool]]:
+        """
+        De-energize every channel driven by a sensor that has just been
+        suspended, and forget its auto-shutoff timer.
+
+        **De-energizing IS the fail-safe state, and that is the whole design.**
+        Fail-safe direction is set by the wiring, not by firmware: a load on
+        COM→NO stops when the coil drops, a load on COM→NC runs. Section 05 of
+        the installer manual requires life-critical loads (aeration,
+        circulation) on NC precisely so that a dead controller leaves them
+        running. Dropping the coil therefore puts every channel in exactly the
+        state its installer chose for "the controller is not to be trusted right
+        now" — without firmware needing to know, or be told correctly, which way
+        each channel was wired. A firmware-side fail-safe table would be a
+        second copy of a fact that already exists in the field wiring, and the
+        copy would be the one that goes stale.
+
+        Suspension alone used to just stop evaluating the rule, which left the
+        relay wherever it happened to be. For a rule with ``duration_s: 0``
+        ("hold until the condition clears" — what the shipped dosing examples
+        use), a channel energized at the moment its probe froze stayed energized
+        indefinitely, because the rule that would have released it no longer
+        ran. On a dosing pump that is a chemical overfeed driven by a reading
+        that stopped being true.
+
+        Fires once per suspension transition, not every cycle: re-issuing OFF
+        every 60 s would bury the log and defeat the operator's ability to
+        override a channel by hand while a probe is being replaced.
+        """
+        if not self._pending_failsafe:
+            return []
+        actions: list[tuple[int, bool]] = []
+        for ch in sorted(self._pending_failsafe):
+            actions.append((ch, False))
+            self._last_off[ch] = time.monotonic()
+            self._on_since.pop(ch, None)
+            self._timers.pop(ch, None)
+        logger.warning(
+            "Sensor health: reverting relay(s) %s to fail-safe (de-energized) — "
+            "driving sensor(s) %s suspended",
+            ", ".join(str(c) for c in sorted(self._pending_failsafe)),
+            ", ".join(sorted(self._suspended_columns)) or "none",
+        )
+        self._pending_failsafe.clear()
+        return actions
+
+    def _apply(self, actions: list[tuple[int, bool]]) -> list[tuple[int, bool]]:
+        """Push actions to the relay controller and return them."""
         if self._relay and actions:
             for channel, state in actions:
                 try:
                     self._relay.set(channel, state)
                 except Exception as e:
                     logger.error("Relay %d action failed: %s", channel, e)
-
         return actions
 
     def process_downlink_command(self, fport: int, payload: bytes) -> bool:

@@ -229,7 +229,27 @@ class TestTelemetryEndpoints:
             return _Resp(200, resp)
 
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-        assert c.fetch_config() == (3, {"sensor_read_s": 30})
+        assert c.fetch_config() == (3, {"sensor_read_s": 30}, None)
+
+    def test_fetch_config_carries_water_profile(self, monkeypatch, mock_hardware):
+        c = _make_client()
+        profile = {"params": {"ph": {"overall": {"m": 7.1, "mad": 0.1}}}}
+        resp = {
+            "success": True,
+            "data": {"version": 3, "values": {"sensor_read_s": 30}},
+            "waterProfile": profile,
+        }
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=_Resp(200, resp)))
+        assert c.fetch_config() == (3, {"sensor_read_s": 30}, profile)
+
+    def test_fetch_config_profile_without_config_doc(self, monkeypatch, mock_hardware):
+        # A device that was never remotely configured still gets its learned
+        # baseline: the server sends data:{} plus waterProfile.
+        c = _make_client()
+        profile = {"params": {"ph": {"overall": {"m": 7.1, "mad": 0.1}}}}
+        resp = {"success": True, "data": {}, "waterProfile": profile}
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=_Resp(200, resp)))
+        assert c.fetch_config() == (None, {}, profile)
 
     def test_fetch_config_204_returns_none(self, monkeypatch, mock_hardware):
         c = _make_client()

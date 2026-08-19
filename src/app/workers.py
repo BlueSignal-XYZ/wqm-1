@@ -377,7 +377,7 @@ class CommandWorker(Worker):
         cloud: Any,
         state: StateStore,
         apply_command: Callable[[dict[str, Any]], None],
-        on_config_version: Callable[[int], None] | None = None,
+        on_config_version: Callable[[int | None], None] | None = None,
         on_ota_pending: Callable[[], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -401,8 +401,11 @@ class CommandWorker(Worker):
                 logger.error("Apply command %s failed: %s", cmd.get("id"), e)
 
         config_version = poll.get("configVersion")
-        if isinstance(config_version, int) and self._on_config_version:
-            self._on_config_version(config_version)
+        if self._on_config_version:
+            # Fire even when the server reports no config version (None):
+            # the handler also owns the periodic water-profile refresh, which
+            # must run for devices that have never been remotely configured.
+            self._on_config_version(config_version if isinstance(config_version, int) else None)
 
         if poll.get("otaPending") and self._on_ota_pending:
             self._on_ota_pending()

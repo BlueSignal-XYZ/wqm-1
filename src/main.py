@@ -20,6 +20,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 import types
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -67,6 +68,12 @@ FW_VERSION = FIRMWARE_VERSION
 # The OTA agent (separate service) polls this flag file for "check now" nudges
 # from the command channel / otaPending hints.
 OTA_CHECK_FLAG = Path("/var/lib/bluesignal/ota-check-now")
+
+# Learned water profile, cached locally so a LoRa-only or offline site keeps
+# its adaptive rules across restarts. Written on every config-channel sync.
+WATER_PROFILE_CACHE = Path("/var/lib/bluesignal/water-profile.json")
+# Re-fetch cadence for the profile (the cloud rebuilds it at most daily).
+PROFILE_REFRESH_S = 6 * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +361,10 @@ class WQM1App:
         self._load_policies()
         if self._settings.rules:
             self._rules.load_rules(self._settings.rules)
+        # Monotonic time of the last water-profile sync attempt; -inf forces a
+        # fetch on the first command poll after boot.
+        self._profile_synced_mono = float("-inf")
+        self._load_cached_water_profile()
 
         # --- Command listener (for service window) ---
         self._start_cmd_listener()
@@ -617,15 +628,29 @@ class WQM1App:
             with contextlib.suppress(Exception):
                 self._cloud.ack_command(cmd_id, "error", str(e))
 
-    def _reconcile_remote_config(self, cloud_version: int) -> None:
+    def _reconcile_remote_config(self, cloud_version: int | None) -> None:
         """Fetch + validate + apply desired config when the poll reports a new
-        version. Rejection keeps last-known-good and tells the cloud why."""
-        if cloud_version == self._config.remote_version:
+        version. Rejection keeps last-known-good and tells the cloud why.
+
+        Also owns the periodic water-profile refresh (rung 5, edge sync): the
+        learned baseline rides the same GET /config response, so this fetches
+        every PROFILE_REFRESH_S even when the config version is unchanged —
+        or None, for devices that were never remotely configured.
+        """
+        profile_stale = (time.monotonic() - self._profile_synced_mono) >= PROFILE_REFRESH_S
+        config_new = isinstance(cloud_version, int) and cloud_version != self._config.remote_version
+        if not config_new and not profile_stale:
             return
+        # Count the attempt now — a 204/failed fetch must not retry every poll.
+        self._profile_synced_mono = time.monotonic()
         fetched = self._cloud.fetch_config()
         if not fetched:
             return
-        version, values = fetched
+        version, values, profile = fetched
+        if profile is not None:
+            self._apply_water_profile(profile)
+        if not config_new or version is None:
+            return
         ok, errors = self._config.apply_remote_config(version, values)
         if ok:
             logger.info("Remote config v%d applied (%d keys)", version, len(values))
@@ -655,6 +680,36 @@ class WQM1App:
                     "details": {"version": version, "errors": errors[:5]},
                 }
             )
+
+    def _apply_water_profile(self, profile: dict, persist: bool = True) -> None:
+        """Install the learned baseline into the rules engine and (by default)
+        cache it atomically so adaptive rules survive restarts offline."""
+        try:
+            self._rules.set_baselines(profile)
+        except Exception as e:  # noqa: BLE001 — a bad profile must not kill the poll
+            logger.warning("Water profile rejected: %s", e)
+            return
+        if not persist:
+            return
+        try:
+            WATER_PROFILE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = WATER_PROFILE_CACHE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(profile))
+            tmp.replace(WATER_PROFILE_CACHE)
+        except OSError as e:
+            logger.warning("Could not cache water profile: %s", e)
+
+    def _load_cached_water_profile(self) -> None:
+        """Boot-time load of the last synced profile (edge sync, offline half)."""
+        try:
+            if not WATER_PROFILE_CACHE.exists():
+                return
+            profile = json.loads(WATER_PROFILE_CACHE.read_text())
+        except (OSError, ValueError) as e:
+            logger.warning("Could not load cached water profile: %s", e)
+            return
+        if isinstance(profile, dict):
+            self._apply_water_profile(profile, persist=False)
 
     def _nudge_ota_agent(self) -> None:
         """Touch the flag file the OTA agent watches for an immediate check."""
