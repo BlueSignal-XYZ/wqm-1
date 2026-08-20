@@ -369,8 +369,3 @@ class TestLoRaWANCrypto:
         mic1 = _compute_uplink_mic(key, dev_addr, 0, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xff")
         mic2 = _compute_uplink_mic(key, dev_addr, 1, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xff")
         assert mic1 != mic2
-
-
-class TestHealthReporterEdgeCases:
-    """Health reporter boundary conditions."""
-
