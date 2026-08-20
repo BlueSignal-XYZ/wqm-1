@@ -107,7 +107,7 @@ fi
 #      and the fix is one config line, so the check names it rather than
 #      leaving "no NMEA sentences" for someone to interpret.
 if [ -e /dev/serial0 ]; then
-    GPS_BAUD="$(cfg gps_baud 9600)"
+    GPS_BAUD="$(cfg gps_baud 38400)"
     SERIAL_REAL="$(readlink -f /dev/serial0)"
 
     # 1. Permission, as the firmware's user rather than as root.
@@ -132,7 +132,7 @@ if [ -e /dev/serial0 ]; then
         else
             # 3. Sweep. Naming the working baud turns a vague warning into a fix.
             GPS_FOUND=""
-            for b in 9600 38400 115200 19200 57600; do
+            for b in 38400 9600 115200 19200 57600; do
                 [ "$b" = "$GPS_BAUD" ] && continue
                 stty -F /dev/serial0 "$b" raw -echo 2>/dev/null || continue
                 if timeout 2 cat /dev/serial0 2>/dev/null | grep -qE '\$G[NPLA]'; then

@@ -457,7 +457,7 @@ sudo sqlite3 /var/lib/bluesignal/wqm1.db \
 
 # Raw NMEA stream (must stop the service - it holds the port)
 sudo systemctl stop bluesignal-wqm
-sudo stty -F /dev/serial0 9600 raw -echo
+sudo stty -F /dev/serial0 38400 raw -echo
 sudo timeout 10 cat /dev/serial0
 sudo systemctl start bluesignal-wqm
 # $...,A,...,A,...  → fix acquired (A = active)
@@ -593,12 +593,13 @@ ls -lh /var/log/bluesignal/                            # log files
   outdoors.
 - **Firmware logs `GPS UART opened` but no `GPS fix:` ever appears, and
   raw bytes look garbled.** This is a baud-rate mismatch. The default
-  is 9600 but some u-blox variants ship at 38400 or 115200 (NEO-M9N is
-  the common offender). Sweep the bauds to identify which one the
-  module is using:
+  is 38400, which is what the module fitted on the WQM-1 uses — so on our
+  hardware this should not happen. Other u-blox variants ship at 9600 or
+  115200. `diagnostics.sh` sweeps automatically and names the working rate;
+  to sweep by hand:
   ```bash
   sudo systemctl stop bluesignal-wqm
-  for baud in 38400 115200 19200 57600 4800; do
+  for baud in 9600 115200 19200 57600 4800; do
     echo "=== $baud ==="
     sudo stty -F /dev/serial0 $baud raw -echo
     sudo timeout 2 cat /dev/serial0 | head -c 600

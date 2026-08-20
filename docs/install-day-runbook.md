@@ -237,8 +237,14 @@ device's own UI. If the site's SSID isn't known at flash time, bring a phone
 hotspot with the same SSID/password you flashed, or bring a laptop and a spare
 card.
 
-**T7 — GPS defaults to 9600 baud.** Covers NEO-6/7/8/MAX-M10. A NEO-M9N ships at
-38400 and will init cleanly while never producing a fix.
+**T7 — GPS baud, and the port the console steals.** The default is now 38400,
+matching the module fitted on every WQM-1; it was 9600, and a mismatch inits
+cleanly while never producing a fix. The subtler half: `/dev/serial0` must be
+`root:dialout 0660`. If the kernel keeps the UART as a console it stays
+`root:tty 0600`, the firmware fails every open with EACCES, and — because it
+works on the first boot after imaging and fails on every restart after — a unit
+reports a healthy GPS until something restarts it. `diagnostics.sh` now tests
+both as the service's own user.
 
 **T8 — every RS485 probe ships at Modbus address 1.** Connect and add them one at
 a time or they collide.
