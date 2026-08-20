@@ -45,6 +45,9 @@ class GPS:
         self._serial = None
         self._last_fix: GPSFix | None = None
         self._lock = threading.Lock()
+        # Rate-limiting state for _explain_no_fix.
+        self._last_no_fix_log = 0.0
+        self._last_no_fix_detail = ""
 
         # Setup EXTINT pin for power cycling (direct-header boards only)
         if GPIO is not None:
@@ -76,10 +79,21 @@ class GPS:
             GPSFix or None if no fix obtained within timeout.
         """
         if self._serial is None or not self._serial.is_open:
+            # Say so. This used to return silently, so a unit whose UART never
+            # opened logged nothing at all — the only visible symptom was a
+            # power cycle every gps_fix_s with no stated reason.
+            self._explain_no_fix("UART is not open (check /dev/serial0 and dialout membership)")
             return self._last_fix
 
         deadline = time.monotonic() + timeout_s
         fix = None
+        # Counted so a failure can say WHICH failure it was. Reading nothing,
+        # reading noise, and reading good sentences that carry no fix are three
+        # different faults with three different remedies, and they were
+        # indistinguishable from the log.
+        lines = 0
+        bad_checksum = 0
+        gga_seen = 0
 
         # Flush stale data
         self._serial.reset_input_buffer()
@@ -88,20 +102,42 @@ class GPS:
             try:
                 line = self._serial.readline().decode("ascii", errors="ignore").strip()
             except Exception as e:
-                logger.debug("GPS read error: %s", e)
+                logger.warning("GPS read error: %s", e)
                 break
 
             if not line:
                 continue
+            lines += 1
 
             # Validate NMEA checksum
             if not _verify_checksum(line):
+                bad_checksum += 1
                 continue
+
+            if line.startswith(("$GPGGA", "$GNGGA")):
+                gga_seen += 1
 
             parsed = _parse_gga(line)
             if parsed is not None:
                 fix = parsed
                 break
+
+        if fix is None:
+            if lines == 0:
+                why = "no bytes on the UART at all"
+            elif bad_checksum == lines:
+                why = (
+                    f"all {lines} line(s) failed checksum — this is what a baud "
+                    f"mismatch looks like (gps_baud is {self._baud})"
+                )
+            elif gga_seen == 0:
+                why = f"{lines} valid sentence(s) but no GGA among them"
+            else:
+                why = (
+                    f"{gga_seen} GGA sentence(s) but none carried a fix "
+                    "(quality 0 — the receiver is talking but has not locked)"
+                )
+            self._explain_no_fix(f"no fix in {timeout_s:.0f}s: {why}")
 
         if fix is not None:
             with self._lock:
@@ -114,6 +150,19 @@ class GPS:
                 fix.satellites,
             )
         return fix
+
+    def _explain_no_fix(self, detail: str) -> None:
+        """Log why a fix attempt failed, at most once a minute.
+
+        Rate-limited rather than silent: the attempt runs every gps_fix_s and
+        an unconditional warning would be noise, but saying nothing at all is
+        how a GPS that never worked went unnoticed for weeks.
+        """
+        now = time.monotonic()
+        if detail != self._last_no_fix_detail or now - self._last_no_fix_log > 60.0:
+            logger.warning("GPS: %s", detail)
+            self._last_no_fix_log = now
+            self._last_no_fix_detail = detail
 
     @property
     def last_fix(self) -> GPSFix | None:
