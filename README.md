@@ -579,8 +579,12 @@ ls -lh /var/log/bluesignal/                            # log files
   an older install, run:
   ```bash
   sudo systemctl disable --now serial-getty@ttyAMA0.service
-  CMDLINE=/boot/firmware/cmdline.txt; [ -f /boot/cmdline.txt ] && CMDLINE=/boot/cmdline.txt
-  sudo sed -i -E 's/[[:space:]]+console=(serial0|ttyAMA0)[^[:space:]]*//g' "$CMDLINE"
+  sudo systemctl mask serial-getty@ttyAMA0.service
+  # Prefer /boot/firmware — on Bookworm/Trixie the real file lives there and
+  # /boot/cmdline.txt is a stub that only says so, which means a naive
+  # `[ -f /boot/cmdline.txt ]` test picks the placeholder and edits nothing.
+  CMDLINE=/boot/cmdline.txt; [ -f /boot/firmware/cmdline.txt ] && CMDLINE=/boot/firmware/cmdline.txt
+  sudo sed -i -E 's/(^|[[:space:]])console=(serial0|ttyAMA0)[^[:space:]]*/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g' "$CMDLINE"
   sudo reboot
   ```
   After reboot, `/dev/ttyAMA0` should be `root dialout` mode `0660`.
