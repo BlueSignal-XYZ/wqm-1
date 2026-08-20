@@ -128,4 +128,7 @@ class TestLoRaParams:
         assert LORA_SYNC_WORD == 0x3444
 
     def test_gps_baud(self):
-        assert GPS_BAUD == 9600
+        # 38400, not the u-blox 9600 default: it is what the module fitted on
+        # every WQM-1 actually talks. A wrong value here is invisible — the
+        # firmware opens the port, reads noise, and reports no fix.
+        assert GPS_BAUD == 38400

@@ -34,7 +34,7 @@ lora:
   dio1: 16
 gps:
   uart: /dev/serial0
-  baud: 9600
+  baud: 38400
   extint: 19
 fan:
   gpio: 21

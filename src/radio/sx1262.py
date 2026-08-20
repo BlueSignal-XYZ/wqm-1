@@ -287,6 +287,35 @@ class SX1262:
         self._xfer([_CMD_WRITE_BUFFER, 0x00] + list(data))
         self._wait_busy()
 
+        # Re-arm DIO1 for TxDone.
+        #
+        # init() arms DIO1 for TX_DONE, but receive() re-points it at
+        # RX_DONE|TIMEOUT and nothing put it back — so the first packet after a
+        # process start transmitted and every one after an RX window did not.
+        # TxDone still fired inside the chip; it just no longer reached DIO1,
+        # so _tx_done_event never got set and send() returned False on a
+        # timeout while the packet had in fact gone out.
+        #
+        # On a LoRaWAN device every uplink is followed by RX1/RX2, so in
+        # practice the radio transmitted exactly once per boot: OTAA join
+        # attempt 1 reported "No JoinAccept received" and attempts 2, 3, 4
+        # reported "JoinRequest TX failed". Arming it here, symmetrically with
+        # receive(), is what makes the radio usable more than once.
+        self._cmd(
+            _CMD_SET_DIO_IRQ_PARAMS,
+            [
+                (_IRQ_TX_DONE >> 8) & 0xFF,
+                _IRQ_TX_DONE & 0xFF,  # IRQ mask
+                (_IRQ_TX_DONE >> 8) & 0xFF,
+                _IRQ_TX_DONE & 0xFF,  # DIO1 mask
+                0x00,
+                0x00,  # DIO2 mask
+                0x00,
+                0x00,  # DIO3 mask
+            ],
+        )
+        self._wait_busy()
+
         # Clear IRQ flags
         self._cmd(_CMD_CLR_IRQ_STATUS, [0xFF, 0xFF])
         self._wait_busy()

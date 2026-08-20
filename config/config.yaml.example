@@ -13,11 +13,12 @@ gps_fix_s: 600               # How often to attempt a GPS fix
 gps_fix_timeout_s: 60        # Max seconds to wait for GPS lock
 
 # --- GPS ---
-# u-blox UART baud rate. Default 9600 covers NEO-6/7/8/MAX-M10. NEO-M9N
-# ships at 38400. Some custom modules ship at 115200. If GPS init
-# succeeds but no fix is ever logged AND raw `cat /dev/serial0` shows
-# garbled bytes, try the alternative bauds.
-gps_baud: 9600
+# u-blox UART baud rate. 38400 is what the module fitted on the WQM-1 uses,
+# so this should not need changing on our hardware. Other u-blox parts vary
+# (NEO-6/7/8 default to 9600, some custom modules ship at 115200). If GPS
+# init succeeds but no fix is ever logged, run diagnostics.sh — it reads at
+# the configured rate and, failing that, sweeps and names the one that works.
+gps_baud: 38400
 
 # --- LoRaWAN ---
 # 32-character hex string — your AppKey from TTN or ChirpStack.

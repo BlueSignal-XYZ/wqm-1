@@ -2,6 +2,7 @@
 flagging, heartbeat/events/config endpoints."""
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -88,6 +89,44 @@ class TestPerRowSync:
         assert n == 2
         assert db.synced == [1, 3]
         assert db.failed == [2]
+
+    def test_rejection_warning_names_the_running_total(self, monkeypatch, mock_hardware, caplog):
+        # A per-batch "1 rejected" is a blip; the same line repeated for
+        # sixteen days while the total passed 15,000 is a systemic fault, and
+        # only the cumulative figure makes it look like one.
+        class CountingDB(FakeDB):
+            def get_state_count(self, state):
+                return 15409 if state == "failed_permanent" else 0
+
+        c = _make_client()
+        db = CountingDB(rows_fixture())
+        resp = {
+            "results": [
+                {"index": 0, "status": "stored"},
+                {"index": 1, "error": "Missing sensors data"},
+                {"index": 2, "status": "stored"},
+            ],
+        }
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=_Resp(200, resp)))
+        with caplog.at_level(logging.WARNING, logger="wqm1.cloud"):
+            c.sync_readings(db)
+        assert "15409 total rejected" in caplog.text
+        assert "Missing sensors data" in caplog.text
+
+    def test_rejection_warning_survives_a_db_without_state_counts(
+        self, monkeypatch, mock_hardware, caplog
+    ):
+        # Telemetry must never be the thing that breaks a sync. FakeDB has no
+        # get_state_count at all.
+        c = _make_client()
+        db = FakeDB(rows_fixture())
+        resp = {"results": [{"index": 0, "error": "Missing sensors data"}]}
+        monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=_Resp(200, resp)))
+        with caplog.at_level(logging.WARNING, logger="wqm1.cloud"):
+            n = c.sync_readings(db)
+        assert n == 0
+        assert db.failed == [1]
+        assert "total rejected" not in caplog.text
 
     def test_legacy_server_without_indices_marks_whole_batch(self, monkeypatch, mock_hardware):
         c = _make_client()

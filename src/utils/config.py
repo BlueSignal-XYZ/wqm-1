@@ -98,7 +98,10 @@ LORA_PA_LUT = 0x01
 
 # UART — GPS
 GPS_UART_PORT = "/dev/serial0"
-GPS_BAUD = 9600
+# The module fitted on every WQM-1 talks 38400. This was 9600 (the u-blox
+# NEO-6/7/8 default) and did not match the hardware, so out of the box the
+# firmware read the receiver's output as noise and never obtained a fix.
+GPS_BAUD = 38400
 GPS_EXTINT = 19
 
 # 1-Wire
@@ -169,10 +172,12 @@ class Settings:
     gps_fix_timeout_s: int = 60
 
     # GPS
-    # u-blox modules vary: NEO-6/7/8 default to 9600, NEO-M9N defaults to
-    # 38400, some custom-flashed boards ship at 115200. If GPS reads return
-    # garbled bytes, try the alternative bauds.
-    gps_baud: int = 9600
+    # 38400 is what the module on the WQM-1 actually uses — verified in the
+    # field against raw NMEA. Overridable because u-blox parts vary (NEO-6/7/8
+    # default to 9600, some custom-flashed boards ship at 115200), but on this
+    # board the default should need no override. If reads come back garbled,
+    # diagnostics.sh sweeps the common rates and names the one that works.
+    gps_baud: int = 38400
 
     # LoRaWAN OTAA credentials. Both are issued by the cloud when the device is
     # claimed and must match what is registered on the network server — a unit

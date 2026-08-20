@@ -4,7 +4,7 @@
 
 # WQM-1 — Open Source Water Quality Monitor
 
-> Six-channel water quality monitoring on a Raspberry Pi Zero 2W. Open hardware. Open firmware. Built by [BlueSignal](https://bluesignal.xyz).
+> Continuous water quality monitoring on a Raspberry Pi Zero 2W — pH, TDS, turbidity and temperature, with LoRaWAN and GPS. Open hardware. Open firmware. Built by [BlueSignal](https://bluesignal.xyz).
 
 ## What It Is
 
@@ -20,20 +20,39 @@ The WQM-1 is a Raspberry Pi Zero 2W carrier board (120 × 105 mm) designed for c
 
 **Monitored parameters:**
 
-- pH
+- pH (BNC, analog)
 - TDS (Total Dissolved Solids)
 - Turbidity
-- ORP (Oxidation-Reduction Potential)
-- Temperature
+- Temperature (DS18B20, 1-Wire)
 - GPS location
+
+Optional, over a shared RS485 Modbus bus (Honde Tech digital probes):
+
+- Residual chlorine
+- ORP — **digital only.** On PCBA rev Fin_3 the BNC front end is pH-only and
+  AIN3 is spare, so there is no analog ORP channel. Earlier documentation
+  showed ORP sharing the pH BNC; that circuit does not exist.
+- 5-in-1: pH, EC/conductivity, TDS, salinity, temperature
+
+**A probe is only read once it is declared fitted** — in the first-boot wizard's
+Sensors step, or via `ph_enabled` / `tds_enabled` / `turbidity_enabled` /
+`temperature_enabled` in `config.yaml`. An undeclared channel is never sampled,
+which is what stops an open input being published as a measurement.
 
 **Data pipeline:**
 
-Sensors → ADS1115 (I²C) → Pi Zero 2W → SQLite WAL buffer → LoRaWAN (SX1262, Cayenne LPP, AES-128)
+Sensors → ADS1115 (I²C) → Pi Zero 2W → SQLite WAL buffer → LoRaWAN (SX1262,
+Cayenne LPP, AES-128) and/or HTTPS to the cloud over WiFi.
+
+The two transports coexist. The SQLite buffer is store-and-forward: readings
+survive an outage and upload when the link returns.
 
 **Supported platforms:**
 
-Tested on Debian Trixie (13), kernel 6.12, Pi Zero 2W (aarch64). `setup.sh` handles Bookworm and Trixie automatically.
+Tested on Debian Trixie (13), kernels 6.12–6.18, Pi Zero 2W (aarch64).
+`setup.sh` handles Bookworm and Trixie automatically. A digital-first subset
+(RS485 probes + USB GPS + WiFi; no analog, LoRa or relays) runs on Arduino
+UNO Q / VENTUNO Q — see [docs/platforms.md](docs/platforms.md).
 
 ## Applications
 
@@ -54,13 +73,20 @@ The dev kit ships with cloud monitoring via [cloud.bluesignal.xyz](https://cloud
 ```
 wqm-1/
 ├── src/                   # Firmware source (Python)
-│   ├── main.py            # Entry point
-│   ├── sensors/           # Sensor drivers (ADS1115, GPS, pH, TDS, etc.)
-│   ├── radio/             # LoRaWAN + SX1262 driver
+│   ├── main.py            # Entry point — wires subsystems, builds workers
+│   ├── app/               # Worker loop (sampling, radio, GPS, sync, heartbeat)
+│   ├── sensors/           # Drivers: ADS1115, DS18B20, pH, TDS, turbidity, Honde RS485
+│   ├── sensing/           # Drift/stuck/spike detection, adaptive cadence
+│   ├── radio/             # SX1262 driver + LoRaWAN MAC
+│   ├── cloud/             # HTTPS store-and-forward client
 │   ├── control/           # Relays, LEDs, automation rules
-│   ├── storage/           # SQLite database
+│   ├── storage/           # SQLite buffer + migrations
+│   ├── service_window/    # Flask UI: first-boot wizard, calibration, diagnostics
+│   ├── ota/               # Signed over-the-air update agent
+│   ├── diagnostics/       # Plain-language health explanations
 │   ├── calibration/       # Sensor calibration
-│   └── utils/             # Config, health, identity, watchdog
+│   ├── platform_support/  # Host detection (Pi vs digital-first boards)
+│   └── utils/             # Config, health, identity, netinfo, watchdog
 ├── config/                # Example configs (pinmap, policies, config.yaml)
 ├── hardware/
 │   ├── bom/               # Bill of Materials
@@ -69,7 +95,8 @@ wqm-1/
 ├── images/                # README and docs images
 ├── tests/                 # Test suite
 ├── systemd/               # systemd service unit files
-├── scripts/               # Diagnostics and utility scripts
+├── scripts/               # diagnostics.sh, update-unit.sh, provision.py,
+│                          #   first-boot-check.sh, ota-generate-keys.py
 ├── docs/                  # Project documentation
 ├── setup.sh               # Automated Pi setup script
 ├── requirements.txt       # Runtime Python dependencies
@@ -180,17 +207,53 @@ cd wqm-1
 sudo bash setup.sh
 ```
 
-The setup script runs **7 stages** automatically:
+The setup script runs **9 stages** automatically:
 
 | Stage | What it does |
 |-------|-------------|
-| 1/7 | Installs system packages (`i2c-tools`, `python3-pip`, `python3-venv`, `libgpiod2`) |
-| 2/7 | Installs Python dependencies from `requirements.txt` |
-| 3/7 | Configures `/boot/config.txt` device-tree overlays (I2C, SPI, UART, 1-Wire, disable Bluetooth, reduce GPU memory) |
-| 4/7 | Creates directories (`/opt/bluesignal`, `/var/lib/bluesignal`, `/var/log/bluesignal`, `/etc/bluesignal`) |
-| 5/7 | Copies firmware source to `/opt/bluesignal/src/` and installs default config to `/etc/bluesignal/config.yaml` |
-| 6/7 | Installs and enables the `bluesignal-wqm` systemd service |
-| 7/7 | Prints next steps |
+| 1/9 | Installs system packages (`i2c-tools`, `python3-pip`, `python3-venv`, `libgpiod2/3`) |
+| 2/9 | Installs Python dependencies from `requirements.txt` (+ `requirements-rpi.txt` on a Pi) |
+| 3/9 | Configures `/boot/config.txt` device-tree overlays (I2C, SPI, UART, 1-Wire, disable Bluetooth, reduce GPU memory) and frees the UART from the serial console |
+| 4/9 | Prepares the install layout, migrating a pre-OTA flat install to `releases/` + `current` |
+| 5/9 | Installs this version as `/opt/bluesignal/releases/<version>/` and flips the `current` symlink atomically |
+| 6/9 | Installs and enables the `bluesignal-wqm`, `bluesignal-service-window` and `bluesignal-ota` systemd services |
+| 7/9 | Installs the Service Window and provisioning tools |
+| 8/9 | Restarts the services onto the new release |
+| 9/9 | Prints next steps |
+
+**Re-running `setup.sh` is how you upgrade.** It preserves
+`/etc/bluesignal/config.yaml`, installs alongside the previous release rather
+than over it, and restarts the services itself. `scripts/update-unit.sh` wraps
+it with before/after state, a config and database backup, and a diagnostics run
+— see [Upgrading a unit](#upgrading-a-unit).
+
+---
+
+### Step 3b — Commission from a phone (no SSH)
+
+Everything in Step 4 can be done from a phone browser instead, and on a new
+unit that is the intended path. Power the unit, join its network, and open
+`http://wqm1.local:8080`. Until setup is finished the unit serves only the
+wizard:
+
+| Step | What it settles |
+|------|-----------------|
+| PIN | Replaces the factory PIN (1234 is refused) |
+| Identity | Device ID + DevEUI, with a QR code for your install records |
+| Network | WiFi signal **at the final mounting position, enclosure closed** |
+| Cloud | The device API key, verified against the cloud before you leave |
+| Sensors | **Which probes are physically fitted** — nothing is sampled until declared |
+| Finish | Go/no-go over sensors, cloud, LoRa, GPS and storage |
+
+The wizard gates the UI only while the PIN is still `1234` and setup has never
+been completed. After that the same pages are reachable individually.
+
+> **WiFi credentials can only be set when the card is imaged.** The Service
+> Window is served over the unit's own network connection, so it cannot join a
+> new SSID from its own UI. Decide the site's network before you flash.
+
+For a field install — what to prepare, the on-site order, a go/no-go list and
+the traps — see [docs/install-day-runbook.md](docs/install-day-runbook.md).
 
 ---
 
@@ -246,7 +309,7 @@ After the Pi comes back up (~60 seconds), SSH in again and run the
 **diagnostics script** to verify all hardware in one shot:
 
 ```bash
-sudo bash /opt/bluesignal/scripts/diagnostics.sh
+sudo bash /opt/bluesignal/current/scripts/diagnostics.sh
 ```
 
 Example output:
@@ -260,10 +323,11 @@ Example output:
 [PASS] SPI:     /dev/spidev0.0
 [PASS] Config:  /etc/bluesignal/config.yaml (valid YAML)
 [WARN] LoRaWAN: app_key is default (LoRa will not connect)
-[PASS] Policies: /opt/bluesignal/config/policies.yaml (17 rules loaded)
+[PASS] Policies: /opt/bluesignal/current/config/policies.yaml (15 rules loaded)
 [PASS] Service: bluesignal-wqm enabled (not yet started)
 [INFO] Disk:    2.1 GB free on /var/lib/bluesignal
 [INFO] CPU:     42.3°C
+[INFO] Memory:  230MB / 463MB available
 
 === 7 passed, 1 warning(s), 0 failed ===
 ```
@@ -319,6 +383,39 @@ sudo systemctl stop bluesignal-wqm
 
 ---
 
+### Upgrading a unit
+
+Firmware installs are versioned. Each release lands in
+`/opt/bluesignal/releases/<version>/` and `/opt/bluesignal/current` is a symlink
+to the active one, flipped atomically, so an upgrade never leaves a moment with
+no firmware and the previous release stays on disk.
+
+Two ways to upgrade:
+
+**Signed OTA (routine).** The `bluesignal-ota` agent polls for releases, checks
+an Ed25519 signature over the manifest and the tarball's hash, applies, self-
+tests and rolls back on failure. This is the normal path once a unit is in the
+field — see [docs/ota-runbook.md](docs/ota-runbook.md).
+
+**Over SSH (bootstrap and break-glass).** `scripts/update-unit.sh` wraps
+`setup.sh` with the parts a remote upgrade needs:
+
+```bash
+sudo bash scripts/update-unit.sh [git-ref]
+```
+
+It records the installed version, service state and reading rows by sync state
+before and after; backs up `config.yaml` and takes a consistent `sqlite3
+.backup` of the database ahead of any schema migration; optionally fetches a
+given ref; warns rather than proceeding quietly when the tree's version matches
+what is already installed; and finishes by running diagnostics and exiting on
+their status.
+
+After the first bootstrap, **SSH is break-glass only.** An unsigned change made
+over SSH is invisible to the audit trail and is overwritten by the next release.
+
+---
+
 ### Day-2 Operations
 
 Once the firmware is installed and running, here is the everyday command
@@ -340,7 +437,7 @@ journalctl -u bluesignal-wqm --since "10 min ago"
 #### Hardware sanity checks
 
 ```bash
-sudo bash /opt/bluesignal/scripts/diagnostics.sh   # full one-shot probe
+sudo bash /opt/bluesignal/current/scripts/diagnostics.sh   # full one-shot probe
 i2cdetect -y 1                                     # ADS1115 → 0x48
 ls /sys/bus/w1/devices/                            # DS18B20 → 28-*
 ls /dev/spidev0.0                                  # SX1262 SPI bus
@@ -360,7 +457,7 @@ sudo sqlite3 /var/lib/bluesignal/wqm1.db \
 
 # Raw NMEA stream (must stop the service - it holds the port)
 sudo systemctl stop bluesignal-wqm
-sudo stty -F /dev/serial0 9600 raw -echo
+sudo stty -F /dev/serial0 38400 raw -echo
 sudo timeout 10 cat /dev/serial0
 sudo systemctl start bluesignal-wqm
 # $...,A,...,A,...  → fix acquired (A = active)
@@ -416,12 +513,15 @@ sudo systemctl enable --now bluesignal-service-window   # if not running
 Then from another machine on the same network:
 
 ```
-http://<pi-ip>:8080/                   # dashboard
+http://<pi-ip>:8080/                   # dashboard (or the first-boot wizard)
+http://<pi-ip>:8080/setup/             # first-boot wizard, if not yet completed
 http://<pi-ip>:8080/sensors/           # live sensor readings
 http://<pi-ip>:8080/sensors/data.json  # raw JSON
 http://<pi-ip>:8080/lora/              # set AppKey, view join state
 http://<pi-ip>:8080/relays/            # manual relay control
 http://<pi-ip>:8080/calibration/       # pH/TDS/turbidity calibration
+http://<pi-ip>:8080/rs485/             # add and address RS485 digital probes
+http://<pi-ip>:8080/settings/          # config, PIN, remote reboot
 http://<pi-ip>:8080/diagnostics/       # run hardware probe
 ```
 
@@ -429,7 +529,7 @@ http://<pi-ip>:8080/diagnostics/       # run hardware probe
 
 ```bash
 sudo nano /etc/bluesignal/config.yaml         # main config (AppKey, intervals, fan thresholds)
-sudo nano /opt/bluesignal/config/policies.yaml # relay rules
+sudo nano /opt/bluesignal/current/config/policies.yaml # relay rules
 sudo systemctl restart bluesignal-wqm          # apply changes
 ```
 
@@ -479,8 +579,12 @@ ls -lh /var/log/bluesignal/                            # log files
   an older install, run:
   ```bash
   sudo systemctl disable --now serial-getty@ttyAMA0.service
-  CMDLINE=/boot/firmware/cmdline.txt; [ -f /boot/cmdline.txt ] && CMDLINE=/boot/cmdline.txt
-  sudo sed -i -E 's/[[:space:]]+console=(serial0|ttyAMA0)[^[:space:]]*//g' "$CMDLINE"
+  sudo systemctl mask serial-getty@ttyAMA0.service
+  # Prefer /boot/firmware — on Bookworm/Trixie the real file lives there and
+  # /boot/cmdline.txt is a stub that only says so, which means a naive
+  # `[ -f /boot/cmdline.txt ]` test picks the placeholder and edits nothing.
+  CMDLINE=/boot/cmdline.txt; [ -f /boot/firmware/cmdline.txt ] && CMDLINE=/boot/firmware/cmdline.txt
+  sudo sed -i -E 's/(^|[[:space:]])console=(serial0|ttyAMA0)[^[:space:]]*/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g' "$CMDLINE"
   sudo reboot
   ```
   After reboot, `/dev/ttyAMA0` should be `root dialout` mode `0660`.
@@ -489,12 +593,13 @@ ls -lh /var/log/bluesignal/                            # log files
   outdoors.
 - **Firmware logs `GPS UART opened` but no `GPS fix:` ever appears, and
   raw bytes look garbled.** This is a baud-rate mismatch. The default
-  is 9600 but some u-blox variants ship at 38400 or 115200 (NEO-M9N is
-  the common offender). Sweep the bauds to identify which one the
-  module is using:
+  is 38400, which is what the module fitted on the WQM-1 uses — so on our
+  hardware this should not happen. Other u-blox variants ship at 9600 or
+  115200. `diagnostics.sh` sweeps automatically and names the working rate;
+  to sweep by hand:
   ```bash
   sudo systemctl stop bluesignal-wqm
-  for baud in 38400 115200 19200 57600 4800; do
+  for baud in 9600 115200 19200 57600 4800; do
     echo "=== $baud ==="
     sudo stty -F /dev/serial0 $baud raw -echo
     sudo timeout 2 cat /dev/serial0 | head -c 600
@@ -529,7 +634,7 @@ Common causes:
   ```
 - **Missing Python package** — re-run:
   ```bash
-  sudo pip3 install --break-system-packages -r /opt/bluesignal/requirements.txt
+  sudo pip3 install --break-system-packages -r /opt/bluesignal/current/requirements.txt
   ```
 - **Permission denied** — ensure directories are owned by `pi`:
   ```bash
@@ -553,12 +658,33 @@ Common causes:
 <details>
 <summary><strong>LoRaWAN join fails</strong></summary>
 
-- Verify the `app_key` in `config.yaml` matches your network server
-  **exactly** (32 hex characters, no spaces or dashes).
-- Make sure the LoRa antenna is connected to the WQM-1 HAT's U.FL
-  connector.
-- Confirm you are within range of a LoRaWAN gateway.
-- Check the logs for join-request / join-accept messages.
+Read the device's own log first — it distinguishes the two failures that
+look identical from the console:
+
+```bash
+journalctl -u bluesignal-wqm | grep -iE "OTAA join attempt|JoinRequest|JoinAccept"
+```
+
+- **`JoinRequest TX failed`** — the packet never left the radio. Check SPI and
+  that the SX1262 initialised (`LoRa init failed` earlier in the log).
+- **`No JoinAccept received`** — the packet went out and nothing answered.
+  Now check the network server console.
+
+Then, on the network server:
+
+- **No activity at all for the device** (TTN: "No activity yet") means **no
+  gateway ever heard it.** No credential change will fix that — it is antenna
+  or coverage. Confirm the antenna is actually attached to the U.FL connector
+  (transmitting into an unterminated connector is also hard on the PA), get it
+  outside the enclosure and vertical, and check the gateway map for the site.
+- **Join requests arriving but rejected** means coverage is fine and the
+  credentials disagree. Verify all three match the network server exactly:
+  `app_key` (32 hex), `app_eui`/JoinEUI (16 hex — the firmware defaults to
+  all-zeros, which is valid only if the device is registered that way), and the
+  DevEUI, which the firmware derives as `0018B200` + the last 8 hex of the Pi's
+  serial and cannot be overridden.
+- Confirm the frequency plan matches: the firmware is **US915**, RX2 at
+  923.3 MHz, which pairs with TTN's "United States 902–928 MHz, FSB 2".
 
 </details>
 

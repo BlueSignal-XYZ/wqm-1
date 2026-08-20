@@ -89,3 +89,73 @@ class TestGPSDriver:
         # Should have HIGH then LOW on EXTINT pin (19)
         extint_calls = [c for c in calls if c[0][0] == 19]
         assert len(extint_calls) >= 2
+
+
+class TestNoFixSaysWhy:
+    """A GPS that never works must state which failure it is.
+
+    Every path out of get_fix used to return None silently, so a unit whose
+    UART never opened, one reading pure noise from a baud mismatch, and one
+    with a receiver that simply had not locked all looked identical: a power
+    cycle every gps_fix_s and not a word of explanation.
+    """
+
+    def _gps(self, lines, is_open=True):
+        from sensors.gps import GPS
+
+        g = GPS.__new__(GPS)
+        g._port_name = "/dev/serial0"
+        g._baud = 38400
+        g._last_fix = None
+        g._last_no_fix_log = 0.0
+        g._last_no_fix_detail = ""
+        import threading
+
+        g._lock = threading.Lock()
+
+        class FakeSerial:
+            def __init__(self, payload, opened):
+                self._payload = list(payload)
+                self.is_open = opened
+
+            def reset_input_buffer(self):
+                pass
+
+            def readline(self):
+                return self._payload.pop(0) if self._payload else b""
+
+        g._serial = FakeSerial(lines, is_open)
+        return g
+
+    def test_unopened_uart_is_reported(self, caplog):
+        g = self._gps([], is_open=False)
+        with caplog.at_level("WARNING"):
+            assert g.get_fix(timeout_s=0.05) is None
+        assert "UART is not open" in caplog.text
+
+    def test_baud_mismatch_is_named_as_such(self, caplog):
+        # Bytes that will never pass an NMEA checksum — what noise looks like.
+        with caplog.at_level("WARNING"):
+            g = self._gps([b"\xff\xfe garbage\n"] * 3)
+            assert g.get_fix(timeout_s=0.2) is None
+        assert "failed checksum" in caplog.text
+        assert "38400" in caplog.text
+
+    def test_receiver_talking_but_not_locked_is_distinguished(self, caplog):
+        # Valid GGA, checksum correct, fix quality 0.
+        sentence = "$GNGGA,001339.00,,,,,0,00,99.99,,,,,,"
+        body = sentence[1:]
+        chk = 0
+        for c in body:
+            chk ^= ord(c)
+        line = f"{sentence}*{chk:02X}\r\n".encode()
+        with caplog.at_level("WARNING"):
+            g = self._gps([line] * 3)
+            assert g.get_fix(timeout_s=0.2) is None
+        assert "quality 0" in caplog.text
+
+    def test_silence_on_the_uart_is_distinguished(self, caplog):
+        with caplog.at_level("WARNING"):
+            g = self._gps([])
+            assert g.get_fix(timeout_s=0.05) is None
+        assert "no bytes on the UART" in caplog.text
