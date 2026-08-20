@@ -125,11 +125,13 @@ class TestReadingToJson:
         assert out["metadata"]["radios"]["lora"]["present"] is True
         assert "gps" not in out["metadata"]["radios"]
 
-    def test_orp_and_battery_mapping(self):
+    def test_orp_mapping(self):
         c = _make_client()
         out = c.reading_to_json(_row(orp_mv=200.0, battery_v=4.1))
         assert out["sensors"]["orp"] == {"value": 200.0}
-        assert out["sensors"]["battery_voltage"] == {"value": 4.1}
+        # battery_v is no longer mapped onto the wire (removed 2026-08-20).
+        # A stale column value in the DB must not resurrect the channel.
+        assert "battery_voltage" not in out["sensors"]
 
 
 class TestSyncReadings:

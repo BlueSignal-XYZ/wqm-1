@@ -7,6 +7,27 @@ POST /v2/devices/:id/heartbeat: uptime, buffer depth, disk/memory, CPU
 temperature, link quality, error counters, firmware + config versions.
 Every field is best-effort — a heartbeat must still go out when a source
 fails (that failure IS the telemetry).
+
+── No battery level, deliberately (2026-08-20) ──────────────────────────────
+There was a `get_battery_level()` here that turned a pack voltage into a
+percentage on a linear 21V=0% / 28V=100% curve. It has been removed, for two
+independent reasons:
+
+1. **Nothing ever fed it.** `update_battery()` had no callers anywhere and
+   `workers.py` hardcoded `battery_v: None`, so it returned None for the whole
+   life of the field. There is no ADC input free for a divider either — all
+   four ADS1115 channels are allocated (AIN0 TDS, AIN1 turbidity, AIN2 pH,
+   AIN3 tied to PH_INN), so wiring it is a board revision, not a patch.
+2. **The maths was wrong anyway.** The packs are dumb 24V NMC on two wires,
+   no comms. NMC's open-circuit curve is flat through the middle — roughly
+   20–80% state of charge lives inside 25.2–27.3V on a 7S pack — so a linear
+   interpolation reads 60–90% across most of the real range and then falls off
+   a cliff. Under load it sags by I×R on top of that.
+
+If battery reporting comes back on a hardware revision that can measure it,
+report **volts** plus a coarse state (charging / discharging / low / critical).
+Voltage is honest at the ends of the curve, which is where it matters. Never a
+percentage.
 """
 
 import contextlib
@@ -71,7 +92,6 @@ class HealthReporter:
         self._started_at = clock()
         self._last_rssi: int | None = None
         self._last_seen: int = 0
-        self._battery_v: float | None = None
 
     def update_rssi(self, rssi_dbm: int) -> None:
         """Update last known RSSI from LoRa radio."""
@@ -80,24 +100,6 @@ class HealthReporter:
     def update_last_seen(self) -> None:
         """Mark current time as last sensor reading."""
         self._last_seen = int(time.time() * 1000)
-
-    def update_battery(self, voltage: float) -> None:
-        """Update battery voltage reading."""
-        self._battery_v = voltage
-
-    def get_battery_level(self) -> int | None:
-        """
-        Convert battery voltage to percentage.
-
-        24V system: 21V = 0%, 28V = 100% (linear approximation).
-        Returns 0-100 clamped, or None when no battery sensing is wired
-        (mains-powered bench units) — None keeps the dashboard honest instead
-        of reporting a fake 0%.
-        """
-        if self._battery_v is None:
-            return None
-        pct = (self._battery_v - 21.0) / (28.0 - 21.0) * 100.0
-        return max(0, min(100, int(pct)))
 
     def get_signal_strength(self) -> int | None:
         """Last LoRa RSSI in dBm, or None if the radio never reported one."""
@@ -109,7 +111,6 @@ class HealthReporter:
     def get_report(self) -> dict[str, Any]:
         """Legacy per-reading health shape (kept for the service window)."""
         return {
-            "batteryLevel": self.get_battery_level(),
             "signalStrength": self.get_signal_strength(),
             "lastSeen": self._last_seen,
             "firmwareVersion": self._firmware_version,
@@ -133,9 +134,6 @@ class HealthReporter:
             "uptimeS": self.uptime_s(),
             "firmwareVersion": self._firmware_version,
         }
-        battery = self.get_battery_level()
-        if battery is not None:
-            hb["batteryLevel"] = battery
         if self._last_rssi is not None:
             hb["loraRssi"] = self._last_rssi
         wifi = read_wifi_rssi_dbm()

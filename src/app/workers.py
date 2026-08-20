@@ -183,7 +183,6 @@ class SamplingWorker(Worker):
             "lat": gps.lat,
             "lon": gps.lon,
             "alt_m": gps.alt_m,
-            "battery_v": None,
             "relay_state": self._relays.get_state_bitmask() if self._relays else 0,
         }
 

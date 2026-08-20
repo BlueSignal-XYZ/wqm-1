@@ -298,21 +298,7 @@ class TestFanControllerBoundaryConditions:
 
 
 class TestHealthReporterBoundaries:
-    """Health reporter battery and signal edge cases."""
-
-    def test_battery_midpoint(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(24.5)
-        assert hr.get_battery_level() == 50
-
-    def test_battery_none_returns_none(self, mock_hardware):
-        # v2: honest nulls — no battery sensing must not report a fake 0%.
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        assert hr.get_battery_level() is None
+    """Health reporter signal edge cases."""
 
     def test_signal_default_unknown_is_none(self, mock_hardware):
         # v2: honest nulls — no RSSI yet must not report a fake -120 dBm.
@@ -325,11 +311,12 @@ class TestHealthReporterBoundaries:
         from utils.health import HealthReporter
 
         hr = HealthReporter(firmware_version="2.0.0")
-        hr.update_battery(25.0)
         hr.update_rssi(-85)
         hr.update_last_seen()
         report = hr.get_report()
-        assert "batteryLevel" in report
+        # batteryLevel is deliberately absent — removed 2026-08-20 because
+        # nothing measured it. See utils/health.py.
+        assert "batteryLevel" not in report
         assert "signalStrength" in report
         assert "lastSeen" in report
         assert "firmwareVersion" in report

@@ -8,26 +8,11 @@ class TestHealthReporter:
         hr = HealthReporter("2.0.0")
         report = hr.get_report()
         assert report["firmwareVersion"] == "2.0.0"
-        # Honest nulls: no battery sensing / no RSSI yet must not fake values.
-        assert report["batteryLevel"] is None
+        # Honest nulls: no RSSI yet must not fake a value. Battery was removed
+        # 2026-08-20 — nothing measured it and the percentage was invented.
+        assert "batteryLevel" not in report
         assert report["signalStrength"] is None
         assert report["lastSeen"] == 0
-
-    def test_battery_level_conversion(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(24.5)  # mid-range in 21-28V system
-        assert 0 < hr.get_battery_level() < 100
-
-    def test_battery_level_clamped(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(30.0)  # above max
-        assert hr.get_battery_level() == 100
-        hr.update_battery(18.0)  # below min
-        assert hr.get_battery_level() == 0
 
     def test_rssi_update(self, mock_hardware):
         from utils.health import HealthReporter
@@ -95,7 +80,6 @@ class TestHeartbeatBuilder:
 
         hr = HealthReporter("2.0.0")
         hr.update_rssi(-72)
-        hr.update_battery(24.5)
         hb = hr.build_heartbeat(
             error_counts={"cloud": 2},
             sensor_health={"ph": {"status": "ok"}},
@@ -103,7 +87,6 @@ class TestHeartbeatBuilder:
             ota_phase="idle",
         )
         assert hb["loraRssi"] == -72
-        assert hb["batteryLevel"] == 50
         assert hb["errorCounts"] == {"cloud": 2}
         assert hb["sensorHealth"] == {"ph": {"status": "ok"}}
         assert hb["configVersion"] == 4

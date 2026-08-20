@@ -44,7 +44,6 @@ _SENSOR_MAP = {
     "chlorine_mgl": "chlorine",
     "conductivity_uscm": "conductivity",
     "salinity_ppt": "salinity",
-    "battery_v": "battery_voltage",
 }
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -97,9 +96,9 @@ class CloudClient:
         # Optional callable returning current radio status (LoRa presence + GPS
         # fix) for the dashboard's Radios card. Read at sync time; never required.
         self._radios_provider = radios_provider
-        # Optional callable returning {"batteryLevel": int|None,
-        # "signalStrength": int|None} for per-reading metadata (HealthReporter
-        # get_report) — v1 hardcoded these to null.
+        # Optional callable returning {"signalStrength": int|None} for
+        # per-reading metadata (HealthReporter get_report). Battery level was
+        # removed 2026-08-20 — see utils/health.py for why.
         self._health_provider = health_provider
         self._sleep = time.sleep  # patchable in tests
         self._now_ms: Callable[[], int] = lambda: int(time.time() * 1000)  # patchable
@@ -122,19 +121,16 @@ class CloudClient:
             if val is not None:
                 sensors[name] = {"value": val}
 
-        battery_level: int | None = None
         signal_strength: int | None = None
         if self._health_provider is not None:
             try:
                 health = self._health_provider() or {}
-                battery_level = health.get("batteryLevel")
                 signal_strength = health.get("signalStrength")
             except Exception as e:  # noqa: BLE001 — health is best-effort metadata
                 logger.debug("health_provider failed: %s", e)
 
         metadata: dict[str, Any] = {
             "firmware": self._fw,
-            "batteryLevel": battery_level,
             "signalStrength": signal_strength,
             "relayState": row.get("relay_state", 0),
         }
