@@ -22,7 +22,8 @@ Approximate cost: **~$147 per unit at 10-unit quantity.**
 | Analog-to-digital | **ADS1115** (single, I²C @ 0x48) | 16-bit, four channels, ±6.144 V PGA range |
 | pH analog front-end | **LMP91200** | Configurable-gain pH signal conditioner |
 | TDS excitation | **CD4060** + **LM324** | Square-wave generator + buffer for AC excitation of the TDS probe (avoids electroplating) |
-| Turbidity / ORP | direct into ADS1115 | No dedicated AFE |
+| Turbidity | direct into ADS1115 (AIN1, LMV321 buffer) | No dedicated AFE |
+| ORP | **not on the board** — optional RS485 digital probe | On rev Fin_3 the BNC front end is pH only and AIN3 is spare (`PH_INN`). See `config/pinmap.yaml`. Earlier revisions of this table showed analog ORP sharing the pH BNC; there is no such circuit. |
 | Temperature | **DS18B20** (1-Wire on GPIO 4) | Digital, no ADC channel consumed |
 | Relays | **4× G5Q-14** optoisolated | Dosing pumps, aerators, valves |
 | Radio | **SX1262** (SPI) | LoRa / LoRaWAN, up to +22 dBm |

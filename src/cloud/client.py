@@ -23,6 +23,7 @@ than 24h are sent with ``metadata.backfill: true`` so the widened server
 window accepts post-outage history.
 """
 
+import contextlib
 import json
 import logging
 import time
@@ -274,9 +275,20 @@ class CloudClient:
         db.mark_synced(stored_ids)
         db.mark_failed_permanent(failed_ids)
         if failed_ids:
+            # Say how big the graveyard has become, not just how much it grew.
+            # A per-batch count of "5 rejected" reads as a blip; one field unit
+            # logged that line for sixteen days while the running total climbed
+            # past 15,000 and every other indicator stayed green. The cumulative
+            # figure is what makes a systemic fault look systemic.
+            total_failed: int | None = None
+            with contextlib.suppress(Exception):
+                total_failed = db.get_state_count("failed_permanent")
             logger.warning(
-                "Cloud sync: %d row(s) permanently rejected: %s",
+                "Cloud sync: %d row(s) permanently rejected%s: %s",
                 len(failed_ids),
+                f" ({total_failed} total rejected on this unit)"
+                if total_failed is not None
+                else "",
                 "; ".join(
                     str(e.get("error"))
                     for e in results
