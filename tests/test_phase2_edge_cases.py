@@ -369,35 +369,3 @@ class TestLoRaWANCrypto:
         mic1 = _compute_uplink_mic(key, dev_addr, 0, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xff")
         mic2 = _compute_uplink_mic(key, dev_addr, 1, b"\x40\x01\x02\x03\x04\x00\x00\x00\x01\xff")
         assert mic1 != mic2
-
-
-class TestHealthReporterEdgeCases:
-    """Health reporter boundary conditions."""
-
-    def test_battery_level_at_21v_boundary(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(21.0)
-        assert hr.get_battery_level() == 0
-
-    def test_battery_level_at_28v_boundary(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(28.0)
-        assert hr.get_battery_level() == 100
-
-    def test_battery_level_below_minimum(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(18.0)
-        assert hr.get_battery_level() == 0
-
-    def test_battery_level_above_maximum(self, mock_hardware):
-        from utils.health import HealthReporter
-
-        hr = HealthReporter("2.0.0")
-        hr.update_battery(35.0)
-        assert hr.get_battery_level() == 100

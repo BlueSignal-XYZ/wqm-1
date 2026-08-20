@@ -171,16 +171,17 @@ class TestPerRowSync:
 
 
 class TestReadingMetadata:
-    def test_health_provider_populates_battery_and_signal(self, mock_hardware):
-        c = _make_client(health_provider=lambda: {"batteryLevel": 82, "signalStrength": -70})
+    def test_health_provider_populates_signal(self, mock_hardware):
+        c = _make_client(health_provider=lambda: {"signalStrength": -70})
         j = c.reading_to_json({"id": 1, "timestamp": None, "ph": 7.0})
-        assert j["metadata"]["batteryLevel"] == 82
         assert j["metadata"]["signalStrength"] == -70
+        # Battery was removed 2026-08-20; a provider that still returns one
+        # must not put it back on the wire.
+        assert "batteryLevel" not in j["metadata"]
 
     def test_health_provider_absent_keeps_nulls(self, mock_hardware):
         c = _make_client()
         j = c.reading_to_json({"id": 1, "timestamp": None, "ph": 7.0})
-        assert j["metadata"]["batteryLevel"] is None
         assert j["metadata"]["signalStrength"] is None
 
     def test_health_provider_errors_swallowed(self, mock_hardware):
@@ -189,7 +190,7 @@ class TestReadingMetadata:
 
         c = _make_client(health_provider=broken)
         j = c.reading_to_json({"id": 1, "timestamp": None, "ph": 7.0})
-        assert j["metadata"]["batteryLevel"] is None
+        assert j["metadata"]["signalStrength"] is None
 
 
 class TestPoll:
