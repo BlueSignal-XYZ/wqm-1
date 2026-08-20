@@ -118,9 +118,20 @@ CMDLINE="/boot/cmdline.txt"
 [ -f "/boot/firmware/cmdline.txt" ] && CMDLINE="/boot/firmware/cmdline.txt"
 if [ -f "$CMDLINE" ]; then
     sudo cp "$CMDLINE" "${CMDLINE}.bak.$(date +%s)" 2>/dev/null || true
-    sudo sed -i -E 's/[[:space:]]+console=(serial0|ttyAMA0)[^[:space:]]*//g' "$CMDLINE"
+    # Anchor on (^|space), not space alone. On a stock Raspberry Pi cmdline.txt
+    # `console=serial0,115200` is the FIRST token with no leading whitespace, so
+    # a space-only pattern never matched it — this step has been silently doing
+    # nothing on every install since it was written. The symptom is downstream
+    # and looks unrelated: the kernel keeps the UART as a console, /dev/serial0
+    # stays root:tty 0600 instead of root:dialout 0660, and the firmware fails
+    # to open GPS with EACCES on every restart after the first boot.
+    sudo sed -i -E 's/(^|[[:space:]])console=(serial0|ttyAMA0)[^[:space:]]*/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g' "$CMDLINE"
 fi
+# Mask, not just disable. A disabled unit can be pulled back in by anything
+# that enables it (raspi-config, an OS update, a hand-run systemctl enable), and
+# when it returns it takes the UART with it. Masking is what makes it stay off.
 sudo systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
+sudo systemctl mask serial-getty@ttyAMA0.service 2>/dev/null || true
 fi  # IS_RPI — end of Pi-only boot configuration
 
 # --- Migrate legacy flat layout (pre-OTA) to releases/ + current symlink ---
