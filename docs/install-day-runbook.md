@@ -221,10 +221,11 @@ item A.5 of [`manual-errata-revD9.md`](manual-errata-revD9.md); the Rev H brief
 itself is not in this branch. If the customer reads that page, correct it in
 person.
 
-**T4 — the unit will report firmware `2.0.0`.** `VERSION` and `pyproject.toml`
-both say 2.0.0, while the tree carries the first-boot wizard and RS485 support
-that `getting-started.md` labels "v2.2+" / "v2.3+". The features are present; the
-version label just hasn't been cut. Nothing to fix on the unit.
+**T4 — the version label lags the features.** The tree is `2.1.0`, while
+`getting-started.md` labels the first-boot wizard and RS485 support "v2.2+" /
+"v2.3+". Those features are present at 2.1.0; the doc's version tags describe a
+roadmap that was never cut. Read the feature list, not the label — and nothing
+needs fixing on the unit.
 
 **T5 — relay automation ships inert and should stay that way.** `manual.override:
 true` in `config/policies.yaml` holds all four relays off regardless of rules. The
@@ -253,6 +254,11 @@ a time or they collide.
 the relay physically moved. The only confirmation is listening for the click at
 the unit. Our boards are active-low.
 
+**T10 — a re-flash does not give you a new device.** The device id derives from
+the Pi's CPU serial, so a re-flashed unit re-attaches to the old record, readings
+and alerts. To genuinely start over, purge first —
+`marketplace/scripts/purge-device.cjs`, dry-run then `--apply`.
+
 **T11 — a unit that records nothing looks exactly like a healthy one.** The
 fitment declaration is what decides whether a probe is sampled at all, and an
 undeclared probe is silently not read. Get it wrong and the unit heartbeats,
@@ -266,7 +272,19 @@ declaration is still yours to get right. **Before you leave, confirm the journal
 shows `Stored id=` lines carrying real values** — a green dashboard is not
 evidence.
 
-**T10 — a re-flash does not give you a new device.** The device id derives from
-the Pi's CPU serial, so a re-flashed unit re-attaches to the old record, readings
-and alerts. To genuinely start over, purge first —
-`marketplace/scripts/purge-device.cjs`, dry-run then `--apply`.
+`diagnostics.sh` now reads the buffer directly and prints a `Buffer:` line —
+synced / pending / permanently rejected. Anything over 100 rejected is a FAIL,
+because `failed_permanent` is terminal: those rows are never retried and the
+measurements are gone. Read that line on every visit. The sync warning in the
+journal also carries the running total now (`… (15409 total rejected on this
+unit)`), so a single log line distinguishes a blip from sixteen days of loss.
+
+**T12 — a diagnostic run as root proves nothing about a service that isn't.**
+Every bus check now tests access as the firmware's own systemd user, not as
+root. This is the fault that cost the longest on 2026-08-19: `/dev/serial0` was
+`root:tty 0600` because the kernel still held the UART as a console, so the
+firmware failed every open with EACCES while a root-run diagnostic reported a
+mild warning. It works on the first boot after imaging and fails on every
+restart after, which is the worst possible shape for a fault. The same check now
+covers `/dev/i2c-1` and `/dev/spidev0.0` — a read-only I²C node fails an ADS1115
+conversion exactly like a missing chip, and presents as a sensor fault.

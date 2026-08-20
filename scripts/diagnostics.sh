@@ -40,6 +40,29 @@ PYEOF
 SERVICE_USER="$(systemctl show bluesignal-wqm -p User --value 2>/dev/null)"
 [ -n "$SERVICE_USER" ] || SERVICE_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 
+# Can the service user read AND write this device node? Every bus the firmware
+# drives needs both — a read-only /dev/i2c-1 fails an ADS1115 conversion just
+# as surely as a missing chip, and it presents as a sensor fault rather than a
+# permission one. Returns 0 (ok) when SERVICE_USER is root or unresolvable,
+# because then there is nothing to distinguish.
+svc_can_rw() {
+    local node="$1"
+    [ -e "$node" ] || return 0
+    [ "$SERVICE_USER" = "root" ] && return 0
+    id -u "$SERVICE_USER" >/dev/null 2>&1 || return 0
+    sudo -n -u "$SERVICE_USER" test -r "$node" 2>/dev/null &&
+        sudo -n -u "$SERVICE_USER" test -w "$node" 2>/dev/null
+}
+
+# One line explaining a node the service cannot use, with its actual ownership
+# and the group that would fix it.
+svc_perm_fail() {
+    local node="$1" group="$2"
+    fail "$3 $node not read/writable by '$SERVICE_USER' ($(stat -c '%U:%G %a' "$node" 2>/dev/null))"
+    echo "         The firmware runs as '$SERVICE_USER' and will fail with EACCES."
+    echo "         Fix: sudo usermod -aG $group $SERVICE_USER  (then restart the service)"
+}
+
 # --- I2C: ADS1115 at 0x48 ---
 if command -v i2cdetect &>/dev/null; then
     # On fresh Trixie boots i2c-dev may not be loaded yet; make sure it is
@@ -61,7 +84,15 @@ if command -v i2cdetect &>/dev/null; then
     done
     case "$I2C_SCAN" in
         *" 48 "*|*" 48")
-            pass "I2C:     ADS1115 found at 0x48" ;;
+            # Root found the chip. That is only half the answer: the firmware
+            # opens /dev/i2c-1 as SERVICE_USER, and a node root can drive is
+            # not necessarily one the service can.
+            if svc_can_rw /dev/i2c-1; then
+                pass "I2C:     ADS1115 found at 0x48"
+            else
+                svc_perm_fail /dev/i2c-1 i2c "I2C:    "
+                echo "         (the ADS1115 IS present at 0x48 — this is permissions, not hardware)"
+            fi ;;
         *)
             fail "I2C:     ADS1115 not detected at 0x48 — check HAT seating"
             # Show what the bus actually held; "nothing at 0x48" and "nothing
@@ -110,16 +141,16 @@ if [ -e /dev/serial0 ]; then
     GPS_BAUD="$(cfg gps_baud 38400)"
     SERIAL_REAL="$(readlink -f /dev/serial0)"
 
-    # 1. Permission, as the firmware's user rather than as root.
-    if sudo -n -u "$SERVICE_USER" test -r "$SERIAL_REAL" 2>/dev/null; then
+    # 1. Permission, as the firmware's user rather than as root. Write matters
+    #    as much as read: pyserial sets termios on open, which needs both.
+    if svc_can_rw "$SERIAL_REAL"; then
         GPS_READABLE=1
     else
         GPS_READABLE=0
     fi
 
     if [ "$GPS_READABLE" -eq 0 ]; then
-        fail "GPS:     $SERIAL_REAL not readable by '$SERVICE_USER' ($(stat -c '%U:%G %a' "$SERIAL_REAL" 2>/dev/null))"
-        echo "         The firmware runs as '$SERVICE_USER' and will fail with EACCES."
+        svc_perm_fail "$SERIAL_REAL" dialout "GPS:    "
         echo "         Expected root:dialout 0660. root:tty 0600 means the kernel still"
         echo "         holds the UART as a console — remove console=serial0 from"
         echo "         /boot/firmware/cmdline.txt, mask serial-getty@ttyAMA0, and reboot."
@@ -157,7 +188,12 @@ fi
 
 # --- SPI: LoRa radio ---
 if [ -e /dev/spidev0.0 ]; then
-    pass "SPI:     /dev/spidev0.0"
+    if svc_can_rw /dev/spidev0.0; then
+        pass "SPI:     /dev/spidev0.0"
+    else
+        svc_perm_fail /dev/spidev0.0 spi "SPI:    "
+        echo "         The LoRa radio will never key up; joins fail with no radio error."
+    fi
 else
     fail "SPI:     /dev/spidev0.0 missing — check dtparam=spi=on in config.txt"
 fi
@@ -214,6 +250,42 @@ if systemctl is-enabled bluesignal-wqm &>/dev/null; then
     fi
 else
     fail "Service: bluesignal-wqm not enabled (run setup.sh)"
+fi
+
+# --- Store-and-forward buffer ---
+#
+# The check that did not exist on 2026-08-03, and whose absence let a unit
+# reject 15,409 readings over sixteen days while every other line here said
+# PASS. `failed_permanent` is terminal — those rows are never retried — so a
+# growing count is not a backlog that will clear itself, it is data that is
+# gone. It has to be loud.
+WQM_DB="/var/lib/bluesignal/wqm1.db"
+if [ -f "$WQM_DB" ] && command -v sqlite3 &>/dev/null; then
+    # Read-only so a running firmware is never blocked by the diagnostic.
+    BUF_SYNCED=$(sqlite3 "file:$WQM_DB?mode=ro" "SELECT COUNT(*) FROM readings WHERE sync_state='synced';" 2>/dev/null || echo "")
+    BUF_PENDING=$(sqlite3 "file:$WQM_DB?mode=ro" "SELECT COUNT(*) FROM readings WHERE sync_state='pending';" 2>/dev/null || echo "")
+    BUF_FAILED=$(sqlite3 "file:$WQM_DB?mode=ro" "SELECT COUNT(*) FROM readings WHERE sync_state='failed_permanent';" 2>/dev/null || echo "")
+    if [ -n "$BUF_FAILED" ]; then
+        info "Buffer:  $BUF_SYNCED synced, $BUF_PENDING pending, $BUF_FAILED permanently rejected"
+        if [ "$BUF_FAILED" -gt 100 ]; then
+            fail "Buffer:  $BUF_FAILED reading(s) permanently rejected by the cloud"
+            echo "         These are never retried — the measurements are lost."
+            echo "         Most common cause: rows with no sensor values at all, from"
+            echo "         probes that are enabled in config but not fitted (or not"
+            echo "         reading). Check which probes are declared:"
+            echo "           grep -E '_enabled' $CONFIG_FILE"
+            echo "         and what the server said:"
+            echo "           journalctl -u bluesignal-wqm | grep -i 'permanently rejected' | tail -5"
+        elif [ "$BUF_FAILED" -gt 0 ]; then
+            warn "Buffer:  $BUF_FAILED reading(s) permanently rejected (watch it — the count only grows)"
+        fi
+        # A backlog that never drains is a sync fault, not a buffer size.
+        if [ -n "$BUF_PENDING" ] && [ "$BUF_PENDING" -gt 500 ]; then
+            warn "Buffer:  $BUF_PENDING readings pending upload — check connectivity and cloud auth"
+        fi
+    fi
+elif [ -f "$WQM_DB" ]; then
+    warn "Buffer:  sqlite3 not installed — cannot check the reading buffer (apt install sqlite3)"
 fi
 
 # --- Disk space ---
