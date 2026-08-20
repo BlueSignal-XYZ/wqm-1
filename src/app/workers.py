@@ -79,6 +79,21 @@ class Worker:
             stop_event.wait(wait)
 
 
+# The reading columns that carry an actual measurement. Position/battery/relay
+# state are metadata: a row holding only those is not a reading, and the cloud
+# rejects it as "Missing sensors data".
+_SENSOR_FIELDS = (
+    "ph",
+    "tds_ppm",
+    "turbidity_ntu",
+    "orp_mv",
+    "temp_c",
+    "chlorine_mgl",
+    "conductivity_uscm",
+    "salinity_ppt",
+)
+
+
 class SamplingWorker(Worker):
     """Reads all sensors, evaluates relay rules, stores the reading.
 
@@ -116,6 +131,7 @@ class SamplingWorker(Worker):
         self.monitor = monitor
         self.adaptive = adaptive
         self._no_sensor_cycles = 0
+        self._empty_cycles = 0
 
     def interval_s(self) -> float:
         if self.adaptive is not None:
@@ -146,10 +162,13 @@ class SamplingWorker(Worker):
         # 13,938 dead rows that way while every heartbeat and diagnostic
         # reported healthy.
         #
-        # Deliberately keyed on "nothing is fitted" rather than "every read
-        # returned None". Those are different: the first is an unequipped unit
-        # with nothing to say, the second is a fitted probe that just failed,
-        # which must still be stored and surfaced as the fault it is.
+        # This first guard catches the cheap case — nothing declared, so there
+        # is nothing to sample. It is NOT sufficient on its own: a driver may
+        # hand back a live object for absent hardware (DS18B20.__init__ catches
+        # NoSensorFoundError and still returns an instance), so a unit that
+        # declares a probe it does not physically have sails past here and
+        # produces all-null rows anyway. One did, for 1,459 rows in a night.
+        # The second guard, below the read, is what actually holds.
         if not any(self._sensors.values()):
             if self._no_sensor_cycles == 0:
                 logger.warning(
@@ -246,6 +265,29 @@ class SamplingWorker(Worker):
                 self.adaptive.observe(reading)
             except Exception as e:  # noqa: BLE001
                 logger.debug("Adaptive sampler error: %s", e)
+
+        # Nothing measured this cycle — do not persist it.
+        #
+        # Every sensor field null means no measurement was taken, whatever the
+        # reason. The cloud rejects such a row ("Missing sensors data"), the
+        # firmware marks it failed_permanent, and it is never retried — so
+        # storing it does not record the fault, it only builds a graveyard.
+        #
+        # The fault is still surfaced, through the channel built for it:
+        # _safe_read has already logged each failure and incremented the
+        # "sensor" error counter, which rides out on the heartbeat. That is
+        # where a dead probe should show up — not as a row the server throws
+        # away.
+        if all(reading[field] is None for field in _SENSOR_FIELDS):
+            self._empty_cycles += 1
+            if self._empty_cycles == 1 or self._empty_cycles % 60 == 0:
+                logger.warning(
+                    "No sensor produced a value (%d cycle(s)) — nothing recorded. "
+                    "Check that every declared probe is fitted and reading.",
+                    self._empty_cycles,
+                )
+            return
+        self._empty_cycles = 0
 
         try:
             row_id = self._db.insert_reading(reading)

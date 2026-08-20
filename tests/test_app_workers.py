@@ -393,9 +393,16 @@ class TestUnequippedUnitRecordsNothing:
             worker.step()
         assert db.readings == []
 
-    def test_a_fitted_probe_that_fails_is_still_recorded(self):
-        """The other half of the rule: a fitted probe failing is a fault, and a
-        fault has to be stored and visible, not silently dropped."""
+    def test_a_fitted_probe_that_fails_records_no_row_either(self):
+        """Corrected 2026-08-19, after the field disproved the original rule.
+
+        This used to assert that a fitted-but-failing probe should still be
+        stored so the fault stayed visible. It cannot be: the cloud rejects a
+        sensor-less row as "Missing sensors data" and the firmware marks it
+        failed_permanent, so the row records nothing anyone reads — it only
+        grows the graveyard. The fault belongs on the sensor error counter and
+        the heartbeat, which _safe_read already feeds.
+        """
         worker, db = self._worker(
             {
                 "temperature": None,
@@ -408,8 +415,7 @@ class TestUnequippedUnitRecordsNothing:
             }
         )
         worker.step()
-        assert len(db.readings) == 1
-        assert db.readings[0]["ph"] is None
+        assert db.readings == []
 
     def test_recording_resumes_once_a_probe_is_declared(self):
         sensors = {
@@ -429,3 +435,93 @@ class TestUnequippedUnitRecordsNothing:
         worker.step()
         assert len(db.readings) == 1
         assert db.readings[0]["ph"] == 7.2
+
+
+class TestDeclaredButAbsentProbeRecordsNothing:
+    """The failure the first version of this guard missed.
+
+    A driver may return a live object for hardware that is not there —
+    DS18B20.__init__ catches NoSensorFoundError and still constructs. So
+    "is any sensor object wired" is not the same question as "did anything
+    measure", and only the second one keeps the graveyard empty.
+    """
+
+    def _worker(self, sensors):
+        from app.workers import SamplingWorker
+
+        db = FakeDB()
+        errors = []
+        worker = SamplingWorker(
+            make_settings(),
+            sensors=sensors,
+            db=db,
+            rules=None,
+            relays=None,
+            leds=None,
+            health=SimpleNamespace(update_last_seen=lambda: None),
+            state=SimpleNamespace(
+                gps=lambda: SimpleNamespace(lat=None, lon=None, alt_m=None),
+                incr_error=lambda b: errors.append(b),
+                emit_event=lambda _e: True,
+            ),
+        )
+        return worker, db, errors
+
+    def test_object_present_but_reading_nothing_writes_no_row(self):
+        """A probe declared and constructed, but returning None every cycle."""
+        dead = FakeSensor(fail=True)
+        worker, db, errors = self._worker(
+            {
+                "temperature": None,
+                "ph": dead,
+                "tds": None,
+                "turbidity": None,
+                "orp": None,
+                "chlorine": None,
+                "multi485": None,
+            }
+        )
+        for _ in range(5):
+            worker.step()
+        assert db.readings == []
+        # The fault still surfaces — through the error counter, which is what
+        # the heartbeat carries.
+        assert errors.count("sensor") == 5
+
+    def test_a_single_working_probe_is_enough_to_record(self):
+        worker, db, _ = self._worker(
+            {
+                "temperature": None,
+                "ph": FakeSensor(value=7.1),
+                "tds": None,
+                "turbidity": None,
+                "orp": None,
+                "chlorine": None,
+                "multi485": None,
+            }
+        )
+        worker.step()
+        assert len(db.readings) == 1
+        assert db.readings[0]["ph"] == 7.1
+
+    def test_recording_resumes_when_the_probe_starts_reading(self):
+        dead = FakeSensor(fail=True)
+        worker, db, _ = self._worker(
+            {
+                "temperature": None,
+                "ph": dead,
+                "tds": None,
+                "turbidity": None,
+                "orp": None,
+                "chlorine": None,
+                "multi485": None,
+            }
+        )
+        worker.step()
+        assert db.readings == []
+
+        dead.fail = False
+        dead.value = 6.8
+        worker.step()
+        assert len(db.readings) == 1
+        assert db.readings[0]["ph"] == 6.8
