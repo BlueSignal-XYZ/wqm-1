@@ -254,9 +254,7 @@ class SamplingWorker(Worker):
         if tds is None and tds_s:
             tds = self._read_channel("TDS", "tds", tds_s, channel_status, temp_c=temp_c)
         turb = (
-            self._read_channel("Turbidity", "turbidity", turb_s, channel_status)
-            if turb_s
-            else None
+            self._read_channel("Turbidity", "turbidity", turb_s, channel_status) if turb_s else None
         )
         orp = self._safe_read("ORP", orp_s.read) if orp_s else None
         chlorine = self._safe_read("Chlorine", chlorine_s.read) if chlorine_s else None
