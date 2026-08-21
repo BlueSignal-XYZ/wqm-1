@@ -236,3 +236,65 @@ All in `/etc/bluesignal/config.yaml` (schema-validated; hot-reloadable):
 | `ota_max_bundle_bytes` | `67108864` | Hard bundle size cap (64 MB) |
 | `ota_self_test_timeout_s` | `600` | Self-test window before rollback |
 | `ota_keep_releases` | `2` | Release dirs retained (current + previous never pruned) |
+
+## 10. First release: what "successful" actually means
+
+Written 2026-08-21, before the pipeline's maiden run. Every step above had been
+built and none of it had ever executed against a real device — there were zero
+tags in this repo, so `OTA_SIGNING_KEY` had never signed anything and the
+rollback path had never rolled anything back. That is the context this section
+exists for.
+
+### 10.1 The distinction that matters
+
+The design fails safe:
+
+- **Verification precedes any change.** Signature → manifest → tarball hash, in
+  that order. A bundle that fails any of them never touches the running install.
+- **The self-test is the real gate.** After the symlink flips, the device
+  requires `bluesignal-wqm.service` active AND a fresh sensor reading in SQLite
+  within `ota_self_test_timeout_s`. Either failure flips `current` back,
+  restarts, and reports `rolled_back` — no cloud involvement.
+
+So a bad *release* is well handled. What is untested is the *agent* — the thing
+that performs those steps. Do not read "the design is safe" as "the first run is
+safe": those are different claims, and only the first one has evidence.
+
+### 10.2 Gates before publishing
+
+1. **Bench-soak on a lab Pi.** One successful OTA, and one deliberately
+   corrupted bundle to watch the rollback fire. This tests the safety net rather
+   than assuming it, and it is the only item here that cannot be done after the
+   fact.
+2. **Confirm the agent is alive on the target.** `devices/{id}/otaLastCheckAt`
+   should be newer than roughly one `ota_poll_s`. Absent or stale means the OTA
+   agent is not running — publishing will succeed and reach nothing. A unit that
+   has never been through `setup.sh` has no `releases/`+`current` layout and
+   cannot apply an update at all.
+3. **Check the upgrade floor.** `minFromVersion` on the new release must allow
+   the version the device is on. With no `MIN_FROM_VERSION` file it defaults to
+   2.0.0.
+
+### 10.3 Acceptance is about the CHANGE, not the mechanism
+
+"The OTA succeeded" is not the test. `otaStatus: success` only says the bundle
+applied and the service came back — it says nothing about whether the release
+did what it was cut to do, and a green mechanism reporting on itself is exactly
+the failure mode this codebase keeps rediscovering.
+
+Write the acceptance criterion from the release notes before you publish. For
+v2.1.1 it was:
+
+> Within one sample interval of `firmwareVersion` promoting to 2.1.1, the target
+> device sends `tds` as either a real number or
+> `{value: null, status: "no_conduction"}`.
+
+Either outcome ends the ambiguity the release was cut to end — clean water under
+the old 80 ppm floor, or a probe that genuinely reads nothing. **If neither
+appears, the firmware did not take, whatever `otaStatus` says.**
+
+### 10.4 If it goes wrong
+
+In increasing order of reach: clear the target (§3) stops one device; yank the
+release (§5.2) stops the fleet; the device's own rollback (§5.3) covers the
+apply step; SSH is the backstop. None of these depend on the others working.
