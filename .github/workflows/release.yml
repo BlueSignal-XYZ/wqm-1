@@ -131,10 +131,30 @@ jobs:
       - name: Generate checksums
         run: sha256sum *.zip *.tar.gz manifest.json > checksums.sha256
 
+      # `--format` is not a flag this tool has ever had; the option is
+      # `--output-format` (JSON is already the default). argparse opened the
+      # -o file BEFORE rejecting the unknown argument, so the step left a
+      # ZERO-BYTE sbom.json behind, and `|| true` swallowed the exit code.
+      #
+      # GitHub refuses a zero-byte release asset, so the whole release failed
+      # seven steps later with "Validation Failed: ReleaseAsset ... size must
+      # be greater than or equal to 1" — a message naming neither the file nor
+      # the cause. That is what killed v2.1.1's first run, the only thing that
+      # had ever exercised this workflow.
+      #
+      # Tolerance is kept — an SBOM is not worth failing a release over — but
+      # it is now honest: the failure is announced, and an empty file is
+      # DELETED rather than left for the upload to choke on.
       - name: Generate SBOM
         run: |
           pip install cyclonedx-bom
-          cyclonedx-py requirements -i requirements.txt -o sbom.json --format json || true
+          if ! cyclonedx-py requirements -i requirements.txt -o sbom.json --output-format JSON; then
+            echo "::warning::SBOM generation failed — the release will ship without sbom.json"
+          fi
+          if [ ! -s sbom.json ]; then
+            echo "::warning::sbom.json is empty — removing it so it cannot fail the release upload"
+            rm -f sbom.json
+          fi
 
       - name: Upload publish payload artifact
         uses: actions/upload-artifact@v7
