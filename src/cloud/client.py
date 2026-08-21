@@ -55,6 +55,29 @@ _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _BACKFILL_AGE_MS = 23 * 3600 * 1000
 
 
+def _decode_status(raw: Any) -> dict[str, str]:
+    """Parse the reading's `sensor_status` JSON, tolerating anything.
+
+    A malformed or absent column must never cost us the reading itself: the
+    values in the same row are still worth syncing, and a status is an
+    annotation on top of them, not a precondition for them.
+    """
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        logger.warning("Ignoring unparseable sensor_status on a reading")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {k: v for k, v in parsed.items() if isinstance(k, str) and isinstance(v, str)}
+
+
 def _iso_to_ms(ts: str | None) -> int:
     """Convert a stored ISO-8601 'Z' timestamp to epoch milliseconds."""
     if not ts:
@@ -116,11 +139,25 @@ class CloudClient:
         backfill: bool = False,
     ) -> dict[str, Any]:
         """Map one DB reading row to the cloud ingest schema."""
-        sensors: dict[str, dict[str, float]] = {}
+        sensors: dict[str, dict[str, Any]] = {}
         for col, name in _SENSOR_MAP.items():
             val = row.get(col)
             if val is not None:
                 sensors[name] = {"value": val}
+
+        # A channel with no number still reports, carrying WHY.
+        #
+        # This loop used to end at the line above, so a NULL column meant the
+        # key was simply absent from the payload. The cloud then had nothing to
+        # distinguish "this probe is out of the water" from "this unit has no
+        # such probe" — and because the mirror was rebuilt from each payload,
+        # the channel disappeared from the customer's dashboard entirely
+        # (2026-08-21). Omission is not a message. See src/sensors/status.py.
+        for name, status in _decode_status(row.get("sensor_status")).items():
+            if name in sensors:
+                # A value arrived after all; the value is the better answer.
+                continue
+            sensors[name] = {"value": None, "status": status}
 
         signal_strength: int | None = None
         if self._health_provider is not None:

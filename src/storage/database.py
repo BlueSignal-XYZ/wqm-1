@@ -28,7 +28,7 @@ from utils.config import get_settings
 
 logger = logging.getLogger("wqm1.db")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS readings (
     relay_state INTEGER DEFAULT 0,
     synced INTEGER DEFAULT 0,
     sync_state TEXT NOT NULL DEFAULT 'pending',
-    sync_attempts INTEGER NOT NULL DEFAULT 0
+    sync_attempts INTEGER NOT NULL DEFAULT 0,
+    -- JSON map of channel -> status for channels that produced no number
+    -- this cycle (see src/sensors/status.py). NULL on a healthy cycle.
+    sensor_status TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_readings_synced ON readings(synced);
@@ -82,7 +85,10 @@ CREATE TABLE IF NOT EXISTS meta (
 _READING_COLS = (
     "id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c,"
     " chlorine_mgl, conductivity_uscm, salinity_ppt, lat, lon, alt_m,"
-    " battery_v, relay_state"
+    # sensor_status rides along so the cloud sync can forward a channel's
+    # REASON for having no number. Omit it here and the fault never leaves the
+    # device — which is the whole failure being fixed.
+    " battery_v, relay_state, sensor_status"
 )
 
 
@@ -165,6 +171,27 @@ class WQM1Database:
                 for column in ("chlorine_mgl", "conductivity_uscm", "salinity_ppt"):
                     if column not in cols:
                         conn.execute(f"ALTER TABLE readings ADD COLUMN {column} REAL")
+                # Stamp the version this block actually applies, NOT
+                # SCHEMA_VERSION. It used to write SCHEMA_VERSION, which was
+                # harmless only while this was the newest migration: the moment
+                # v4 was added, a device sitting at v2 would run this block,
+                # record itself as v4, and skip v4 entirely.
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')"
+                )
+            logger.info("Database migrated to schema v3")
+            current = 3
+
+        if current < 4:
+            # v4: per-channel status for a cycle that produced no number.
+            # Additive and rollback-safe — an older build simply ignores the
+            # column. See src/sensors/status.py for why the reason has to
+            # travel at all: without it, "clean water" and "probe out of the
+            # water" are the same empty cell.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+            with conn:
+                if "sensor_status" not in cols:
+                    conn.execute("ALTER TABLE readings ADD COLUMN sensor_status TEXT")
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
@@ -188,8 +215,9 @@ class WQM1Database:
                 """INSERT INTO readings
                    (timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c,
                     chlorine_mgl, conductivity_uscm, salinity_ppt,
-                    lat, lon, alt_m, battery_v, relay_state, synced, sync_state)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
+                    lat, lon, alt_m, battery_v, relay_state, sensor_status,
+                    synced, sync_state)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
                 (
                     ts,
                     data.get("ph"),
@@ -205,6 +233,7 @@ class WQM1Database:
                     data.get("alt_m"),
                     data.get("battery_v"),
                     data.get("relay_state", 0),
+                    data.get("sensor_status"),
                 ),
             )
             return cur.lastrowid or 0
