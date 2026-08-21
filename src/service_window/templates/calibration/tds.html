@@ -4,18 +4,32 @@
 <h1>TDS Single-Point Calibration</h1>
 
 <div class="wizard">
-    <p>1. Place the probe in a <strong>known TDS solution</strong> (e.g. 500 ppm).</p>
-    <p>2. Wait 60 seconds and note the voltage reading.</p>
+    <p>1. Rinse the probe, then immerse it fully in a <strong>conductivity standard</strong>
+       (1413 µS/cm ≈ 707 ppm is the usual one). Both electrodes must be under the surface.</p>
+    <p>2. Wait 60 seconds for the live reading below to settle.</p>
+    <p>3. Press <em>Use this value</em>, enter the standard's ppm, and save.</p>
+
+    {% with channel='tds', explain=true,
+            fields=[{'name': 'adc_volts', 'label': 'Use this value'}] %}
+      {% include "calibration/_live.html" %}
+    {% endwith %}
 
     <form method="post">
-        <label>Known TDS (ppm):
-            <input type="number" name="known_ppm" step="0.1" required>
+        <label>Reference solution (ppm):
+            <input type="number" name="known_ppm" step="0.1" min="0.1" required>
         </label>
-        <label>Measured voltage (V):
-            <input type="number" name="measured_v" step="0.001" required>
+        <label>Converter voltage (V) — the live value above:
+            <input type="number" name="adc_volts" step="0.0001" required>
         </label>
         <button type="submit" class="btn">Save Calibration</button>
     </form>
+
+    <p class="health-message">
+        Current: k={{ cal.get('tds_k', 500.0) }} ppm/V. If the live voltage barely moves
+        between air and the standard, the probe is not conducting — calibrating will not
+        fix that, and a k solved from a dead probe makes every later reading wrong without
+        looking wrong.
+    </p>
 </div>
 
 <a href="{{ url_for('calibration.index') }}">&larr; Back</a>

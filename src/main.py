@@ -55,7 +55,16 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
-from utils.config import FIRMWARE_VERSION, get_config_manager, hot_keys, restart_keys
+from utils.config import (
+    ADC_CH_ORP,
+    ADC_CH_PH,
+    ADC_CH_TDS,
+    ADC_CH_TURBIDITY,
+    FIRMWARE_VERSION,
+    get_config_manager,
+    hot_keys,
+    restart_keys,
+)
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.sdnotify import SdNotifier
@@ -530,7 +539,47 @@ class WQM1App:
             return {"ok": True, "configVersion": self._config.remote_version}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
+        if action == "adc_voltages":
+            return self._adc_voltages()
         return {"ok": False, "error": f"unknown action: {action}"}
+
+    # Channel order is the wizard's order, not the chip's.
+    _ADC_CHANNELS: tuple[tuple[str, int], ...] = (
+        ("ph", ADC_CH_PH),
+        ("tds", ADC_CH_TDS),
+        ("turbidity", ADC_CH_TURBIDITY),
+        ("orp", ADC_CH_ORP),
+    )
+
+    def _adc_voltages(self) -> dict:
+        """Raw ADC voltages, for the Service Window's calibration wizards.
+
+        Every wizard tells the installer to "read the voltage" and, until this
+        existed, nothing in the product displayed one — so the only way to
+        calibrate a unit was to SSH in and poke the ADC by hand, which is not a
+        thing a field installer does. The channel therefore stayed on its
+        factory-nominal constants, and a nominal pH reading looks exactly like
+        a calibrated one.
+
+        This runs in the daemon rather than in the Service Window process for a
+        specific reason: the daemon owns the I2C bus. Two processes driving an
+        ADS1115's single conversion register cannot be made safe by a lock in
+        either one of them (see ADS1115._lock) — the Service Window must ask,
+        never read.
+
+        Returns raw volts only. Anything derived (divider, temperature, ppm) is
+        computed from the one shared function the sensor itself uses, so a
+        wizard can never be arithmetically out of step with the measurement.
+        """
+        if self._adc is None:
+            return {"ok": False, "error": "no ADC on this board"}
+        channels: dict[str, dict] = {}
+        for name, ch in self._ADC_CHANNELS:
+            try:
+                channels[name] = {"channel": ch, "adcVolts": round(self._adc.read_voltage(ch), 5)}
+            except Exception as e:  # noqa: BLE001 — one dead channel must not hide the other three
+                channels[name] = {"channel": ch, "error": str(e)[:80]}
+        return {"ok": True, "channels": channels}
 
     _POLICIES_PATHS: list[str | Path] = [
         "/opt/bluesignal/config/policies.yaml",

@@ -1,0 +1,87 @@
+{# Live ADC readout, shared by every calibration wizard.
+
+   Every wizard used to say "read the voltage" while nothing in the product
+   displayed one, so calibrating a unit in the field was impossible and every
+   channel stayed on its factory nominal constants.
+
+   Context:
+     channel — key in /calibrate/live.json ("ph", "tds", "turbidity", "orp")
+     fields  — [{name, label}] inputs this readout can fill; one button each,
+               because pH is two points taken minutes apart in different buffers
+     explain — TDS only: also report the divider- and temperature-compensated
+               probe voltage, which is a different number from the one in the
+               box. The FILLED value is always the raw converter voltage, and
+               every wizard form field means exactly that, because the server
+               applies the compensation. Filling one number and compensating a
+               different one is the 3.2x bug this whole change exists to kill. #}
+<div class="live-adc"
+     data-channel="{{ channel }}"
+     data-explain="{{ 'yes' if explain else '' }}"
+     data-fields="{{ fields | map(attribute='name') | join(',') }}">
+  <div class="card-label">Live reading</div>
+  <div class="card-value live-adc-value">—</div>
+  <div class="health-message live-adc-note">Connecting to the firmware…</div>
+  {% for f in fields %}
+    <button type="button" class="btn live-adc-fill" data-target="{{ f.name }}" disabled>{{ f.label }}</button>
+  {% endfor %}
+</div>
+
+<script>
+(function () {
+  var box = document.currentScript.previousElementSibling;
+  var valueEl = box.querySelector('.live-adc-value');
+  var noteEl = box.querySelector('.live-adc-note');
+  var fillEls = box.querySelectorAll('.live-adc-fill');
+  var channel = box.dataset.channel;
+  var explain = box.dataset.explain === 'yes';
+  var current = null;
+
+  function show(text, note, volts) {
+    valueEl.textContent = text;
+    noteEl.textContent = note;
+    current = volts;
+    for (var i = 0; i < fillEls.length; i++) { fillEls[i].disabled = (volts === null); }
+  }
+
+  for (var i = 0; i < fillEls.length; i++) {
+    fillEls[i].addEventListener('click', function () {
+      var input = document.getElementsByName(this.dataset.target)[0];
+      if (current !== null && input) { input.value = current.toFixed(4); }
+    });
+  }
+
+  function poll() {
+    fetch('{{ url_for("calibration.live") }}', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.body.ok) {
+          // The firmware daemon owns the ADC. If it is not running there is no
+          // voltage to be had, and saying so beats an empty box.
+          show('—', 'No reading: ' + (res.body.error || 'firmware not responding') + '.', null);
+          return;
+        }
+        var ch = (res.body.channels || {})[channel];
+        if (!ch) { show('—', 'Channel not available on this board.', null); return; }
+        if (ch.error) { show('—', 'Read failed: ' + ch.error, null); return; }
+        // Always the raw converter voltage — that is what the form field means
+        // and what the server compensates. Never fill a derived number.
+        var volts = ch.adcVolts;
+        if (typeof volts !== 'number') { show('—', 'No reading yet.', null); return; }
+        var note = 'AIN' + ch.channel + ' — updates every 2 s.';
+        if (explain && typeof ch.calibrationVolts === 'number') {
+          note = 'AIN' + ch.channel + ' at the converter. That is '
+               + ch.calibrationVolts.toFixed(4) + ' V at the probe after the divider'
+               + (res.body.tempAssumed
+                    ? ', temperature assumed 25 °C — no probe reporting.'
+                    : ' and compensation to ' + res.body.tempUsedC.toFixed(1) + ' °C.')
+               + ' Enter the converter voltage; the unit applies the rest.';
+        }
+        show(volts.toFixed(4) + ' V', note, volts);
+      })
+      .catch(function (e) { show('—', 'No reading: ' + e.message, null); });
+  }
+
+  poll();
+  setInterval(poll, 2000);
+})();
+</script>

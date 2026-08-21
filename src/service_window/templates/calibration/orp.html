@@ -4,8 +4,18 @@
 <h1>ORP Offset Calibration</h1>
 
 <div class="wizard">
+    <p class="health-message">
+        <strong>Analog ORP is non-functional on PCBA Fin_3</strong> — AIN3 is a spare pin with
+        no ORP circuit behind it, so this page cannot calibrate a base-unit channel. ORP ships
+        as an optional RS485 probe; calibrate that under
+        <a href="{{ url_for('rs485.index') }}">RS485 Sensors</a>, where the probe holds its own
+        calibration state.
+    </p>
+
     <p>1. Place the probe in a <strong>known ORP solution</strong> (e.g. 225 mV).</p>
-    <p>2. Read the measured value from the sensor.</p>
+    <p>2. Read the measured mV the sensor reports on the
+       <a href="{{ url_for('sensors.index') }}">Sensors</a> page — this is a converted value,
+       not a raw voltage, so there is no live-voltage fill here.</p>
 
     <form method="post">
         <label>Known ORP (mV):

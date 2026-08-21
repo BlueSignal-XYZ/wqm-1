@@ -159,27 +159,40 @@ class TestCalibration:
         resp = authed_client.get("/calibrate/tds")
         assert resp.status_code == 200
 
+    # The field is `adc_volts`, not the old `measured_v`. See
+    # tests/test_calibration_live.py — `measured_v` meant an unspecified
+    # voltage and was solved as k = ppm / v, which is 3.2x wrong against the
+    # divider the sensor applies. The rename makes a stale post fail loudly
+    # rather than be reinterpreted; these tests move with it.
     def test_tds_calibration_valid(self, authed_client):
         resp = authed_client.post(
             "/calibrate/tds",
-            data={"known_ppm": "500", "measured_v": "1.0"},
+            data={"known_ppm": "500", "adc_volts": "1.0"},
             follow_redirects=True,
         )
         assert resp.status_code == 200
         assert b"calibrated" in resp.data.lower()
 
-    def test_tds_calibration_rejects_non_positive_voltage(self, authed_client):
+    def test_tds_calibration_rejects_non_conducting_probe(self, authed_client):
         resp = authed_client.post(
             "/calibrate/tds",
-            data={"known_ppm": "500", "measured_v": "0"},
+            data={"known_ppm": "500", "adc_volts": "0"},
             follow_redirects=True,
         )
-        assert b"positive" in resp.data.lower()
+        assert b"not conducting" in resp.data.lower()
+
+    def test_tds_calibration_rejects_zero_ppm_reference(self, authed_client):
+        resp = authed_client.post(
+            "/calibrate/tds",
+            data={"known_ppm": "0", "adc_volts": "1.0"},
+            follow_redirects=True,
+        )
+        assert b"greater than 0 ppm" in resp.data.lower()
 
     def test_tds_calibration_invalid_input(self, authed_client):
         resp = authed_client.post(
             "/calibrate/tds",
-            data={"known_ppm": "bad", "measured_v": "1"},
+            data={"known_ppm": "bad", "adc_volts": "1"},
             follow_redirects=True,
         )
         assert b"invalid" in resp.data.lower()

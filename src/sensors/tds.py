@@ -30,6 +30,43 @@ from utils.config import (
 logger = logging.getLogger("wqm1.tds")
 
 
+def compensated_voltage(adc_voltage: float, temp_c: float | None = 25.0) -> float:
+    """The voltage that `tds_k` is defined against — NOT the ADC voltage.
+
+    Two corrections sit between the converter and the number `k` multiplies:
+    the R57/R58 divider (0.3125) and temperature compensation. Both are applied
+    here, in one place, because the calibration wizard has to invert exactly
+    what the sensor applies. When they were written out separately the wizard
+    solved `k = ppm / V_adc` while the sensor computed `ppm = (V_adc / 0.3125)
+    * k`, so a correct calibration entry produced readings 3.2x high — with no
+    error anywhere, because both halves were individually self-consistent.
+    """
+    actual_voltage = adc_voltage / TDS_DIVIDER_RATIO
+    comp_coeff = 1.0 + TDS_TEMP_COEFF * (temp_c - 25.0) if temp_c is not None else 1.0
+    if comp_coeff <= 0:  # a nonsense temperature must not invert the reading
+        comp_coeff = 1.0
+    return actual_voltage / comp_coeff
+
+
+def ppm_from_adc(adc_voltage: float, temp_c: float | None, k: float) -> float:
+    """Forward conversion: ADC volts -> ppm. The sensor's only arithmetic."""
+    return compensated_voltage(adc_voltage, temp_c) * k
+
+
+def k_from_reference(known_ppm: float, adc_voltage: float, temp_c: float | None = 25.0) -> float:
+    """Inverse of `ppm_from_adc`: solve for k from a reference solution.
+
+    Raises:
+        ValueError: if the observed voltage cannot yield a calibration — a
+            non-conducting probe would otherwise produce an enormous k that
+            makes every later reading wrong without ever looking wrong.
+    """
+    v = compensated_voltage(adc_voltage, temp_c)
+    if v <= 0:
+        raise ValueError(f"probe voltage {adc_voltage:.4f} V is not conducting")
+    return known_ppm / v
+
+
 class TDSSensor:
     """TDS sensor with temperature compensation."""
 
@@ -96,20 +133,9 @@ class TDSSensor:
             )
             return SensorResult(None, OUT_OF_RANGE, f"input at {adc_voltage:.3f} V")
 
-        # Compensate for voltage divider: actual = adc / ratio
-        actual_voltage = adc_voltage / TDS_DIVIDER_RATIO
-
-        # Temperature compensation: adjust for deviation from 25°C
-        comp_coeff = 1.0 + TDS_TEMP_COEFF * (temp_c - 25.0) if temp_c is not None else 1.0
-
-        # Avoid division by zero
-        if comp_coeff <= 0:
-            comp_coeff = 1.0
-
-        compensated_voltage = actual_voltage / comp_coeff
-
-        # Convert voltage to TDS: ppm = voltage * k
-        tds_ppm = compensated_voltage * self._k
+        # Divider + temperature compensation, then ppm = voltage * k. Shared
+        # with the calibration wizard so the two can never disagree.
+        tds_ppm = ppm_from_adc(adc_voltage, temp_c, self._k)
 
         # A negative ppm is not a dilute sample, it is a broken signal path or
         # a bad calibration constant. Clamping it to 0.0 published a number the

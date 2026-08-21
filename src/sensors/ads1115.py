@@ -6,6 +6,7 @@ Single-shot mode, PGA ±4.096V, 128 SPS.
 """
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -57,6 +58,15 @@ class ADS1115:
             raise RuntimeError("smbus2 not installed — no direct I2C on this host")
         self._address = address
         self._bus: Any = None
+        # A single-ended read is THREE bus transactions that must not interleave:
+        # write MUX+start, poll the config register, read the conversion
+        # register. The chip has one conversion register for all four channels,
+        # so if a second caller writes a different MUX between our start and our
+        # read, we return that channel's voltage under this channel's name — no
+        # exception, no log line, just pH reported as TDS. Nothing else read the
+        # ADC while this was single-threaded; the Service Window's live-voltage
+        # command is the second reader, so the transaction gets a lock.
+        self._lock = threading.RLock()
         try:
             self._bus = smbus2.SMBus(bus)
             # Verify device is reachable by reading config register
@@ -85,20 +95,23 @@ class ADS1115:
         mux = (0x04 + channel) << 12
         config = _OS_START | mux | _PGA_4096 | _MODE_SINGLE | _DR_128 | _COMP_DISABLE
 
-        # Write config to start conversion (big-endian)
-        config_bytes = [(config >> 8) & 0xFF, config & 0xFF]
-        self._bus.write_i2c_block_data(self._address, _REG_CONFIG, config_bytes)
+        # One channel select + one conversion read, indivisible. See _lock.
+        with self._lock:
+            # Write config to start conversion (big-endian)
+            config_bytes = [(config >> 8) & 0xFF, config & 0xFF]
+            self._bus.write_i2c_block_data(self._address, _REG_CONFIG, config_bytes)
 
-        # Poll for conversion complete (OS bit goes high)
-        deadline = time.monotonic() + _CONV_TIMEOUT_S
-        while time.monotonic() < deadline:
-            data = self._bus.read_i2c_block_data(self._address, _REG_CONFIG, 2)
-            if data[0] & 0x80:  # OS bit set = conversion done
-                break
-            time.sleep(_POLL_INTERVAL_S)
+            # Poll for conversion complete (OS bit goes high)
+            deadline = time.monotonic() + _CONV_TIMEOUT_S
+            while time.monotonic() < deadline:
+                data = self._bus.read_i2c_block_data(self._address, _REG_CONFIG, 2)
+                if data[0] & 0x80:  # OS bit set = conversion done
+                    break
+                time.sleep(_POLL_INTERVAL_S)
 
-        # Read conversion result (big-endian signed 16-bit)
-        result = self._bus.read_i2c_block_data(self._address, _REG_CONVERSION, 2)
+            # Read conversion result (big-endian signed 16-bit)
+            result = self._bus.read_i2c_block_data(self._address, _REG_CONVERSION, 2)
+
         raw = (result[0] << 8) | result[1]
         # Convert to signed
         if raw >= 0x8000:
@@ -129,6 +142,9 @@ class ADS1115:
 
     def close(self) -> None:
         """Release I2C bus."""
-        if self._bus:
-            self._bus.close()
-            self._bus = None
+        # Take the same lock a read holds: closing the bus out from under an
+        # in-flight transaction turns an orderly shutdown into a traceback.
+        with self._lock:
+            if self._bus:
+                self._bus.close()
+                self._bus = None

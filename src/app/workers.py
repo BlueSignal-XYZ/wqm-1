@@ -19,11 +19,15 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from app.state import StateStore
 
 logger = logging.getLogger("wqm1.workers")
+
+# What a sensor read returns: a bare float from `read()`, a SensorResult from
+# `read_detailed()`. `_safe_read` wraps either without caring which.
+_T = TypeVar("_T")
 
 # After this many consecutive failures a worker backs off to its max backoff
 # and the supervisor lights the FAULT LED.
@@ -43,35 +47,6 @@ class Worker:
 
     def interval_s(self) -> float:
         raise NotImplementedError
-
-    def _read_channel(
-        self,
-        name: str,
-        channel: str,
-        sensor: Any,
-        status_out: dict[str, str],
-        **kwargs: Any,
-    ) -> float | None:
-        """Read one channel, recording WHY when there is no number.
-
-        Drivers that expose `read_detailed()` return a reason along with the
-        value (see sensors/status.py); the rest — pH, ORP, chlorine, the RS485
-        probe, and any driver written later — only have `read()`. Falling back
-        rather than requiring the richer method keeps this a per-driver upgrade
-        instead of a flag day, and means a driver that has not been converted
-        behaves exactly as it did before.
-        """
-        detailed = getattr(sensor, "read_detailed", None)
-        if detailed is None:
-            return self._safe_read(name, lambda: sensor.read(**kwargs))
-
-        result = self._safe_read(name, lambda: detailed(**kwargs))
-        if result is None:
-            # _safe_read swallowed an exception; it already logged and counted.
-            return None
-        if not result.ok:
-            status_out[channel] = result.status
-        return result.value
 
     def step(self) -> None:
         raise NotImplementedError
@@ -171,7 +146,14 @@ class SamplingWorker(Worker):
                 logger.debug("adaptive interval failed: %s", e)
         return float(self._settings().sensor_read_s)
 
-    def _safe_read(self, name: str, fn: Callable[[], float | None]) -> float | None:
+    def _safe_read(self, name: str, fn: Callable[[], _T | None]) -> _T | None:
+        """Run a sensor read, swallowing and accounting for a driver failure.
+
+        Generic because it is a try/except wrapper and nothing more: callers
+        pass it a `float`-returning `read()` or a `SensorResult`-returning
+        `read_detailed()`, and it has no opinion on either. Pinned to `float`
+        it silently mistyped every detailed read as a number.
+        """
         try:
             return fn()
         except Exception as e:  # noqa: BLE001 — one dead sensor must not stop the rest
@@ -180,6 +162,40 @@ class SamplingWorker(Worker):
             if self._leds:
                 self._leds.error_pattern(2)
             return None
+
+    def _read_channel(
+        self,
+        name: str,
+        channel: str,
+        sensor: Any,
+        status_out: dict[str, str],
+        **kwargs: Any,
+    ) -> float | None:
+        """Read one channel, recording WHY when there is no number.
+
+        Drivers that expose `read_detailed()` return a reason along with the
+        value (see sensors/status.py); the rest — pH, ORP, chlorine, the RS485
+        probe, and any driver written later — only have `read()`. Falling back
+        rather than requiring the richer method keeps this a per-driver upgrade
+        instead of a flag day, and means a driver that has not been converted
+        behaves exactly as it did before.
+
+        Lives on SamplingWorker, not Worker: it is built on `_safe_read`, which
+        is a sampling concern (it counts sensor errors and drives the status
+        LEDs). On the base class it type-checked as calling a method half its
+        subclasses do not have.
+        """
+        detailed = getattr(sensor, "read_detailed", None)
+        if detailed is None:
+            return self._safe_read(name, lambda: sensor.read(**kwargs))
+
+        result = self._safe_read(name, lambda: detailed(**kwargs))
+        if result is None:
+            # _safe_read swallowed an exception; it already logged and counted.
+            return None
+        if not result.ok:
+            status_out[channel] = result.status
+        return result.value
 
     def step(self) -> None:
         # No probe is fitted at all — record nothing.
