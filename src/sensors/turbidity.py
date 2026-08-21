@@ -9,7 +9,22 @@ import logging
 from statistics import median
 
 from sensors.ads1115 import ADS1115
-from utils.config import ADC_CH_TURBIDITY, TURB_NTU_MAX, TURB_V_CLEAR, TURB_V_MAX
+from sensors.status import (
+    NO_CONDUCTION,
+    OK,
+    OUT_OF_RANGE,
+    READ_FAILED,
+    UNCALIBRATED,
+    SensorResult,
+)
+from utils.config import (
+    ADC_CH_TURBIDITY,
+    ADC_OPEN_INPUT_V,
+    TURB_CLEAR_TOLERANCE_V,
+    TURB_NTU_MAX,
+    TURB_V_CLEAR,
+    TURB_V_MAX,
+)
 
 logger = logging.getLogger("wqm1.turbidity")
 
@@ -33,61 +48,91 @@ class TurbiditySensor:
         """
         Read turbidity in NTU.
 
+        Kept for every existing caller: the value, or None for anything that is
+        not a measurement. Use `read_detailed()` when the reason matters.
+        """
+        return self.read_detailed().value
+
+    def read_detailed(self) -> SensorResult:
+        """
+        Read turbidity in NTU, with the reason when there is no number.
+
         Returns:
-            Turbidity in NTU (0-3000), or None if the reading is invalid
-            (ADC failure, bad calibration, or an out-of-range/disconnected
-            probe railed below the maximum-turbidity voltage).
+            SensorResult. Water CLEARER than the calibration reference is the
+            best case this instrument can see and reports as 0.0 NTU — not as
+            nothing.
         """
         try:
             voltage = self._adc.read_voltage(ADC_CH_TURBIDITY)
         except Exception as e:
             logger.error("Turbidity ADC read failed: %s", e)
-            return None
+            return SensorResult(None, READ_FAILED, str(e)[:80])
 
-        # Reject signals railed below the maximum-turbidity voltage. The sensor's
-        # valid band is [TURB_V_MAX, v_clear]; a voltage below TURB_V_MAX is out
-        # of measurement range, and in practice means the probe is disconnected
-        # or dry (the input floats toward 0 V). Without this guard the linear map
-        # would clamp such a signal to a fabricated 3000 NTU, which can then drive
-        # relay automation indefinitely. Report "no reading" instead of a fake max.
-        # (Equality with TURB_V_MAX is a genuine full-scale reading and is kept.)
+        # Turbidity is inverse: more light through means higher voltage, so the
+        # valid band is [TURB_V_MAX, v_clear]. Below TURB_V_MAX the signal is
+        # past full scale, and in practice the input has floated toward 0 —
+        # a disconnected or dry probe. Without this the linear map would
+        # fabricate a confident 3000 NTU, which can drive relay automation.
         if voltage < TURB_V_MAX:
+            status = NO_CONDUCTION if voltage <= ADC_OPEN_INPUT_V else OUT_OF_RANGE
             logger.warning(
-                "Turbidity voltage %.3f V below max-scale rail (%.3f V); "
-                "probe out of range or disconnected — reporting no reading",
+                "Turbidity voltage %.4f V below the %.1f V full-scale point; %s "
+                "— reporting the fault, not a number.",
                 voltage,
                 TURB_V_MAX,
+                "no conduction, probe disconnected or out of the water"
+                if status == NO_CONDUCTION
+                else "past maximum turbidity",
             )
-            return None
+            return SensorResult(None, status, f"input at {voltage:.4f} V")
 
-        # Linear mapping: v_clear -> 0 NTU, v_max -> NTU_MAX
-        # NTU = (v_clear - voltage) * NTU_MAX / (v_clear - v_max)
         v_range = self._v_clear - TURB_V_MAX
         if v_range <= 0:
             logger.error("Invalid turbidity voltage range")
-            return None
+            return SensorResult(None, UNCALIBRATED, "clear-water reference below full scale")
 
+        # Linear mapping: v_clear -> 0 NTU, v_max -> NTU_MAX
         ntu = (self._v_clear - voltage) * TURB_NTU_MAX / v_range
 
-        # The rail guard above already rejects a disconnected probe, but this
-        # clamp still fabricated a boundary value from the other direction: a
-        # voltage above v_clear computes negative NTU and was published as a
-        # confident 0.0 — "perfectly clear water" — when it actually means the
-        # clear-water calibration is stale or the buffer drifted. Same fix as
-        # pH and TDS: out of band means no reading, not a tidy endpoint.
-        if not 0.0 <= ntu <= TURB_NTU_MAX:
+        # CLEAR WATER IS A RESULT, NOT AN ABSENCE.
+        #
+        # Water cleaner than the clear-water reference computes a slightly
+        # negative NTU. This used to be refused outright, so the clearest water
+        # the instrument can see produced no reading at all — the channel went
+        # quiet exactly when the news was good. Within the tolerance band that
+        # is clear water and reports as 0.0; only past it is the reference
+        # genuinely stale, and then it says so rather than claiming pristine.
+        if ntu < 0.0:
+            if voltage - self._v_clear <= TURB_CLEAR_TOLERANCE_V:
+                ntu = 0.0
+            else:
+                logger.warning(
+                    "Turbidity %.3f V is %.3f V above the %.3f V clear-water "
+                    "reference — beyond tolerance, so the reference is stale. "
+                    "Reporting the fault, not a fabricated 0 NTU.",
+                    voltage,
+                    voltage - self._v_clear,
+                    self._v_clear,
+                )
+                return SensorResult(
+                    None,
+                    UNCALIBRATED,
+                    f"{voltage:.3f} V above clear reference {self._v_clear:.3f} V",
+                )
+
+        if ntu > TURB_NTU_MAX:
             logger.warning(
-                "Turbidity %.1f NTU computed from %.3f V is outside 0-%.0f; "
-                "calibration invalid — reporting no reading",
+                "Turbidity %.1f NTU computed from %.3f V exceeds %.0f; "
+                "calibration invalid — reporting the fault, not a number.",
                 ntu,
                 voltage,
                 TURB_NTU_MAX,
             )
-            return None
+            return SensorResult(None, UNCALIBRATED, f"{ntu:.1f} NTU from {voltage:.3f} V")
 
         # Moving median filter
         self._window.append(ntu)
         if len(self._window) > self._window_size:
             self._window = self._window[-self._window_size :]
 
-        return round(float(median(self._window)), 1)
+        return SensorResult(round(float(median(self._window)), 1), OK)

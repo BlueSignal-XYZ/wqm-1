@@ -13,6 +13,7 @@ error counter, applies backoff, and tries again (graceful degradation:
 sampling + relay rules keep running while cloud/GPS/LoRa are down).
 """
 
+import json
 import logging
 import threading
 import time
@@ -42,6 +43,35 @@ class Worker:
 
     def interval_s(self) -> float:
         raise NotImplementedError
+
+    def _read_channel(
+        self,
+        name: str,
+        channel: str,
+        sensor: Any,
+        status_out: dict[str, str],
+        **kwargs: Any,
+    ) -> float | None:
+        """Read one channel, recording WHY when there is no number.
+
+        Drivers that expose `read_detailed()` return a reason along with the
+        value (see sensors/status.py); the rest — pH, ORP, chlorine, the RS485
+        probe, and any driver written later — only have `read()`. Falling back
+        rather than requiring the richer method keeps this a per-driver upgrade
+        instead of a flag day, and means a driver that has not been converted
+        behaves exactly as it did before.
+        """
+        detailed = getattr(sensor, "read_detailed", None)
+        if detailed is None:
+            return self._safe_read(name, lambda: sensor.read(**kwargs))
+
+        result = self._safe_read(name, lambda: detailed(**kwargs))
+        if result is None:
+            # _safe_read swallowed an exception; it already logged and counted.
+            return None
+        if not result.ok:
+            status_out[channel] = result.status
+        return result.value
 
     def step(self) -> None:
         raise NotImplementedError
@@ -214,10 +244,20 @@ class SamplingWorker(Worker):
         ph = multi.get("ph")
         if ph is None and ph_s:
             ph = self._safe_read("pH", lambda: ph_s.read(temp_c=temp_c))
+        # Analog TDS and turbidity report a STATUS as well as a value, so a
+        # channel with no number this cycle can say why instead of vanishing.
+        # See sensors/status.py: clean water is a value, an open or dry probe
+        # is a fault, and both must reach the customer's dashboard as
+        # themselves. `sensor_status` below carries the non-ok ones.
+        channel_status: dict[str, str] = {}
         tds = multi.get("tds_ppm")
         if tds is None and tds_s:
-            tds = self._safe_read("TDS", lambda: tds_s.read(temp_c=temp_c))
-        turb = self._safe_read("Turbidity", turb_s.read) if turb_s else None
+            tds = self._read_channel("TDS", "tds", tds_s, channel_status, temp_c=temp_c)
+        turb = (
+            self._read_channel("Turbidity", "turbidity", turb_s, channel_status)
+            if turb_s
+            else None
+        )
         orp = self._safe_read("ORP", orp_s.read) if orp_s else None
         chlorine = self._safe_read("Chlorine", chlorine_s.read) if chlorine_s else None
 
@@ -236,6 +276,9 @@ class SamplingWorker(Worker):
             "lon": gps.lon,
             "alt_m": gps.alt_m,
             "relay_state": self._relays.get_state_bitmask() if self._relays else 0,
+            # Only non-ok channels appear, so a healthy cycle stores nothing
+            # extra. None rather than "{}" keeps the column NULL for those.
+            "sensor_status": json.dumps(channel_status) if channel_status else None,
         }
 
         # Sensor-health monitoring first: a stuck sensor's rules are suspended

@@ -55,6 +55,42 @@ ADC_FULL_SCALE_V = 4.096
 # margin. Widen it only with a measurement to justify the number.
 ADC_RAIL_MARGIN_V = 0.05
 
+# The sentence above — "no conditioned probe signal sits within 50 mV of 0 V" —
+# is TRUE for the pH AFE, which is biased near mid-supply and cannot approach
+# either rail in real water. It is FALSE for TDS, whose valid range STARTS at
+# zero: less conductive water means less voltage, and clean water genuinely
+# sits near the bottom of the span.
+#
+# Applying the pH margin to TDS therefore threw away real measurements. With
+# TDS_DIVIDER_RATIO = 0.3125 and the default 500 ppm/V calibration, 0.05 V at
+# the ADC is 0.16 V at the probe, or **80 ppm** — so every sample below 80 ppm
+# was discarded and logged as "probe disconnected or dry". A customer with
+# clean water lost the channel entirely (2026-08-21).
+#
+# An input that is genuinely open or in air is not merely low, it is flat zero.
+# The ADS1115 LSB at this PGA is 125 µV, so 3 mV is ~24 counts — far above the
+# noise floor of a real zero, far below any conducting sample.
+#
+# BENCH-VALIDATE: with the probe lifted clear of the water and dried, confirm
+# the reading sits below this; with the probe in the most dilute water the unit
+# will ever see, confirm it sits above.
+ADC_OPEN_INPUT_V = 0.003
+
+# Documented top of the TDS conditioning chain (see ADC_CH_TDS above). Distinct
+# from ADC_FULL_SCALE_V, which is the converter's range, not this channel's: a
+# TDS signal at 4 V is impossible and means the chain has railed, but comparing
+# against 4.096 could never detect that.
+TDS_V_MAX = 2.3
+
+# How far above the clear-water calibration point still counts as clear water.
+#
+# Turbidity is inverse — more light through, higher voltage — so water CLEANER
+# than the calibration reference computes a slightly negative NTU. That is the
+# best case the instrument can see, and refusing it published nothing at all
+# for the clearest water. Within this band the reading is reported as 0.0 NTU;
+# beyond it the clear-water reference is genuinely stale and says so.
+TURB_CLEAR_TOLERANCE_V = 0.25
+
 # Largest pH spread, across one filter window, that real water can produce.
 #
 # The rail check above catches a probe whose input floats to a supply rail —
