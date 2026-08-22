@@ -258,6 +258,61 @@ def build(settings: dict) -> Profile:
     return Profile(loads=loads, settings=settings)
 
 
+# ── Generation, for comparing against the load ──────────────────────────────
+#
+# A deliberately simple clear-sky model: a half-sine across the daylight window,
+# scaled so its integral equals panel_w x peak_sun_hours x system_efficiency.
+# It is not a solar simulator and does not try to be — its job is to put the
+# SHAPE of generation next to the shape of load, and the shape is the whole
+# argument. Real output on any given day is lower and lumpier.
+#
+# Sunrise/sunset are Lago Vista, TX (30.4 N).
+MONTHS = {
+    "June": {"psh": 6.0, "sunrise": 6.5, "sunset": 20.5},
+    "March": {"psh": 4.8, "sunrise": 7.5, "sunset": 19.6},
+    "December": {"psh": 3.4, "sunrise": 7.3, "sunset": 17.6},
+}
+SYSTEM_EFFICIENCY = 0.70
+
+
+def generation_curve(panel_w: float, month: str) -> list[float]:
+    """Hourly average watts delivered to the load/pack, hour 0..23."""
+    import math
+
+    m = MONTHS[month]
+    daylight = m["sunset"] - m["sunrise"]
+    daily_wh = panel_w * m["psh"] * SYSTEM_EFFICIENCY
+    # Integral of sin over [0, pi] is 2, so a half-sine of peak P over `daylight`
+    # hours delivers P * daylight * 2 / pi watt-hours.
+    peak_w = daily_wh * math.pi / (2 * daylight)
+    out = []
+    for hour in range(24):
+        centre = hour + 0.5
+        if centre < m["sunrise"] or centre > m["sunset"]:
+            out.append(0.0)
+            continue
+        frac = (centre - m["sunrise"]) / daylight
+        out.append(round(peak_w * math.sin(math.pi * frac), 3))
+    return out
+
+
+def battery_trace(profile: Profile, panel_w: float, month: str) -> list[float]:
+    """Cumulative Wh into/out of the pack across one day, starting at zero.
+
+    The end value is the day's net. Negative means the pack finished lower than
+    it started, which repeated over enough days is exactly how a unit goes dark
+    with nothing in any log to explain it.
+    """
+    load_w = profile.average_w()
+    gen = generation_curve(panel_w, month)
+    running = 0.0
+    out = []
+    for hour in range(24):
+        running += gen[hour] - load_w
+        out.append(round(running, 3))
+    return out
+
+
 def hourly_watts(profile: Profile) -> list[float]:
     """Average power per hour of day.
 
@@ -381,6 +436,17 @@ def main() -> int:
                     "packAhPerDay": round(profile.pack_ah_per_day(), 3),
                     "byKind": {k: round(v, 3) for k, v in profile.by_kind().items()},
                     "hourlyW": [round(w, 3) for w in hourly_watts(profile)],
+                    "months": MONTHS,
+                    "generation": {
+                        f"{panel}W-{month}": generation_curve(panel, month)
+                        for panel in (10, 20, 30)
+                        for month in MONTHS
+                    },
+                    "battery": {
+                        f"{panel}W-{month}": battery_trace(profile, panel, month)
+                        for panel in (10, 20, 30)
+                        for month in MONTHS
+                    },
                     "loads": [
                         {
                             "name": load.name,
