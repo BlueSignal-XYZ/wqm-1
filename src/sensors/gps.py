@@ -45,6 +45,9 @@ class GPS:
         self._serial = None
         self._last_fix: GPSFix | None = None
         self._lock = threading.Lock()
+        # What we BELIEVE the EXTINT toggle last did. Never trusted on its own
+        # — see the power-save block below for how the loop is closed.
+        self._power_saving = False
         # Rate-limiting state for _explain_no_fix.
         self._last_no_fix_log = 0.0
         self._last_no_fix_detail = ""
@@ -182,6 +185,63 @@ class GPS:
         time.sleep(0.2)
         GPIO.output(GPS_EXTINT, GPIO.LOW)
         time.sleep(1.0)
+
+    # ── Power save between daily fixes ──────────────────────────────────────
+    #
+    # EXTINT is a TOGGLE with no readback: the pulse flips power-save on or
+    # off and the module never tells us which state it landed in. Open-loop
+    # control over hardware that cannot be interrogated is precisely how a
+    # `Fan ON` line came to mean "a GPIO is high" on a unit with no fan, so
+    # this does not trust its own bookkeeping.
+    #
+    # Instead `sleep()` records what it BELIEVES, `wake()` acts on that belief,
+    # and `GpsWorker` closes the loop through the only observable that matters:
+    # whether NMEA actually arrives. A failed attempt pulses again and retries,
+    # so a desynchronised toggle self-corrects within one cycle instead of
+    # costing every fix from then on, silently.
+    #
+    # NOT MEASURED: whether this materially lowers pack draw. A u-blox part
+    # typically falls from ~25-40 mA acquiring to microamps in backup, which
+    # on a 3.3 V rail is on the order of 1 Wh/day — real, but small next to a
+    # panel that is undersized. Confirm it on a bench meter before anybody
+    # counts it in an energy budget.
+
+    def sleep(self) -> None:
+        """Ask the module to enter power save until the next fix is due."""
+        if GPIO is None or self._power_saving:
+            return
+        self._toggle_extint()
+        self._power_saving = True
+        logger.info("GPS asked to enter power save until the next fix is due")
+
+    def wake(self) -> None:
+        """Bring the module out of power save. Safe to call when already awake."""
+        if GPIO is None or not self._power_saving:
+            return
+        self._toggle_extint()
+        self._power_saving = False
+        logger.info("GPS woken from power save")
+
+    def resync(self) -> None:
+        """Pulse once and invert the belief, after an attempt found no NMEA.
+
+        This is the self-correcting half: if `wake()` actually put the module
+        to sleep because the two sides had drifted, one more pulse restores it.
+        """
+        if GPIO is None:
+            return
+        self._toggle_extint()
+        self._power_saving = not self._power_saving
+        logger.warning(
+            "GPS produced nothing; pulsed EXTINT again (now believed %s)",
+            "asleep" if self._power_saving else "awake",
+        )
+
+    def _toggle_extint(self) -> None:
+        GPIO.output(GPS_EXTINT, GPIO.HIGH)
+        time.sleep(0.2)
+        GPIO.output(GPS_EXTINT, GPIO.LOW)
+        time.sleep(0.5)
 
     def close(self) -> None:
         """Close UART port."""

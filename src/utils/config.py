@@ -140,6 +140,25 @@ GPS_UART_PORT = "/dev/serial0"
 GPS_BAUD = 38400
 GPS_EXTINT = 19
 
+# ── GPS fix cadence ─────────────────────────────────────────────────────────
+#
+# A WQM-1 is bolted to a fixed structure. Its coordinate is established at
+# commissioning and cannot change without someone physically moving the unit,
+# so re-acquiring it every ten minutes — the old default — bought nothing and
+# spent power on a solar-fed installation.
+#
+# The bounds are the founder's, 2026-08-21, the night a pack ran flat because
+# the panel does not cover the load: **at most once a day, at least once every
+# fifteen days.** Both ends are deliberate. Daily is often enough to notice a
+# unit that has been moved or stolen; fifteen days is the point past which a
+# stale coordinate stops being trustworthy for a map pin.
+#
+# A stored config carrying the old 600 is now out of range, which the validator
+# REJECTS with a logged error and falls back to the default — so an existing
+# unit lands on daily and says so, rather than silently keeping the old rate.
+GPS_FIX_MIN_S = 86_400  # once a day
+GPS_FIX_MAX_S = 1_296_000  # once every fifteen days
+
 # 1-Wire
 ONEWIRE_PIN = 4
 
@@ -204,7 +223,9 @@ class Settings:
     # Timing
     sensor_read_s: int = 60
     lora_tx_s: int = 300
-    gps_fix_s: int = 600
+    # Daily. See GPS_FIX_MIN_S — this is a fixed installation on a solar budget,
+    # and the coordinate does not move.
+    gps_fix_s: int = 86400
     gps_fix_timeout_s: int = 60
 
     # GPS
@@ -346,7 +367,7 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     # Timing (hot — the workers consult settings every cycle)
     "sensor_read_s": SettingSpec(int, hot=True, min=5, max=3600),
     "lora_tx_s": SettingSpec(int, hot=True, min=60, max=86400),
-    "gps_fix_s": SettingSpec(int, hot=True, min=60, max=86400),
+    "gps_fix_s": SettingSpec(int, hot=True, min=GPS_FIX_MIN_S, max=GPS_FIX_MAX_S),
     "gps_fix_timeout_s": SettingSpec(int, hot=True, min=5, max=300),
     "command_poll_s": SettingSpec(int, hot=True, min=5, max=3600),
     "sync_interval_s": SettingSpec(int, hot=True, min=30, max=86400),

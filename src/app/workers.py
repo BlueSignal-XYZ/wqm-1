@@ -389,17 +389,46 @@ class GpsWorker(Worker):
         return float(self._settings().gps_fix_s)
 
     def step(self) -> None:
+        """Acquire one fix, then put the module back to sleep.
+
+        The unit is bolted to a structure and its coordinate cannot change, so
+        this runs daily (see GPS_FIX_MIN_S) rather than every ten minutes, and
+        the module spends the interval in power save rather than tracking a
+        position nobody asked for.
+
+        The retry is the important part. EXTINT is a toggle with no readback,
+        so `wake()` may have done the opposite of what it believes. Rather than
+        trusting the bookkeeping, an attempt that yields nothing pulses again
+        and tries once more — the module's own output is the only honest
+        report of which state it is in. Without this a single desync would
+        cost every subsequent fix and never say so.
+        """
         if self._gps is None:
             return
         if self._leds:
             self._leds.gps_fix_on()
         try:
-            fix = self._gps.get_fix(timeout_s=self._settings().gps_fix_timeout_s)
+            timeout_s = self._settings().gps_fix_timeout_s
+            self._gps.wake()
+            fix = self._gps.get_fix(timeout_s=timeout_s)
+            if fix is None:
+                self._gps.resync()
+                fix = self._gps.get_fix(timeout_s=timeout_s)
+
             if fix:
                 self._state.set_gps(fix.latitude, fix.longitude, fix.altitude, fix.satellites)
                 logger.info("GPS fix: %.6f, %.6f", fix.latitude, fix.longitude)
+                self._gps.sleep()
             elif self._state.gps().lat is None:
+                # Never had a fix at all: a cold module is a different problem
+                # from a drifted toggle, and a full power cycle is the bigger
+                # hammer. Leave it awake so the next attempt starts warm.
                 self._gps.power_cycle()
+            else:
+                # We have a known-good coordinate from before and this attempt
+                # failed. Nothing is broken about the position we hold, so go
+                # back to sleep rather than burning the interval searching.
+                self._gps.sleep()
         finally:
             if self._leds:
                 self._leds.gps_fix_off()
