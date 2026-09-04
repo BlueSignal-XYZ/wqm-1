@@ -31,8 +31,13 @@ Source: `src/app/` (supervisor, state, workers), `src/main.py`.
 ## Sensing
 
 - **Analog (Raspberry Pi hosts):** pH, TDS, and turbidity via the ADS1115 ADC;
-  temperature via a DS18B20 1-Wire probe. Analog ORP (AIN3) is non-functional
-  on PCBA rev Fin_3 — ORP comes from the digital RS485 probe instead.
+  temperature via a DS18B20 1-Wire probe. Analog TDS excitation is hardware
+  (CD4060); firmware 2.1.1 is sampling-only and does not drive that
+  oscillator. Analog ORP (AIN3) is non-functional on PCBA rev Fin_3 — ORP
+  comes from the digital RS485 probe instead. BUILD **ESTIMATE** notes for
+  Q4 / VIN0 / AMS1117 current are in
+  [hardware-overview.md](hardware-overview.md#build-provisional-engineering-estimates-2026-09-04)
+  — they are not measured bench values.
 - **RS485 digital probes (Honde Tech):** residual chlorine, digital ORP, and a
   5-in-1 (pH/EC/TDS/salinity/temperature) over a shared Modbus-RTU bus through
   a USB adapter. When the 5-in-1 is present its pH/TDS/temperature supersede the
@@ -88,4 +93,4 @@ Wi-Fi sync; analog/LoRa/relay require the Pi). See [platforms.md](platforms.md).
 - [platforms.md](platforms.md) — supported host boards
 - [ota-runbook.md](ota-runbook.md) — over-the-air update operations
 - [sensor-calibration.md](sensor-calibration.md) — per-probe calibration
-- [hardware-overview.md](hardware-overview.md) — board, BOM, pinout
+- [hardware-overview.md](hardware-overview.md) — board, BOM, pinout; BUILD provisional TDS / 3.3 V estimates

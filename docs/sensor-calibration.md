@@ -14,12 +14,34 @@ reference solution would corrupt the data record. The human recalibrates.
 | Probe | Method | Cadence | Consumable life |
 |---|---|---|---|
 | pH (BNC) | Two-point: rinse in distilled water, stabilize in pH 7.00 (point 1), rinse, stabilize in pH 4.00 or 10.00 (point 2). Verify 6.95–7.05 back in 7.00. | 30 days (or on drift alert) | Electrode 12–18 months |
-| TDS | Single-point in a conductivity standard (1413 µS/cm typical); set the point. | 180 days | Clean at every visit |
+| TDS | Single-point in a conductivity standard (1413 µS/cm typical); set the point. Default ~500 ppm/V is **PROVISIONAL** — see below. | 180 days | Clean at every visit |
 | Turbidity | Zero in clean water; for compliance sites cross-check a handheld turbidimeter and record both values. | 90 days | Wipe optics at every visit |
 | Temperature (DS18B20) | Factory calibrated — no field calibration. | — | 5+ years |
 
 > Analog ORP (AIN3) is non-functional on PCBA rev Fin_3. Use the digital RS485
 > ORP probe below.
+
+### Analog TDS — BUILD provisional scale (2026-09-04)
+
+> **ESTIMATE / PROVISIONAL / pending cell constant and meter.**
+> These are **not** measured bench values. Firmware 2.1.1 samples AIN0
+> only; it does not drive CD4060 excitation.
+
+The analog TDS one-point wizard uses a conductivity standard
+(**1413 µS/cm** typical). The default **~500 ppm/V** coefficient is a
+provisional starting point. Absolute V/ppm is unknown until the cell
+constant is known — **order-of-magnitude only**.
+
+At 1413 µS/cm, VIN0 is **ESTIMATED ~0.3–1.5 V (~5k–24k LSB at FSR
+±2.048 V)**; cell K unknown. Do not treat that band, or the 500 ppm/V
+default, as production truth, and do not invent cal tables.
+
+The live Fin_3 path into AIN0 is the **LM324 rectifier + R47/R48 LPF**
+(silk 0–2.3 V), not an R57/R58 0.3125 hardware divider. Q4 excitation
+and AMS1117 current bands are in
+[hardware-overview.md](hardware-overview.md#build-provisional-engineering-estimates-2026-09-04).
+Replace these notes when Jacques benches Q4 / VIN0 / current; the
+HL-A250L-38 nameplate is still pending from Haolin.
 
 ## RS485 digital probes (Honde Tech)
 
@@ -43,4 +65,6 @@ meaningfully wrong. A flatlined or disconnected probe is reported as a fault
 (not fake data) and its relay rules are suspended until it recovers.
 
 See also: [getting-started.md](getting-started.md) (RS485 wiring & addresses),
-[firmware-overview.md](firmware-overview.md) (sensing architecture).
+[firmware-overview.md](firmware-overview.md) (sensing architecture),
+[hardware-overview.md](hardware-overview.md) (TDS excitation / VIN0 / AMS1117
+BUILD estimates).

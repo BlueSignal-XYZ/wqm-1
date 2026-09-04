@@ -251,6 +251,7 @@ class TestHardwareConstants:
     def test_tds_divider_ratio_matches_resistors(self, mock_hardware):
         from utils import config
 
-        # R57=2.2kΩ, R58=1kΩ: ratio = 1k/(1k+2.2k)
+        # Firmware software scale: 1k/(1k+2.2k) = 0.3125. This is NOT a live
+        # R57/R58 hardware divider on Fin_3 (LM324 + R47/R48 LPF).
         expected = 1000.0 / (2200.0 + 1000.0)
         assert abs(config.TDS_DIVIDER_RATIO - expected) < 1e-9

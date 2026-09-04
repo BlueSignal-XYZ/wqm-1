@@ -2,7 +2,9 @@
 TDS (Total Dissolved Solids) Sensor Module
 
 Reads TDS from ADS1115 AIN0 (VIN0) through CD4060 AC excitation and LM324
-conditioning with R57/R58 voltage divider (ratio 0.3125).
+rectifier + R47/R48 LPF (silk 0–2.3 V). Firmware does not drive excitation
+(2.1.1 is sampling-only). TDS_DIVIDER_RATIO (0.3125) is a software scale
+only — it is not a live R57/R58 hardware divider on Fin_3.
 Temperature compensation applied per reading.
 """
 
