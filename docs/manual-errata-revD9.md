@@ -8,9 +8,13 @@ the shipping firmware (`v2.0.0`) and the BlueSignal website.
 Hand the fenced prompt below to whoever (or whatever tool) regenerates the
 manual. It is self-contained. Decisions baked in (founder-approved 2026-07-16):
 board rev **Fin_3** is canonical; sampling copy **aligns to firmware** (60 s);
-warranty stays **1 yr hardware + 90-day probes**; new water-quality parameters
-are framed as **optional Honde Tech RS485 add-on products**, not built-in
-channels.
+new water-quality parameters are framed as **optional Honde Tech RS485
+add-on products**, not built-in channels.
+
+**Warranty update (Jacques, 2026-09-01):** the WQM-1 Limited Warranty is
+**90-day PCBA/board, 30-day probes**. This supersedes the 2026-07-16 figure
+of "1 yr hardware + 90-day probes" referenced below and in item 9 of section
+C — every instance in this file has been updated to match.
 
 ---
 
@@ -72,7 +76,7 @@ probes from the unit rail, USB is data-only — NOT built-in channels) ===
    VENTUNO Q (RS485 probes + USB GPS + Wi-Fi; analog/LoRa/relay need the Pi)."
 
 === C. CONFIRM UNCHANGED ===
-9. Warranty stays 1 yr hardware + 90-day consumable probes (DS18B20 1 yr); keep
+9. Warranty is 90-day PCBA/board, 30-day consumable probes; keep
    the "DRAFT — attorney review, do not distribute" banner until legal signs.
 10. Enclosure is IP65 (not IP67) wherever shown.
 11. 90 days cloud monitoring included; paid tiers thereafter (Residential $5/mo,
