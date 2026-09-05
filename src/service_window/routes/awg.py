@@ -38,6 +38,7 @@ from flask import (
 )
 from flask.typing import ResponseReturnValue
 
+from integrations.smart_breaker.secrets import DEFAULT_SECRETS_DIR, resolve_credentials
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
 from service_window.config_editor import read_config, update_config
@@ -81,6 +82,33 @@ SECRET_FIELDS: tuple[str, ...] = (
     "smart_breaker_subscription_key",
 )
 
+# Config key -> the resolver's field name (config / ABLEEDGE_* env / file).
+_SECRET_NAMES: dict[str, str] = {
+    "smart_breaker_client_id": "client_id",
+    "smart_breaker_client_secret": "client_secret",  # nosec B105 - a field name
+    "smart_breaker_subscription_key": "subscription_key",
+}
+
+_SOURCE_WORDS: dict[str, str] = {
+    "config": "set — leave blank to keep",
+    "env": "set by environment — leave blank to keep",
+    "file": "set from secrets file — leave blank to keep",
+    "": "not set",
+}
+
+
+def _secret_sources(config: dict[str, Any]) -> dict[str, str]:
+    """Where each credential currently comes from ("" = nowhere).
+
+    The Flask process may not see the firmware's environment (a systemd
+    drop-in on the other unit), so an env-only credential can read as "not
+    set" here while the firmware is happy. Files under the secrets dir are
+    visible to both and are the documented drop-in path.
+    """
+    creds = resolve_credentials(config, secrets_dir=current_app.config.get("SECRETS_DIR"))
+    return {key: creds.sources[name] for key, name in _SECRET_NAMES.items()}
+
+
 VENDOR_LABELS: dict[str, str] = {
     "none": "Not installed",
     "relay_only": "Relay only (no smart breaker)",
@@ -109,13 +137,14 @@ def _status(config: dict[str, Any]) -> dict[str, Any]:
 def index() -> str:
     config = read_config(current_app.config["CONFIG_PATH"])
     values = {key: config.get(key, getattr(_DEFAULTS, key)) for key in BINDING_FIELDS}
-    secrets_set = {key: bool(config.get(key)) for key in SECRET_FIELDS}
+    sources = _secret_sources(config)
     return render_template(
         "awg.html",
         status=_status(config),
         values=values,
         specs={key: SETTINGS_SCHEMA[key] for key in BINDING_FIELDS},
-        secrets_set=secrets_set,
+        secret_hint={key: _SOURCE_WORDS[src] for key, src in sources.items()},
+        secrets_dir=current_app.config.get("SECRETS_DIR") or DEFAULT_SECRETS_DIR,
         vendors=[(v, VENDOR_LABELS.get(v, v)) for v in SMART_BREAKER_VENDORS],
         fail_safe_modes=[(m, FAIL_SAFE_LABELS.get(m, m)) for m in SMART_BREAKER_FAIL_SAFE_MODES],
     )
@@ -245,10 +274,15 @@ def bind() -> ResponseReturnValue:
             errors.append(
                 "Circuit ampacity is required — read it off the breaker handle; it is not guessed."
             )
-        existing = read_config(config_path)
+        # Typed now, already in config, or supplied by env / secrets file —
+        # any of those satisfies the firmware's resolver.
+        sources = _secret_sources(read_config(config_path))
         for key in SECRET_FIELDS:
-            if not raw.get(key) and not existing.get(key):
-                errors.append(f"{_label(key)} is required for an Eaton AbleEdge binding.")
+            if not raw.get(key) and not sources[key]:
+                errors.append(
+                    f"{_label(key)} is required for an Eaton AbleEdge binding (type it here, "
+                    "or install it as a file under the secrets directory)."
+                )
     elif vendor == "relay_only" and not raw.get("smart_breaker_interlock_relay"):
         errors.append("Relay-only mode needs an interlock relay channel (1–4).")
 

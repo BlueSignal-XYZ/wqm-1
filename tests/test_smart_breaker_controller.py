@@ -427,9 +427,7 @@ class TestPollTelemetry:
         ctl = make(fake, relays, clock, events, smart_breaker_circuit_amps=0)
         assert ctl.status()["circuitAmps"] is None
 
-    def test_accepted_command_shows_in_snapshot_before_next_poll(
-        self, fake, relays, clock, events
-    ):
+    def test_accepted_command_shows_in_snapshot_before_next_poll(self, fake, relays, clock, events):
         """Eaton's set-position returns 204 with no body; the operator must
         not stare at "—" until poll_s elapses."""
         ctl = make(fake, relays, clock, events)
@@ -587,3 +585,80 @@ class TestBuildSmartBreaker:
             build_smart_breaker(lambda: s, relays)
         assert "SUPERSECRET" not in caplog.text
         assert "SUBKEY123" not in caplog.text
+
+
+class TestCredentialSources:
+    """Config → ABLEEDGE_* env → files under the secrets dir. The person
+    holding the Eaton credentials can install them without touching YAML."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        for name in ("ABLEEDGE_CLIENT_ID", "ABLEEDGE_CLIENT_SECRET", "ABLEEDGE_SUBSCRIPTION_KEY"):
+            monkeypatch.delenv(name, raising=False)
+
+    def test_files_in_secrets_dir_are_enough(self, relays, tmp_path, caplog):
+        (tmp_path / "client_id").write_text("cid\n")
+        (tmp_path / "client_secret").write_text("FILESECRET-9f2\n")
+        (tmp_path / "subscription_key").write_text("FILEKEY-7a1\n")
+        with caplog.at_level("INFO", logger="wqm1.smart_breaker"):
+            ctl = build_smart_breaker(lambda: _settings(), relays, secrets_dir=str(tmp_path))
+        assert ctl is not None and ctl.vendor == "ableedge"
+        assert ctl._client._client_secret == "FILESECRET-9f2"
+        assert "credentials from file" in caplog.text
+        assert "FILESECRET-9f2" not in caplog.text
+        assert "FILEKEY-7a1" not in caplog.text
+
+    def test_env_beats_files_config_beats_env(self, relays, tmp_path, monkeypatch):
+        from integrations.smart_breaker.secrets import resolve_credentials
+
+        (tmp_path / "client_id").write_text("from-file")
+        (tmp_path / "client_secret").write_text("from-file")
+        (tmp_path / "subscription_key").write_text("from-file")
+        monkeypatch.setenv("ABLEEDGE_CLIENT_SECRET", "from-env")
+        creds = resolve_credentials(
+            _settings(smart_breaker_subscription_key="from-config"), secrets_dir=tmp_path
+        )
+        assert creds.client_id == "from-file"
+        assert creds.client_secret == "from-env"
+        assert creds.subscription_key == "from-config"
+        assert creds.sources == {
+            "client_id": "file",
+            "client_secret": "env",
+            "subscription_key": "config",
+        }
+        assert creds.complete
+
+    def test_partial_sources_report_what_is_missing(self, relays, tmp_path, monkeypatch, caplog):
+        from integrations.smart_breaker.secrets import resolve_credentials
+
+        monkeypatch.setenv("ABLEEDGE_CLIENT_ID", "cid")
+        creds = resolve_credentials(_settings(), secrets_dir=tmp_path)
+        assert not creds.complete
+        assert creds.missing == ["client_secret", "subscription_key"]
+        with caplog.at_level("ERROR", logger="wqm1.smart_breaker"):
+            assert (
+                build_smart_breaker(lambda: _settings(), relays, secrets_dir=str(tmp_path)) is None
+            )
+        assert "missing client_secret, subscription_key" in caplog.text
+        assert str(tmp_path) in caplog.text
+
+    def test_empty_or_unreadable_file_counts_as_missing(self, tmp_path, caplog):
+        from integrations.smart_breaker.secrets import resolve_credentials
+
+        (tmp_path / "client_id").write_text("   \n")
+        (tmp_path / "client_secret").mkdir()  # a directory where a file should be
+        creds = resolve_credentials(_settings(), secrets_dir=tmp_path)
+        assert creds.client_id == "" and creds.client_secret == ""
+        assert creds.sources["client_id"] == ""
+
+    def test_mapping_settings_work_for_the_service_window(self, tmp_path):
+        """The Flask side hands over the raw config dict, not a Settings."""
+        from integrations.smart_breaker.secrets import resolve_credentials
+
+        (tmp_path / "subscription_key").write_text("k")
+        creds = resolve_credentials(
+            {"smart_breaker_client_id": "a", "smart_breaker_client_secret": "b"},
+            secrets_dir=tmp_path,
+        )
+        assert creds.complete
+        assert creds.sources["subscription_key"] == "file"

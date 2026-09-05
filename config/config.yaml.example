@@ -77,6 +77,9 @@ smart_breaker_unreachable_grace_s: 300
 # Auth. `direct` = this unit holds Eaton ORGANISATION service-account credentials.
 # `cloud_proxy` = the BlueSignal Cloud Functions hold them (preferred; pending).
 # Credentials are provisioning-time only, never pushed remotely, never committed.
+# Leave the three credential keys empty to supply them out of band instead:
+# env ABLEEDGE_CLIENT_ID / ABLEEDGE_CLIENT_SECRET / ABLEEDGE_SUBSCRIPTION_KEY, or
+# files client_id / client_secret / subscription_key in /etc/bluesignal/secrets/ableedge/.
 smart_breaker_auth_mode: "direct"
 smart_breaker_api_base: "https://api.em.eaton.com/api/v1"
 smart_breaker_token_url: "https://api.em.eaton.com/oauth2/token"

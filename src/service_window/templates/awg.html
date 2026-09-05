@@ -145,18 +145,20 @@ Eaton developer portal (see the installer guide).</small></p>
 
     <h3>Eaton developer credentials</h3>
     <p><small>Stored in the device config, never shown again. Leave a field blank to
-    keep the value already on the unit.</small></p>
+    keep the value already on the unit. Alternatively install them as files named
+    <code>client_id</code>, <code>client_secret</code> and <code>subscription_key</code>
+    under <code>{{ secrets_dir }}</code> and leave these blank.</small></p>
     <label>Client ID
         <input type="password" name="smart_breaker_client_id" autocomplete="new-password"
-               placeholder="{{ 'set — leave blank to keep' if secrets_set.smart_breaker_client_id else 'not set' }}">
+               placeholder="{{ secret_hint.smart_breaker_client_id }}">
     </label>
     <label>Client secret
         <input type="password" name="smart_breaker_client_secret" autocomplete="new-password"
-               placeholder="{{ 'set — leave blank to keep' if secrets_set.smart_breaker_client_secret else 'not set' }}">
+               placeholder="{{ secret_hint.smart_breaker_client_secret }}">
     </label>
     <label>Subscription key
         <input type="password" name="smart_breaker_subscription_key" autocomplete="new-password"
-               placeholder="{{ 'set — leave blank to keep' if secrets_set.smart_breaker_subscription_key else 'not set' }}">
+               placeholder="{{ secret_hint.smart_breaker_subscription_key }}">
     </label>
     <button type="submit" class="btn btn-primary">Save binding</button>
 </form>

@@ -62,6 +62,7 @@ def build_smart_breaker(
     relays: Any = None,
     event_sink: Callable[[dict[str, Any]], Any] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    secrets_dir: str | None = None,
 ) -> SmartBreakerController | None:
     """Construct the controller for the configured vendor, or None.
 
@@ -69,6 +70,9 @@ def build_smart_breaker(
     credentials, an unbound device id, a relay_only site without a relay
     channel, or an auth mode that is not implemented yet all mean "feature
     off" for this boot — the monitor keeps running either way.
+
+    Credentials come from the config keys, then ``ABLEEDGE_*`` env vars, then
+    files under ``secrets_dir`` (see :mod:`.secrets`).
     """
     s = settings_provider()
     vendor = str(getattr(s, "smart_breaker_vendor", "none"))
@@ -105,13 +109,24 @@ def build_smart_breaker(
             )
             return None
         from integrations.smart_breaker.ableedge import AbleEdgeClient
+        from integrations.smart_breaker.secrets import resolve_credentials
 
+        creds = resolve_credentials(s, secrets_dir=secrets_dir)
+        if not creds.complete:
+            logger.error(
+                "AbleEdge client not started: credentials incomplete (missing %s). Set the "
+                "smart_breaker_* keys from the AWG page, ABLEEDGE_* env vars, or files under "
+                "%s — AWG control disabled",
+                ", ".join(creds.missing),
+                secrets_dir or "/etc/bluesignal/secrets/ableedge",
+            )
+            return None
         try:
             client: SmartBreakerClient = AbleEdgeClient(
                 device_id=device_id,
-                client_id=str(getattr(s, "smart_breaker_client_id", "")),
-                client_secret=str(getattr(s, "smart_breaker_client_secret", "")),
-                subscription_key=str(getattr(s, "smart_breaker_subscription_key", "")),
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                subscription_key=creds.subscription_key,
                 api_base=str(getattr(s, "smart_breaker_api_base", "")),
                 token_url=str(getattr(s, "smart_breaker_token_url", "")),
             )
@@ -119,11 +134,13 @@ def build_smart_breaker(
             logger.error("AbleEdge client not started: %s", e)
             return None
         logger.info(
-            "AWG control: Eaton AbleEdge device %s (site %s, interlock relay %s, fail-safe %s)",
+            "AWG control: Eaton AbleEdge device %s (site %s, interlock relay %s, fail-safe %s, "
+            "credentials from %s)",
             device_id,
             getattr(s, "smart_breaker_site_id", "") or "-",
             getattr(s, "smart_breaker_interlock_relay", 0) or "none",
             getattr(s, "smart_breaker_fail_safe", "off"),
+            "/".join(sorted(set(creds.sources.values()))),
         )
         return SmartBreakerController(settings_provider, client, relays, clock, event_sink)
 

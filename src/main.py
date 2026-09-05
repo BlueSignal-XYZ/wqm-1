@@ -549,10 +549,12 @@ class WQM1App:
             return {"ok": True, "configVersion": self._config.remote_version}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
-        if action == "awg_set":
+        if action in ("awg_set", "circuit_set"):
             # "AWG circuit on/off" — vendor-agnostic. Goes through the smart
             # breaker controller (interlock relay + breaker), never straight to
-            # a coil, so fail-safe bookkeeping sees every request.
+            # a coil, so fail-safe bookkeeping sees every request. `circuit_set`
+            # is the spelling the first skeleton (PR #112) advertised; kept as
+            # an alias so nothing written against it breaks.
             state = cmd.get("state")
             if not isinstance(state, bool):
                 return {"ok": False, "error": "state must be boolean"}
@@ -644,7 +646,7 @@ class WQM1App:
                     ).start()
                 self._cloud.ack_command(cmd_id, "done")
                 logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
-            elif cmd_type == "awg":
+            elif cmd_type in ("awg", "circuit"):  # `circuit`: PR #112 alias
                 # Cloud asks for the AWG circuit on/off. Same dispatcher as the
                 # Service Window so one code path owns interlock + fail-safe.
                 state = bool(cmd.get("state"))

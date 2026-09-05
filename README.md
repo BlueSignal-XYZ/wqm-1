@@ -302,6 +302,16 @@ Key settings you may want to adjust:
 See [`config/config.yaml.example`](config/config.yaml.example) for the
 full list of fields with comments.
 
+Optional AWG compressor / load control talks to the site's existing
+**Eaton AbleEdge** smart breaker over HTTP (not a breaker SKU; G5Q-14
+relays stay as fallback / interlock). The `smart_breaker_*` keys are set
+from the Service Window's AWG circuit page; the installer binding,
+fail-safe, and the Eaton developer-app checklist are in
+[docs/smart-breaker-installer-guide.md](docs/smart-breaker-installer-guide.md)
+and [docs/smart-breaker-integration.md](docs/smart-breaker-integration.md).
+Live API smoke is blocked until the Eaton credentials are installed on the
+unit — never commit them.
+
 ---
 
 ### Step 5 — Reboot & Verify Hardware

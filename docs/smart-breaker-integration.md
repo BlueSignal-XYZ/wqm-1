@@ -127,11 +127,17 @@ are the organisation's, not the application's.
 
 | Mode (`smart_breaker_auth_mode`) | Secrets | Status |
 |---|---|---|
-| `direct` | On the Pi in `/etc/bluesignal/config.yaml` (`smart_breaker_client_id`, `_client_secret`, `_subscription_key`). Same pattern as `api_key` / `app_key`: schema `remote=False`, provisioning-time only, never pushable from the cloud, never committed (`.gitleaks` already covers `config/*.example`). | **Implemented** |
+| `direct` | On the Pi. `integrations.smart_breaker.secrets.resolve_credentials` looks, per field and in this order, at (1) `smart_breaker_client_id` / `_client_secret` / `_subscription_key` in `/etc/bluesignal/config.yaml` — what the AWG page writes; (2) env vars `ABLEEDGE_CLIENT_ID` / `ABLEEDGE_CLIENT_SECRET` / `ABLEEDGE_SUBSCRIPTION_KEY` (systemd drop-in); (3) files `client_id` / `client_secret` / `subscription_key` under `/etc/bluesignal/secrets/ableedge/`. Same rule as `api_key` / `app_key`: schema `remote=False`, provisioning-time only, never pushable from the cloud, never committed (`.gitleaks` already covers `config/*.example`). Only the *source* of each value is ever logged or shown. | **Implemented** |
 | `cloud_proxy` | In Cloud Functions config. The Pi calls `{cloud_api_base}/v2/devices/{id}/awg/...` with its existing `X-API-Key`; the function holds the Eaton org credentials, exchanges the token, and forwards. | **Specified, not built** — `build_smart_breaker()` logs and disables the feature if selected. Preferred for production because a stolen SD card then yields nothing that can operate a breaker. Proposed contract: `POST …/awg/command {state, reason}` → `{ok, breaker}`; `GET …/awg/status` → `{isOn, connected, power}`. |
 
 Eaton application secrets have a **one-year lifetime** and must be rotated
 via their portal; note the date when issued.
+
+The files route is the intended hand-off: whoever holds the Eaton developer
+credentials drops three files on the unit (`chmod 600`, owned by the service
+user) and restarts `bluesignal-wqm`; the installer binds the breaker from the
+AWG page without ever seeing the values, and the page shows "set from secrets
+file" for each one.
 
 ## Circuit binding
 
@@ -147,9 +153,12 @@ the panel label and the Eaton installer app:
 | `smart_breaker_circuit_amps` | Breaker ampacity **as printed on the breaker**. `0` = not entered → boot warning. Never guessed. | installer |
 | `smart_breaker_interlock_relay` | `0` = none, `1-4` = G5Q channel wired in series with the AWG enable / contactor coil | installer |
 
-Binding keys are restart-required (the client and worker are built at boot).
-They are remotely configurable so the dashboard can complete a binding the
-installer started; **credentials, URLs and the auth mode are not**.
+Binding keys are restart-required (the client and worker are built at boot)
+and **local-only** (`remote=False`): a cloud overlay must never be able to
+re-point a unit at a different breaker or relay channel — that decision is
+made by the installer standing at the panel, on the AWG page or in
+`config.yaml`. The panel label is cosmetic and may be tidied from the cloud.
+Credentials, URLs and the auth mode are local-only as well.
 
 Policy keys — `smart_breaker_poll_s` (15–3600), `smart_breaker_fail_safe`,
 `smart_breaker_unreachable_grace_s` — are hot: the worker re-reads them each
@@ -165,9 +174,9 @@ record; a later change may log a mismatch as a hint, never overwrite.
 
 | Ingress | Payload | Handler |
 |---|---|---|
-| Service Window `/awg/` page (`POST /awg/api/set`, `POST /awg/set`) or CLI, over `/var/run/bluesignal/cmd.sock` | `{"action":"awg_set","state":true\|false,"source":"service_window","reason":"…"}` | `WQM1App._handle_cmd` → `controller.request()` |
+| Service Window `/awg/` page (`POST /awg/api/set`, `POST /awg/set`) or CLI, over `/var/run/bluesignal/cmd.sock` | `{"action":"awg_set","state":true\|false,"source":"service_window","reason":"…"}` (`"circuit_set"` accepted as an alias) | `WQM1App._handle_cmd` → `controller.request()` |
 | Service Window `/awg/`, `/awg/status.json`, dashboard card; or CLI | `{"action":"awg_status"}` | `controller.status()` snapshot |
-| Cloud `deviceCommands` poll | `{"id","type":"awg","state","reason","durationSeconds"}` | `_apply_cloud_command` → `_handle_cmd(awg_set)` → ack `done`/`error` (error text carries the typed vendor error) |
+| Cloud `deviceCommands` poll | `{"id","type":"awg","state","reason","durationSeconds"}` (`"type":"circuit"` accepted as an alias) | `_apply_cloud_command` → `_handle_cmd(awg_set)` → ack `done`/`error` (error text carries the typed vendor error) |
 | Cloud `deviceCommands` poll | `{"type":"relay", …}` | **unchanged** — direct G5Q control stays as-is |
 | LoRaWAN FPort 100 | relay downlink | **unchanged** |
 | `RulesEngine` | threshold/adaptive rules | **untouched** — no automation drives the AWG in this PR; `manual.override` semantics are unaffected |
@@ -321,6 +330,17 @@ calls in memory with failure injection (`unreachable`, `reject_auth`,
   command socket: nav gating, live render, secrets never echoed, switch
   wording, every binding-form refusal, dashboard card, and the
   snapshot → traffic-light mapping.
+
+## History — the PR #112 skeleton
+
+A second, thinner AbleEdge skeleton (`src/integrations/ableedge/`, nested
+`load_control:` config, `docs/ableedge-integration.md`) was generated in
+parallel and auto-merged as PR #112 on 2026-09-05. Two implementations of the
+same hook (`awg_set`) cannot coexist, so it was folded into this one. What was
+kept from it: credential *references* via env / secrets files (above), the
+`circuit_set` / `type: "circuit"` aliases, and the rule that the binding is
+local-only. A `load_control:` mapping left in a `config.yaml` from that window
+is ignored with no error; re-enter the binding on the AWG page.
 
 ## What BUILD still needs
 

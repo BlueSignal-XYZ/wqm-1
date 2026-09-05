@@ -85,13 +85,22 @@ class TestConfigSchema:
             _, errors = validate_values({key: "x"}, remote=True)
             assert errors == [f"key not remotely configurable: {key}"], key
 
-    def test_binding_and_policy_are_remote_configurable(self):
+    def test_binding_is_local_only(self):
+        """A cloud overlay must never re-point the unit at a different breaker
+        or relay channel: the binding is set by the installer at the panel."""
+        for key, value in (
+            ("smart_breaker_vendor", "ableedge"),
+            ("smart_breaker_device_id", "uuid"),
+            ("smart_breaker_site_id", "uuid"),
+            ("smart_breaker_circuit_amps", 20),
+            ("smart_breaker_interlock_relay", 3),
+        ):
+            _, errors = validate_values({key: value}, remote=True)
+            assert errors == [f"key not remotely configurable: {key}"], key
+
+    def test_policy_and_label_are_remote_configurable(self):
         values = {
-            "smart_breaker_vendor": "ableedge",
-            "smart_breaker_device_id": "uuid",
-            "smart_breaker_site_id": "uuid",
-            "smart_breaker_circuit_amps": 20,
-            "smart_breaker_interlock_relay": 3,
+            "smart_breaker_circuit_label": "Garage AWG",
             "smart_breaker_poll_s": 60,
             "smart_breaker_fail_safe": "last",
             "smart_breaker_unreachable_grace_s": 120,
@@ -99,6 +108,21 @@ class TestConfigSchema:
         accepted, errors = validate_values(values, remote=True)
         assert errors == []
         assert accepted == values
+
+    def test_legacy_load_control_block_is_ignored_not_fatal(self, tmp_path, caplog):
+        """PR #112 briefly shipped a nested load_control: mapping. A unit
+        provisioned in that window must still boot on the flat schema."""
+        p = tmp_path / "config.yaml"
+        p.write_text(
+            "board: rpi-zero-2w\n"
+            "load_control:\n  vendor: ableedge\n  device_id: x\n"
+            "smart_breaker_vendor: relay_only\nsmart_breaker_interlock_relay: 2\n"
+        )
+        s = cfg.ConfigManager(str(p), str(tmp_path / "remote.yaml")).settings
+        assert s.smart_breaker_vendor == "relay_only"
+        assert s.smart_breaker_interlock_relay == 2
+        assert not hasattr(s, "load_control")
+        assert "load_control" not in caplog.text
 
     def test_policy_keys_are_hot_binding_keys_need_restart(self):
         hot = cfg.hot_keys(
@@ -298,6 +322,17 @@ class TestAbleEdgeWiring:
         assert fake.is_on is True
         assert fake.calls[-1] == ("set_circuit", (True, "user"))
         app._cloud.ack_command.assert_called_once_with("c1", "done")
+
+    def test_pr112_aliases_reach_the_same_dispatcher(self, ableedge):
+        """`circuit_set` (socket) and `type: circuit` (cloud) were the names the
+        first skeleton advertised; both land on the one controller."""
+        _, app, fake = ableedge
+        r = app._handle_cmd({"action": "circuit_set", "state": True, "reason": "alias"})
+        assert r["ok"] is True and r["breaker"] == "confirmed"
+        assert fake.calls[-1] == ("set_circuit", (True, "alias"))
+        app._apply_cloud_command({"id": "c7", "type": "circuit", "state": False})
+        assert fake.is_on is False
+        app._cloud.ack_command.assert_called_with("c7", "done")
 
     def test_cloud_awg_off_default_reason_names_command(self, ableedge):
         _, app, fake = ableedge

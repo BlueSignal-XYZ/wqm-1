@@ -53,7 +53,16 @@ def config_path(tmp_path):
 
 
 @pytest.fixture
-def app(db_path, tmp_path, config_path):
+def secrets_dir(tmp_path):
+    d = tmp_path / "secrets"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def app(db_path, tmp_path, config_path, secrets_dir, monkeypatch):
+    for name in ("ABLEEDGE_CLIENT_ID", "ABLEEDGE_CLIENT_SECRET", "ABLEEDGE_SUBSCRIPTION_KEY"):
+        monkeypatch.delenv(name, raising=False)
     return create_app(
         {
             "db_path": db_path,
@@ -61,6 +70,7 @@ def app(db_path, tmp_path, config_path):
             "config_path": config_path,
             "cal_path": str(tmp_path / "calibration.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
+            "secrets_dir": str(secrets_dir),
         }
     )
 
@@ -407,6 +417,32 @@ class TestBinding:
         assert b"Eaton client secret is required" in resp.data
         assert b"Eaton subscription key is required" in resp.data
         assert read_config(config_path) == {}
+
+    def test_credentials_installed_as_files_satisfy_the_binding(
+        self, client, commands, config_path, secrets_dir
+    ):
+        """The credential holder drops three files on the unit; the installer
+        does not need to know the values to bind the breaker."""
+        (secrets_dir / "client_id").write_text("cid\n")
+        (secrets_dir / "client_secret").write_text("s3cret\n")
+        (secrets_dir / "subscription_key").write_text("subkey\n")
+        resp = client.post(
+            "/awg/bind",
+            data=bind_form(
+                smart_breaker_client_id="",
+                smart_breaker_client_secret="",
+                smart_breaker_subscription_key="",
+            ),
+            follow_redirects=True,
+        )
+        assert b"Binding saved" in resp.data
+        cfg = read_config(config_path)
+        assert cfg["smart_breaker_vendor"] == "ableedge"
+        assert "smart_breaker_client_secret" not in cfg  # stays in the file, not YAML
+        page = client.get("/awg/").data
+        assert b"set from secrets file" in page
+        assert b"s3cret" not in page and b"subkey" not in page
+        assert str(secrets_dir).encode() in page
 
     def test_device_uuid_must_look_like_a_uuid(self, client, commands, config_path):
         resp = client.post(

@@ -58,7 +58,7 @@ circuit" entry in the sidebar). Under **Breaker binding**:
 | Interlock relay channel | the G5Q channel wired in series with the AWG enable |
 | Fail-safe | *OFF* for compressor loads |
 | Grace period / poll interval | defaults are fine unless the site says otherwise |
-| Eaton client ID / client secret / subscription key | from BUILD; typed once, never shown again |
+| Eaton client ID / client secret / subscription key | from BUILD; typed once, never shown again — **or** leave blank if BUILD has already installed them as files (the placeholder then reads "set from secrets file") |
 
 **Save binding**, then **Restart monitoring service** on the same page. The
 page validates everything against the firmware's own schema (UUID shape,
@@ -89,6 +89,21 @@ smart_breaker_client_id: "<from BUILD>"
 smart_breaker_client_secret: "<from BUILD>"
 smart_breaker_subscription_key: "<from BUILD>"
 ```
+
+Or keep the three credential keys empty and have BUILD install the values as
+files instead — this is the preferred hand-off, because the installer never
+handles the secrets:
+
+```bash
+sudo install -d -m 700 -o pi -g pi /etc/bluesignal/secrets/ableedge
+printf '%s' '<client id>'        | sudo install -m 600 -o pi -g pi /dev/stdin /etc/bluesignal/secrets/ableedge/client_id
+printf '%s' '<client secret>'    | sudo install -m 600 -o pi -g pi /dev/stdin /etc/bluesignal/secrets/ableedge/client_secret
+printf '%s' '<subscription key>' | sudo install -m 600 -o pi -g pi /dev/stdin /etc/bluesignal/secrets/ableedge/subscription_key
+```
+
+(Environment variables `ABLEEDGE_CLIENT_ID` / `ABLEEDGE_CLIENT_SECRET` /
+`ABLEEDGE_SUBSCRIPTION_KEY` in a systemd drop-in work too; config.yaml wins
+over env, env wins over files.)
 
 Then restart the service (binding and credentials are restart-required):
 

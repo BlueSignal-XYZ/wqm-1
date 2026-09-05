@@ -449,19 +449,23 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     # Thermal
     "fan_on_temp_c": SettingSpec(float, hot=True, min=30.0, max=90.0),
     "fan_off_temp_c": SettingSpec(float, hot=True, min=25.0, max=85.0),
-    # Smart breaker / AWG load control. The circuit BINDING (which breaker,
-    # which interlock relay, the installer-entered ampacity) is restart-required
-    # because the client and worker are built at start-up; the operating
-    # policy (poll cadence, fail-safe mode, grace) is hot. Credentials, URLs
-    # and the auth mode follow api_key: provisioning-time only, never remote.
+    # Smart breaker / AWG load control. The circuit BINDING (vendor, which
+    # breaker, which interlock relay, the installer-entered ampacity) is
+    # restart-required because the client and worker are built at start-up,
+    # and LOCAL-ONLY: it is set by the installer standing at the panel (AWG
+    # page or config.yaml) and a cloud overlay must never be able to re-point
+    # the unit at a different breaker or relay channel. The operating policy
+    # (poll cadence, fail-safe mode, grace) is hot and remote-tunable. The
+    # panel label is cosmetic and may be tidied from the cloud. Credentials,
+    # URLs and the auth mode follow api_key: provisioning-time only.
     "smart_breaker_vendor": SettingSpec(
-        str, hot=False, max_length=16, choices=SMART_BREAKER_VENDORS
+        str, hot=False, max_length=16, remote=False, choices=SMART_BREAKER_VENDORS
     ),
-    "smart_breaker_device_id": SettingSpec(str, hot=False, max_length=64),
-    "smart_breaker_site_id": SettingSpec(str, hot=False, max_length=64),
+    "smart_breaker_device_id": SettingSpec(str, hot=False, max_length=64, remote=False),
+    "smart_breaker_site_id": SettingSpec(str, hot=False, max_length=64, remote=False),
     "smart_breaker_circuit_label": SettingSpec(str, hot=False, max_length=64),
-    "smart_breaker_circuit_amps": SettingSpec(int, hot=False, min=0, max=200),
-    "smart_breaker_interlock_relay": SettingSpec(int, hot=False, min=0, max=4),
+    "smart_breaker_circuit_amps": SettingSpec(int, hot=False, min=0, max=200, remote=False),
+    "smart_breaker_interlock_relay": SettingSpec(int, hot=False, min=0, max=4, remote=False),
     "smart_breaker_poll_s": SettingSpec(int, hot=True, min=15, max=3600),
     "smart_breaker_fail_safe": SettingSpec(
         str, hot=True, max_length=8, choices=SMART_BREAKER_FAIL_SAFE_MODES
@@ -613,6 +617,11 @@ class ConfigManager:
         # the LOCAL base file for backward compatibility, with a warning.
         values = dict(raw)
         rules = values.pop("rules", None)
+        # A nested `load_control:` block shipped briefly (PR #112) before the
+        # flat smart_breaker_* keys became the one schema. Drop it silently so
+        # a unit provisioned in that window still boots; the AWG page rewrites
+        # the binding in the flat form.
+        values.pop("load_control", None)
         values.pop("service_window", None)  # read by the Flask app, not us
         accepted, errors = validate_values(values, remote=remote)
         for err in errors:

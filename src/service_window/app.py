@@ -39,6 +39,9 @@ _SETTING_ALIASES = {
     "CONFIG_PATH": "config_path",
     "CAL_PATH": "cal_path",
     "CMD_SOCK": "cmd_sock",
+    # Where the AWG page looks for Eaton credentials installed as files
+    # (integrations.smart_breaker.secrets). Tests point it at tmp_path.
+    "SECRETS_DIR": "secrets_dir",
 }
 
 
@@ -74,6 +77,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["CONFIG_PATH"] = sw_config.get("config_path", "/etc/bluesignal/config.yaml")
     app.config["CAL_PATH"] = sw_config.get("cal_path", "/etc/bluesignal/calibration.yaml")
     app.config["CMD_SOCK"] = sw_config.get("cmd_sock", "/var/run/bluesignal/cmd.sock")
+    app.config["SECRETS_DIR"] = sw_config.get("secrets_dir", "/etc/bluesignal/secrets/ableedge")
 
     # Flask-native keys the caller set that this factory has no opinion on —
     # TESTING being the one the suite relies on.
