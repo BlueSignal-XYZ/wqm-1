@@ -374,3 +374,111 @@ class TestRelayOnlyWiring:
         r = app._handle_cmd({"action": "awg_set", "state": True})
         assert r["ok"] is True and r["breaker"] == "n/a"
         app._relays.set.assert_called_once_with(4, True)
+
+
+# ---------------------------------------------------------------------------
+# Service Window ↔ firmware contract
+# ---------------------------------------------------------------------------
+
+
+class TestServiceWindowEndToEnd:
+    """The AWG page driven through the REAL firmware dispatcher.
+
+    tests/test_service_window_awg.py stubs the socket; the classes above stub
+    the UI. This is the only place the two sides meet, so a payload-shape
+    drift (a string "on" instead of a boolean, a renamed status key) fails
+    here rather than on a customer's phone. The JSON round-trip mimics the
+    socket exactly.
+    """
+
+    @pytest.fixture
+    def browser(self, ableedge, tmp_path, monkeypatch):
+        import json
+
+        from service_window.app import create_app
+        from service_window.routes import awg as awg_routes
+        from service_window.routes import status as status_routes
+
+        main, app, fake = ableedge
+
+        def over_the_wire(sock_path, action, **kwargs):
+            cmd = json.loads(json.dumps({"action": action, **kwargs}))
+            return json.loads(json.dumps(app._handle_cmd(cmd)))
+
+        monkeypatch.setattr(awg_routes, "send_command", over_the_wire)
+        monkeypatch.setattr(status_routes, "send_command", over_the_wire)
+
+        import sqlite3
+
+        db = tmp_path / "sw.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            "CREATE TABLE readings (id INTEGER PRIMARY KEY, timestamp TEXT, ph REAL, "
+            "tds_ppm REAL, turbidity_ntu REAL, orp_mv REAL, temp_c REAL, lat REAL, lon REAL,"
+            " alt_m REAL, battery_v REAL, relay_state INTEGER, synced INTEGER);"
+            "CREATE TABLE lorawan_session (id INTEGER PRIMARY KEY, dev_addr BLOB, nwk_skey BLOB,"
+            " app_skey BLOB, fcnt_up INTEGER DEFAULT 0, fcnt_down INTEGER DEFAULT 0,"
+            " joined INTEGER DEFAULT 0, updated_at TEXT);"
+            "INSERT INTO lorawan_session (id) VALUES (1);"
+        )
+        conn.close()
+        sw = create_app(
+            {
+                "db_path": str(db),
+                "pin": "9999",
+                "config_path": str(tmp_path / "config.yaml"),  # the booted firmware's config
+                "cal_path": str(tmp_path / "calibration.yaml"),
+                "cmd_sock": "unused",
+                "TESTING": True,
+            }
+        )
+        client = sw.test_client()
+        with client.session_transaction() as sess:
+            sess["pin_verified"] = True
+        return client, app, fake
+
+    def test_page_reflects_the_real_controller(self, browser):
+        client, app, fake = browser
+        fake.is_on = False
+        app._smart_breaker.poll()
+        body = client.get("/awg/").data
+        assert b"AWG ON" in body
+        assert b"is OFF and the breaker link is up" in body
+
+    def test_switch_on_reaches_the_breaker_and_the_interlock(self, browser):
+        client, app, fake = browser
+        data = client.post("/awg/api/set", json={"state": True, "reason": "phone"}).get_json()
+        assert data["ok"] is True and data["breaker"] == "confirmed"
+        assert fake.is_on is True
+        # The reason typed on the page is what Eaton gets told.
+        assert ("set_circuit", (True, "phone")) in fake.calls
+        app._relays.set.assert_called_with(3, True)
+        assert client.get("/awg/status.json").get_json()["breaker"]["isOn"] is True
+
+    def test_switch_off_drops_interlock_then_opens(self, browser):
+        client, app, fake = browser
+        client.post("/awg/api/set", json={"state": True})
+        app._relays.set.reset_mock()
+        resp = client.post("/awg/set", data={"state": "off"}, follow_redirects=True)
+        assert b"switched off" in resp.data
+        assert fake.is_on is False
+        app._relays.set.assert_called_with(3, False)
+
+    def test_dashboard_card_from_live_firmware(self, browser):
+        client, app, fake = browser
+        fake.is_on = True
+        app._smart_breaker.poll()
+        body = client.get("/").data
+        assert b"AWG breaker" in body
+        assert b"is ON and the breaker link is up" in body
+
+    def test_unreachable_breaker_shows_on_page_and_refuses_on(self, browser):
+        client, app, fake = browser
+        fake.unreachable = True
+        app._smart_breaker.poll()
+        data = client.post("/awg/api/set", json={"state": True}).get_json()
+        assert data["ok"] is False
+        assert data["message"].startswith("Could not switch the AWG circuit on")
+        snap = client.get("/awg/status.json").get_json()
+        assert snap["linkOk"] is False
+        assert snap["card"]["status"] in ("attention", "fault")

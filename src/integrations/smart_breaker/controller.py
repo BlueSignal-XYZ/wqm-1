@@ -157,6 +157,23 @@ class SmartBreakerController:
             else:
                 logger.info("Smart breaker link up (was down %.0fs)", was_down_s)
 
+    def _note_accepted(self, on: bool) -> None:
+        """Reflect an accepted set-position into the snapshot right away.
+
+        Eaton answers a position command with 204 and no body, so the only way
+        to *see* the new position is the next poll — up to ``poll_s`` later.
+        Without this the Service Window shows "—" for a minute after the
+        operator pressed the button. The next poll still reconciles against
+        what the breaker actually reports.
+        """
+        prev = self._last_status
+        self._last_status = CircuitStatus(
+            is_on=on,
+            connected=prev.connected if prev else None,
+            raw_position="close" if on else "open",
+            observed_at=time.time(),
+        )
+
     def _mark_fail(self, error: Exception) -> None:
         self._last_error = f"{type(error).__name__}: {error}"
         if self._unreachable_since is None:
@@ -250,6 +267,7 @@ class SmartBreakerController:
                 try:
                     self._client.set_circuit(False, why)
                     self._mark_ok()
+                    self._note_accepted(False)
                     self._pending = None
                     return {
                         **result,
@@ -275,6 +293,7 @@ class SmartBreakerController:
             except SmartBreakerError as e:
                 self._mark_fail(e)
                 return {**result, "ok": False, "breaker": "unconfirmed", "error": self._last_error}
+            self._note_accepted(True)
             self._desired = True
             self._pending = None
             interlock_ok = self._set_interlock(True, why)
@@ -300,6 +319,7 @@ class SmartBreakerController:
                     self._client.set_circuit(on, why)
                     self._pending = None
                     self._mark_ok()
+                    self._note_accepted(on)
                     logger.info("Queued breaker %s delivered (%s)", "close" if on else "open", why)
                 except SmartBreakerError as e:
                     self._mark_fail(e)

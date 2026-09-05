@@ -427,6 +427,29 @@ class TestPollTelemetry:
         ctl = make(fake, relays, clock, events, smart_breaker_circuit_amps=0)
         assert ctl.status()["circuitAmps"] is None
 
+    def test_accepted_command_shows_in_snapshot_before_next_poll(
+        self, fake, relays, clock, events
+    ):
+        """Eaton's set-position returns 204 with no body; the operator must
+        not stare at "—" until poll_s elapses."""
+        ctl = make(fake, relays, clock, events)
+        assert ctl.status()["breaker"] is None
+        ctl.request(True, source="service_window")
+        assert ctl.status()["breaker"]["isOn"] is True
+        assert ctl.status()["breaker"]["position"] == "close"
+        ctl.request(False, source="service_window")
+        assert ctl.status()["breaker"]["isOn"] is False
+        # The next poll still trusts the breaker over our own note.
+        fake.is_on = True
+        ctl.poll()
+        assert ctl.status()["breaker"]["isOn"] is True
+
+    def test_refused_on_leaves_snapshot_alone(self, fake, relays, clock, events):
+        ctl = make(fake, relays, clock, events)
+        fake.unreachable = True
+        ctl.request(True, source="service_window")
+        assert ctl.status()["breaker"] is None
+
 
 class TestRelayOnly:
     def test_request_maps_to_relay(self, relays, clock, events):
