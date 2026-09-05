@@ -85,7 +85,9 @@ cloud or the installer can ask for the site's AWG circuit on/off and read what
 it draws. The G5Q-14 relays stay as the local interlock/fallback; the unit is
 not a breaker and does no panel work. Fail-safe on API loss is configurable
 (`off` shipped for compressor loads). Command paths: Service Window socket
-`awg_set` / `awg_status`, cloud command `type: "awg"`. See
+`awg_set` / `awg_status`, cloud command `type: "awg"`. The Service Window's
+**AWG circuit** page (`/awg/`) binds the breaker, switches the load, and shows
+link / position / power; the dashboard carries a matching traffic light. See
 [smart-breaker-integration.md](smart-breaker-integration.md) and
 [smart-breaker-installer-guide.md](smart-breaker-installer-guide.md).
 

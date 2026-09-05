@@ -165,8 +165,8 @@ record; a later change may log a mismatch as a hint, never overwrite.
 
 | Ingress | Payload | Handler |
 |---|---|---|
-| Service Window / CLI over `/var/run/bluesignal/cmd.sock` | `{"action":"awg_set","state":true\|false,"reason":"…"}` | `WQM1App._handle_cmd` → `controller.request()` |
-| same | `{"action":"awg_status"}` | `controller.status()` snapshot |
+| Service Window `/awg/` page (`POST /awg/api/set`, `POST /awg/set`) or CLI, over `/var/run/bluesignal/cmd.sock` | `{"action":"awg_set","state":true\|false,"source":"service_window","reason":"…"}` | `WQM1App._handle_cmd` → `controller.request()` |
+| Service Window `/awg/`, `/awg/status.json`, dashboard card; or CLI | `{"action":"awg_status"}` | `controller.status()` snapshot |
 | Cloud `deviceCommands` poll | `{"id","type":"awg","state","reason","durationSeconds"}` | `_apply_cloud_command` → `_handle_cmd(awg_set)` → ack `done`/`error` (error text carries the typed vendor error) |
 | Cloud `deviceCommands` poll | `{"type":"relay", …}` | **unchanged** — direct G5Q control stays as-is |
 | LoRaWAN FPort 100 | relay downlink | **unchanged** |
@@ -178,6 +178,39 @@ relay path. Eaton's own `secondsUntilReset` only re-*closes* after an open
 
 Sensor sampling, the SQLite buffer, LoRa, and the cloud sync path are not
 modified. The AWG controller is an additional worker with its own thread.
+
+### Service Window surface
+
+`src/service_window/routes/awg.py` + `templates/awg.html` — one page, three
+jobs, all through the two socket actions above (the UI never touches a coil
+or Eaton directly):
+
+- **Status** — the `awg_status` snapshot as live cards (position, link,
+  fail-safe / applied, power, interlock channel, queued command), refreshed
+  every 10 s from `/awg/status.json`, plus the same traffic-light card the
+  dashboard shows. `diagnostics.explain` owns the copy under the new
+  `smart_breaker` subject: *ok* = link up, *degraded* = link down inside the
+  grace period, *down* = fail-safe applied, *stale* = firmware not answering
+  (so a stopped service reads as "restart it", not as a breaker fault).
+- **Switch** — ON / OFF with an optional reason; a browser confirm guards
+  mis-taps on a phone. Results are worded from `ok` / `breaker` /
+  `interlockOk` (e.g. "interlock relay is off, but the breaker did not confirm
+  … queued").
+- **Bind** — the `smart_breaker_*` fields an installer collects on site. The
+  form runs `utils.config.validate_values` before `update_config`, adds the
+  site-specific checks the schema cannot express (device UUID shape, ampacity
+  required and never guessed, credentials present for `ableedge`, a channel for
+  `relay_only`), and flashes the restart reminder for restart-required keys.
+  Credentials are **write-only**: password inputs, placeholder "set — leave
+  blank to keep", never rendered back. `smart_breaker_api_base` /
+  `smart_breaker_token_url` stay in the config file — portal-generation
+  changes are a documented BUILD step, not a field knob.
+
+The dashboard asks for `awg_status` only when `smart_breaker_vendor` is
+`ableedge`; the sidebar entry appears only once a vendor is bound (the menu is
+already long), and Settings links to the page for first-time setup.
+`relay_only` gets the switch and binding but no link card — nothing can be
+"down". Tests: `tests/test_service_window_awg.py` against a stubbed socket.
 
 ## Interlock ordering
 
@@ -284,6 +317,10 @@ calls in memory with failure injection (`unreachable`, `reject_auth`,
   fail-safe matrix, queued OFF, relay_only, factory refusals.
 - `tests/test_smart_breaker_wiring.py` — config schema, `awg_set` /
   `awg_status` / cloud `awg` through a booted `WQM1App`, worker cadence.
+- `tests/test_service_window_awg.py` — the `/awg/` page against a stubbed
+  command socket: nav gating, live render, secrets never echoed, switch
+  wording, every binding-form refusal, dashboard card, and the
+  snapshot → traffic-light mapping.
 
 ## What BUILD still needs
 
@@ -306,8 +343,10 @@ calls in memory with failure injection (`unreachable`, `reject_auth`,
    `type: "awg"`; add `smart_breaker_failsafe` / `smart_breaker_restored` to
    the device-event allow-list; optionally build the `cloud_proxy` endpoints
    above.
-4. **Service Window page** for the binding form (currently config.yaml +
-   `awg_set`/`awg_status` over the socket). Not required for the skeleton.
+
+Everything device-side — firmware, socket commands, and the Service Window
+page for binding, switching and status — is in this repo and mock-tested.
+Item 1 is the only thing between here and a live smoke.
 
 ## Appendix — FranklinWH (future, document only)
 

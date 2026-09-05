@@ -50,8 +50,9 @@ survive an outage and upload when the link returns.
 **Optional AWG load control:** the unit can ask an existing Eaton AbleEdge
 smart breaker to energise or de-energise the site's AWG circuit (the four
 G5Q-14 relays stay as the local interlock; the unit is not a breaker). Off
-unless configured — see
-[docs/smart-breaker-integration.md](docs/smart-breaker-integration.md).
+unless bound from the Service Window's **AWG circuit** page — see
+[docs/smart-breaker-integration.md](docs/smart-breaker-integration.md) and the
+[installer guide](docs/smart-breaker-installer-guide.md).
 
 **Supported platforms:**
 
@@ -528,6 +529,7 @@ http://<pi-ip>:8080/lora/              # set AppKey, view join state
 http://<pi-ip>:8080/relays/            # manual relay control
 http://<pi-ip>:8080/calibration/       # pH/TDS/turbidity calibration
 http://<pi-ip>:8080/rs485/             # add and address RS485 digital probes
+http://<pi-ip>:8080/awg/               # bind / switch the AWG smart-breaker circuit (optional)
 http://<pi-ip>:8080/settings/          # config, PIN, remote reboot
 http://<pi-ip>:8080/diagnostics/       # run hardware probe
 ```

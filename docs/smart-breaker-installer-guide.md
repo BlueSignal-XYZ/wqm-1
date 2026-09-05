@@ -42,9 +42,34 @@ is the AWG circuit and not the neighbour.
 
 ## 2. Enter the binding on the unit
 
-Edit `/etc/bluesignal/config.yaml` (Service Window → Settings → config
-editor, or `sudo nano` over SSH). Quote the enum values — bare `off`/`on`
-are YAML booleans and will be rejected.
+### 2a. From the Service Window (preferred)
+
+Open `http://<pi-ip>:8080/settings/` → **AWG load control → Open the AWG
+circuit page** (once a vendor is saved the page also gets its own "AWG
+circuit" entry in the sidebar). Under **Breaker binding**:
+
+| Field | Enter |
+|---|---|
+| Vendor | *Eaton AbleEdge smart breaker* |
+| Site UUID | Eaton `locationId` (optional, must be a UUID if given) |
+| Device UUID | the breaker's Eaton device UUID — **not** the serial number |
+| Panel label | how the circuit is labelled in the panel, e.g. `Panel A / 14 — AWG-1` |
+| Circuit ampacity | as printed on the breaker handle — required, never guessed |
+| Interlock relay channel | the G5Q channel wired in series with the AWG enable |
+| Fail-safe | *OFF* for compressor loads |
+| Grace period / poll interval | defaults are fine unless the site says otherwise |
+| Eaton client ID / client secret / subscription key | from BUILD; typed once, never shown again |
+
+**Save binding**, then **Restart monitoring service** on the same page. The
+page validates everything against the firmware's own schema (UUID shape,
+ampacity range, enum values) before writing, so a rejected save leaves the
+config untouched and tells you which field to fix. Leaving a credential
+field blank keeps the value already on the unit.
+
+### 2b. From the config file (SSH fallback)
+
+Edit `/etc/bluesignal/config.yaml` with `sudo nano` over SSH. Quote the enum
+values — bare `off`/`on` are YAML booleans and will be rejected.
 
 ```yaml
 smart_breaker_vendor: "ableedge"
@@ -83,6 +108,22 @@ boot until the installer enters it.
 
 ## 3. Bench-check the path (no panel involved)
 
+### 3a. From the Service Window
+
+After the restart, reload the **AWG circuit** page. The **Live** row shows
+the breaker position (ON/OFF), **Breaker link** (Up/Down with the last
+error), the fail-safe mode and whether it has been applied, the last power
+sample (A / V / Wh) and the interlock channel; it refreshes every 10 s. The
+dashboard gets a matching **AWG breaker** traffic light.
+
+Under **Switch**, type a reason (it is recorded by Eaton and in the audit
+log), press **AWG ON**, confirm, then **AWG OFF**. The result line under the
+buttons reads the same `ok` / `breaker` / `interlockOk` fields described in
+the table below in plain words — "breaker confirmed", or "Interlock relay is
+off, but the breaker did not confirm … queued".
+
+### 3b. From the command socket (SSH)
+
 Over the firmware command socket, using the same client the Service Window
 uses (run from the install directory, e.g. `/opt/bluesignal/current`):
 
@@ -115,13 +156,19 @@ electrician confirms the AWG actually stops and starts.
 
 With the AWG running and the electrician present:
 
-1. Pull the unit's network (Wi-Fi off, or unplug the router uplink).
-2. Wait `smart_breaker_unreachable_grace_s` (default 5 min).
-3. Expect: interlock relay drops → AWG enable opens → load stops. Log line:
+1. Pull the unit's network (Wi-Fi off, or unplug the router uplink). Stay
+   on the unit's own Wi-Fi / LAN so the Service Window still answers.
+2. Wait `smart_breaker_unreachable_grace_s` (default 5 min). The AWG page
+   shows **Breaker link: Down** with the seconds counting up; the dashboard
+   card goes amber ("has not answered for N minutes").
+3. Expect: interlock relay drops → AWG enable opens → load stops. The card
+   goes red ("fail-safe (OFF) has been applied"). Log line:
    `FAIL-SAFE OFF applied (interlock dropped, breaker open queued)`.
 4. Restore the network. Expect: `Queued breaker open delivered`, then
-   `Smart breaker link restored after …s`. The breaker is now open too.
-5. Ask for ON again (`awg_set true`) — fail-safe never re-energises by itself.
+   `Smart breaker link restored after …s`. The breaker is now open too and
+   the card returns to green showing **OFF**.
+5. Ask for ON again (**AWG ON** on the page, or `awg_set true`) — fail-safe
+   never re-energises by itself.
 
 If no interlock relay is wired, step 3 will only log and queue; the load keeps
 running until the link returns. Decide with the customer whether that is
@@ -136,10 +183,10 @@ credentials.
 
 ## Alternatives
 
-- **No smart breaker on site** — `smart_breaker_vendor: "relay_only"` with
-  `smart_breaker_interlock_relay: N` gives the same `awg_set` command surface
-  driving just the relay. No API, no fail-safe timer (nothing to lose contact
-  with).
+- **No smart breaker on site** — Vendor *Relay only* on the AWG page (or
+  `smart_breaker_vendor: "relay_only"` with `smart_breaker_interlock_relay: N`)
+  gives the same `awg_set` command surface driving just the relay. No API, no
+  fail-safe timer (nothing to lose contact with), no link card.
 - **Cloud proxy** (`smart_breaker_auth_mode: "cloud_proxy"`) — keeps Eaton
   secrets off the Pi. Not yet available; the unit logs and disables the
   feature if you select it today.
@@ -147,8 +194,9 @@ credentials.
 ## Still blocked on BUILD's side
 
 - Eaton developer credentials and a commissioned test breaker for live smoke
-  (see the design note's checklist). Until then everything above has been
-  exercised only against the in-memory fake in `tests/`.
-- Cloud Functions: `type: "awg"` command enqueue from the dashboard; event
-  allow-list for `smart_breaker_failsafe` / `smart_breaker_restored`.
-- A Service Window page for this form.
+  (see the design note's checklist). Until then everything above — firmware,
+  socket commands and the Service Window page — has been exercised only
+  against the in-memory fake and a stubbed command socket in `tests/`.
+- Cloud Functions (out of this repo): `type: "awg"` command enqueue from the
+  dashboard; event allow-list for `smart_breaker_failsafe` /
+  `smart_breaker_restored`.
