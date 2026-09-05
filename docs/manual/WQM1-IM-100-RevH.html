@@ -1,0 +1,1158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WQM-1 Product &amp; Installer Manual — WQM1-IM-100 Rev H</title>
+<!--
+  Source of the BlueSignal WQM-1 Product & Installer Manual, doc WQM1-IM-100.
+  Rev H, September 2026. Render with docs/manual/build.sh (headless Chromium).
+
+  Rev G was authored outside the repos; Rev H is the first revision with a
+  source file. The layout, type and colour are Rev G's own design system —
+  Outfit for display and body, IBM Plex Mono for kickers, labels and tables,
+  ink #0b1220 / body #4b5563 / muted #8a93a0 / accent #0066ff — measured off
+  the Rev G PDF so the two revisions sit side by side without a seam.
+
+  One <section class="page"> per printed page, paginated by hand to match
+  Rev G page for page (35 pages) so cross-references ("Section 07", "page 26")
+  in the field and in the errata files stay valid.
+
+  What changed and why: the REV H block on page 2, and docs/manual-errata-revG.md.
+-->
+<style>
+  @font-face { font-family: 'Outfit'; src: url('assets/fonts/Outfit-var.woff2') format('woff2'); font-weight: 100 900; font-display: block; }
+  @font-face { font-family: 'IBM Plex Mono'; src: url('assets/fonts/IBMPlexMono-400.woff2') format('woff2'); font-weight: 400; font-display: block; }
+  @font-face { font-family: 'IBM Plex Mono'; src: url('assets/fonts/IBMPlexMono-500.woff2') format('woff2'); font-weight: 500; font-display: block; }
+  @font-face { font-family: 'IBM Plex Mono'; src: url('assets/fonts/IBMPlexMono-600.woff2') format('woff2'); font-weight: 600; font-display: block; }
+
+  :root {
+    --ink: #0b1220;
+    --body: #4b5563;
+    --muted: #8a93a0;
+    --blue: #0066ff;
+    --rule: #e5e8ec;
+    --rule-soft: #eef1f4;
+    --panel: #f7f9fb;
+    --sans: 'Outfit', 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'IBM Plex Mono', Menlo, Consolas, monospace;
+  }
+
+  @page { size: Letter; margin: 0; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: var(--sans); color: var(--body); font-size: 8.6pt; line-height: 1.42; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  * { box-sizing: border-box; }
+  p { margin: 0 0 5pt; }
+  strong { font-weight: 600; color: var(--ink); }
+  a { color: inherit; text-decoration: none; }
+
+  /* ---- page box ------------------------------------------------------ */
+  .page { position: relative; width: 8.5in; height: 11in; padding: 0.86in 0.6in 0.75in; overflow: hidden; page-break-after: always; break-after: page; }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  .head { position: absolute; top: 0.42in; left: 0.6in; right: 0.6in; display: flex; justify-content: space-between; font-family: var(--mono); font-size: 7pt; letter-spacing: 0.12em; text-transform: uppercase; }
+  .head .l { color: var(--blue); font-weight: 500; }
+  .head .r { color: var(--muted); }
+  .foot { position: absolute; bottom: 0.42in; left: 0.6in; right: 0.6in; display: flex; justify-content: space-between; font-family: var(--mono); font-size: 6.8pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .pn::after { content: attr(data-n) " / 35"; }
+
+  /* ---- type ---------------------------------------------------------- */
+  h1 { font-family: var(--sans); font-weight: 400; font-size: 24pt; line-height: 1.12; letter-spacing: -0.02em; color: var(--ink); margin: 0 0 9pt; max-width: 6.2in; }
+  h1 .b { color: var(--blue); }
+  h2 { font-family: var(--sans); font-weight: 500; font-size: 11.2pt; color: var(--ink); margin: 12pt 0 5pt; letter-spacing: -0.01em; }
+  h2 .n { font-family: var(--mono); font-weight: 500; font-size: 8pt; color: var(--blue); margin-right: 6pt; letter-spacing: 0.02em; }
+  h3 { font-family: var(--mono); font-weight: 500; font-size: 7pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--blue); margin: 10pt 0 4pt; }
+  .lede { font-size: 9pt; line-height: 1.5; margin-bottom: 8pt; }
+  .small { font-size: 7.6pt; line-height: 1.45; }
+  .tiny { font-size: 7pt; line-height: 1.45; color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  .ink { color: var(--ink); }
+  .mt0 { margin-top: 0 !important; }
+  .mt8 { margin-top: 8pt; }
+  .mt12 { margin-top: 12pt; }
+
+  /* ---- tables -------------------------------------------------------- */
+  table.t { width: 100%; border-collapse: collapse; margin: 4pt 0 8pt; }
+  table.t th { font-family: var(--mono); font-weight: 500; font-size: 6.6pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 0 8pt 4pt 0; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+  table.t td { padding: 4.5pt 8pt 4.5pt 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; font-size: 8.2pt; line-height: 1.4; }
+  table.t td.k { font-family: var(--mono); font-weight: 500; font-size: 7.6pt; color: var(--ink); white-space: nowrap; letter-spacing: 0.01em; }
+  table.t td.n { font-family: var(--mono); font-weight: 500; font-size: 7.4pt; color: var(--blue); white-space: nowrap; }
+  table.t td.num { font-family: var(--mono); font-size: 7.6pt; color: var(--ink); text-align: right; white-space: nowrap; }
+  table.t th.num { text-align: right; }
+  table.t.compact td { padding: 3.2pt 8pt 3.2pt 0; font-size: 7.8pt; }
+  table.t.compact td.k { font-size: 7.3pt; }
+  table.t tr.sub td { color: var(--muted); font-size: 7.4pt; }
+  table.t td.tick { width: 22pt; }
+  table.t td.tick::after { content: ''; display: inline-block; width: 9pt; height: 9pt; border: 1px solid var(--muted); border-radius: 2pt; }
+
+  /* ---- numbered lists ------------------------------------------------ */
+  ol.steps { list-style: none; margin: 4pt 0 8pt; padding: 0; counter-reset: st; }
+  ol.steps li { position: relative; padding-left: 22pt; margin-bottom: 4.5pt; counter-increment: st; }
+  ol.steps li::before { content: counter(st, decimal-leading-zero); position: absolute; left: 0; top: 0.5pt; font-family: var(--mono); font-weight: 500; font-size: 7.4pt; color: var(--blue); }
+  ol.plain { margin: 3pt 0 6pt 14pt; padding: 0; }
+  ol.plain li { margin-bottom: 3pt; }
+  ul.dash { list-style: none; margin: 3pt 0 6pt; padding: 0; }
+  ul.dash li { position: relative; padding-left: 10pt; margin-bottom: 2.5pt; }
+  ul.dash li::before { content: '·'; position: absolute; left: 0; color: var(--blue); font-weight: 700; }
+
+  /* ---- panels & tiles ------------------------------------------------ */
+  .panel { border: 1px solid var(--rule); border-radius: 6pt; padding: 8pt 10pt; background: var(--panel); margin: 6pt 0 8pt; }
+  .panel h3 { margin-top: 0; }
+  .panel p:last-child { margin-bottom: 0; }
+  .callout { border-left: 2px solid var(--blue); padding: 2pt 0 2pt 9pt; margin: 6pt 0 8pt; }
+  .callout h3 { margin-top: 0; margin-bottom: 2pt; }
+  .callout p:last-child { margin-bottom: 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14pt; }
+  .cols3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10pt; }
+  .cols4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10pt; }
+  .stat { border: 1px solid var(--rule); border-radius: 6pt; padding: 10pt 12pt; }
+  .stat .v { font-family: var(--mono); font-size: 19pt; color: var(--ink); line-height: 1; margin-bottom: 5pt; }
+  .stat .l { font-family: var(--mono); font-size: 6.6pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); line-height: 1.4; }
+  .tag { display: inline-block; font-family: var(--mono); font-size: 6.4pt; letter-spacing: 0.1em; text-transform: uppercase; color: var(--blue); border: 1px solid #cfe0ff; border-radius: 3pt; padding: 1pt 4pt; white-space: nowrap; }
+  .kv { display: grid; grid-template-columns: 1.1in 1fr; gap: 3pt 10pt; margin: 4pt 0 8pt; }
+  .kv .k { font-family: var(--mono); font-weight: 500; font-size: 7pt; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink); padding-top: 1pt; }
+  .kv .v { font-size: 8.2pt; line-height: 1.42; padding-bottom: 4pt; border-bottom: 1px solid var(--rule-soft); }
+  .kv .k { border-bottom: 1px solid var(--rule-soft); padding-bottom: 4pt; }
+
+  /* ---- drawings ------------------------------------------------------ */
+  .dwg-title { font-family: var(--mono); font-weight: 500; font-size: 9.6pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink); margin: 0 0 2pt; }
+  .dwg-sub { font-family: var(--mono); font-size: 6.6pt; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin: 0 0 8pt; }
+  .dwg { width: 100%; display: block; border: 0; }
+  .fig-cap { font-family: var(--mono); font-size: 6.6pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 6pt; }
+
+  /* ---- forms (Appendix D/E) ------------------------------------------ */
+  .form { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18pt; margin: 4pt 0 10pt; }
+  .form .f { border-bottom: 1px solid var(--rule); padding: 13pt 0 3pt; font-size: 7.8pt; color: var(--body); }
+  .form .f.w { grid-column: 1 / -1; }
+  table.grid { width: 100%; border-collapse: collapse; margin: 4pt 0 8pt; }
+  table.grid th { font-family: var(--mono); font-weight: 500; font-size: 6.4pt; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 3pt 6pt; border: 1px solid var(--rule); }
+  table.grid td { border: 1px solid var(--rule); height: 22pt; padding: 3pt 6pt; font-family: var(--mono); font-size: 7.6pt; color: var(--ink); }
+  .sig { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18pt; margin-top: 22pt; }
+  .sig .s { border-top: 1px solid var(--ink); padding-top: 4pt; font-family: var(--mono); font-size: 6.6pt; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .sig.two { grid-template-columns: 1fr 1fr; }
+
+  /* ---- cover --------------------------------------------------------- */
+  .cover { padding: 0.5in 0.6in 0.55in; background:
+      radial-gradient(60% 45% at 8% 62%, rgba(0,102,255,0.10), rgba(0,102,255,0) 70%),
+      repeating-linear-gradient(0deg, rgba(11,18,32,0.045) 0 0.5px, transparent 0.5px 26pt),
+      repeating-linear-gradient(90deg, rgba(11,18,32,0.045) 0 0.5px, transparent 0.5px 26pt), #fff; }
+  .cover .brand { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--rule); padding-bottom: 10pt; }
+  .cover .brand .name { display: flex; align-items: center; gap: 7pt; font-family: var(--sans); font-weight: 700; font-size: 16pt; color: var(--ink); letter-spacing: -0.01em; }
+  .cover .brand .loc { font-family: var(--mono); font-size: 7pt; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .cover .k1 { margin-top: 0.42in; font-family: var(--mono); font-weight: 500; font-size: 7.4pt; letter-spacing: 0.16em; text-transform: uppercase; color: var(--blue); }
+  .cover .k2 { margin-top: 12pt; font-family: var(--mono); font-weight: 500; font-size: 9.6pt; letter-spacing: 0.24em; text-transform: uppercase; color: var(--body); }
+  .cover h1.big { font-size: 45pt; line-height: 1.02; letter-spacing: -0.03em; margin: 14pt 0 16pt; max-width: 7in; font-weight: 400; }
+  .cover h1.big .b { font-weight: 500; }
+  .cover .sub { font-size: 10pt; line-height: 1.5; max-width: 4.9in; color: var(--body); }
+  .cover .meta { position: absolute; left: 0.6in; right: 0.6in; bottom: 0.55in; border-top: 1px solid var(--rule); padding-top: 12pt; display: flex; justify-content: space-between; font-family: var(--mono); font-size: 6.8pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); line-height: 1.7; }
+  .cover .meta .r { text-align: right; }
+  .cover .tag2 { position: absolute; left: 0.6in; bottom: 0.28in; font-family: var(--mono); font-weight: 500; font-size: 7.4pt; letter-spacing: 0.16em; text-transform: uppercase; color: var(--blue); }
+
+  /* ---- contents ------------------------------------------------------ */
+  .toc { margin: 8pt 0 14pt; }
+  .toc .row { display: grid; grid-template-columns: 22pt 1fr 40pt; gap: 8pt; padding: 4.6pt 0; border-bottom: 1px solid var(--rule-soft); font-size: 9pt; color: var(--ink); }
+  .toc .row .n { font-family: var(--mono); font-weight: 500; font-size: 7.6pt; color: var(--blue); padding-top: 1.5pt; }
+  .toc .row .p { font-family: var(--mono); font-size: 7.6pt; color: var(--muted); text-align: right; padding-top: 1.5pt; }
+
+  /* ---- back cover ---------------------------------------------------- */
+  .back .bottom { position: absolute; left: 0.6in; right: 0.6in; bottom: 0.55in; border-top: 1px solid var(--rule); padding-top: 14pt; display: flex; justify-content: space-between; align-items: flex-end; }
+  .back .bottom .name { display: flex; align-items: center; gap: 7pt; font-family: var(--sans); font-weight: 700; font-size: 16pt; color: var(--ink); }
+  .back .bottom .k { font-family: var(--mono); font-weight: 500; font-size: 7pt; letter-spacing: 0.16em; text-transform: uppercase; color: var(--blue); margin-top: 6pt; }
+  .back .bottom .r { text-align: right; font-family: var(--mono); font-size: 6.8pt; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); line-height: 1.7; }
+</style>
+</head>
+<body>
+
+<!-- ================================================================ 1 -->
+<section class="page cover">
+  <div class="brand">
+    <div class="name"><svg width="26" height="26" viewBox="0 0 28 28" fill="none"><path d="M4 8 C8 5, 16 5, 24 8" stroke="#2d8cf0" stroke-width="2.2" stroke-linecap="round"/><path d="M4 14 C8 11, 16 11, 24 14" stroke="#2d8cf0" stroke-width="2.2" stroke-linecap="round"/><path d="M4 20 C8 17, 16 17, 24 20" stroke="#2d8cf0" stroke-width="2.2" stroke-linecap="round"/></svg>BlueSignal</div>
+    <div class="loc">Bee Cave, TX</div>
+  </div>
+  <div class="k1">Measure · Decide · Act · Report</div>
+  <div class="k2">WQM-1 · Installer Manual</div>
+  <h1 class="big">Install it once.<br><span class="b">Prove it whenever.</span></h1>
+  <p class="sub">Field manual for the WQM-1 water quality monitor &amp; controller — capabilities, terminals, wiring drawings, commissioning, and warranty. Written for BlueSignal-authorized installers and capable DIY builders.</p>
+  <div class="meta">
+    <div>Document WQM1-IM-100 · Rev H · September 2026<br>Single-line drawing set WQM1-SLD-000…003 included</div>
+    <div class="r">Six channels · Four relays · One board<br>bluesignal.xyz</div>
+  </div>
+  <div class="tag2">Stop guessing. Measure it.</div>
+</section>
+
+<!-- ================================================================ 2 -->
+<section class="page">
+  <div class="head"><span class="l">Contents</span><span class="r">cloud.bluesignal.xyz · WQM1-IM-100 · Rev H</span></div>
+  <h1>Contents.</h1>
+  <div class="toc">
+    <div class="row"><span class="n">00</span><span>Start here — crews, tools, install flow, quick reference</span><span class="p">3</span></div>
+    <div class="row"><span class="n">01</span><span>Product overview &amp; capabilities</span><span class="p">6</span></div>
+    <div class="row"><span class="n">02</span><span>Applications</span><span class="p">7</span></div>
+    <div class="row"><span class="n">03</span><span>Specifications</span><span class="p">7</span></div>
+    <div class="row"><span class="n">04</span><span>Board map — terminal &amp; connector reference</span><span class="p">9</span></div>
+    <div class="row"><span class="n">05</span><span>Safety</span><span class="p">10</span></div>
+    <div class="row"><span class="n">06</span><span>Installation methods</span><span class="p">11</span></div>
+    <div class="row"><span class="n">07</span><span>Power wiring · DWG WQM1-SLD-000</span><span class="p">13</span></div>
+    <div class="row"><span class="n">08</span><span>Sensor installation</span><span class="p">15</span></div>
+    <div class="row"><span class="n">09</span><span>Control wiring &amp; drawing set · SLD-001…003</span><span class="p">16</span></div>
+    <div class="row"><span class="n">10</span><span>Control applications &amp; recommended products</span><span class="p">20</span></div>
+    <div class="row"><span class="n">11</span><span>Power-up &amp; cloud activation</span><span class="p">21</span></div>
+    <div class="row"><span class="n">12</span><span>Calibration</span><span class="p">22</span></div>
+    <div class="row"><span class="n">13</span><span>Commissioning checklist</span><span class="p">23</span></div>
+    <div class="row"><span class="n">14</span><span>Troubleshooting &amp; support</span><span class="p">24</span></div>
+    <div class="row"><span class="n">15</span><span>Limited warranty</span><span class="p">25</span></div>
+    <div class="row"><span class="n">A</span><span>Appendix A — developer pin map &amp; compliance</span><span class="p">27, 35</span></div>
+    <div class="row"><span class="n">B</span><span>Appendix B — wire gauge, voltage drop &amp; antenna cable</span><span class="p">28</span></div>
+    <div class="row"><span class="n">C</span><span>Appendix C — mechanical envelope</span><span class="p">30</span></div>
+    <div class="row"><span class="n">D</span><span>Appendix D — site design sheet</span><span class="p">31</span></div>
+    <div class="row"><span class="n">E</span><span>Appendix E — commissioning record &amp; handover</span><span class="p">32</span></div>
+    <div class="row"><span class="n">F</span><span>Apéndice F — seguridad y lista de verificación (español)</span><span class="p">33</span></div>
+  </div>
+  <div class="callout">
+    <h3>Rev H</h3>
+    <p class="small">Correctness pass, not a redesign. <strong>ORP on the pH BNC removed</strong> — it was reintroduced in Rev G in error: PCBA Fin_3 has no analog ORP conditioning circuit and there is no pH/ORP mode switch in firmware or hardware; the BNC is pH only, and ORP is measured by the RS485 digital ORP probe (Section 08). Section 12 ORP-on-BNC calibration row deleted (ORP is calibrated on the RS485 probe); Appendix A AIN3 correctly described as reserved (it carries the pH front end's reference leg). <strong>Section 15 rewritten to the published warranty</strong> — board 90 days, probes 30 days, antennas and accessories 90 days; firmware licence stated as GPL-3.0 with source at the public repository; relay exclusion keyed to the Section 11 commissioning steps; limitation period two years per Tex. Civ. Prac. &amp; Rem. Code §16.070; response-time and RMA-clock promises removed. Section 07 notes the tolerated input range versus the install specification. Appendix B.1 18 AWG at 1 A corrected to 43 ft. SLD-001 note 6 conductor size removed. Appendix B.4 GPS arrestor wording made unambiguous. Apéndice F rule 04 carries the contactor-coil detail. Firmware v2.1.2.</p>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="2"></span></div>
+</section>
+
+<!-- ================================================================ 3 -->
+<section class="page">
+  <div class="head"><span class="l">Section 00 · Start here</span><span class="r">Voltage is the boundary</span></div>
+  <h1>Read this page,<br>save an hour on site.</h1>
+  <p class="lede">This manual serves two crews: professional installers wiring full control sites, and DIY builders running tanks, ponds, and wells on low-voltage only. The boundary between the two is voltage — and it's a hard line.</p>
+  <div class="cols">
+    <div class="panel"><h3>You can do this yourself</h3><p class="small">Mounting the enclosure and board · all sensor wiring · antennas · 24 V DC power from a listed Class-2 supply · 24 V DC control loads (dosing pumps, DC valves — SLD-000 / SLD-003 patterns) · cloud setup &amp; calibration</p></div>
+    <div class="panel"><h3>Licensed electrician only</h3><p class="small">Anything at 120/240 VAC: new branch circuits, panel work, line-voltage loads on CH3/CH4, contactors and well-pump circuits (SLD-001 AC portions, SLD-002). Per the NEC and most local codes, this is not optional.</p></div>
+  </div>
+  <h2>Who is allowed to do what (Texas)</h2>
+  <table class="t">
+    <thead><tr><th style="width:50%">Work</th><th>License required</th></tr></thead>
+    <tbody>
+      <tr><td>Water quality monitoring — mounting, probes, antennas, Class-2 24 V DC wiring, cloud setup, calibration</td><td>None. Monitoring is not a licensed trade in Texas.</td></tr>
+      <tr><td>Potable water piping and drainage — tapping supply lines, drains, cross-connection work</td><td>TSBPE-licensed plumber.</td></tr>
+      <tr><td>Irrigation systems — installing, servicing an existing system, or connecting to an irrigation controller</td><td>TCEQ-licensed irrigator. Unlicensed irrigation work — and advertising it — is prohibited.</td></tr>
+      <tr><td>Line voltage — 120/240 VAC branch circuits, panel work, contactors, well-pump circuits</td><td>Licensed electrician, as stated above.</td></tr>
+    </tbody>
+  </table>
+  <p class="tiny">Jurisdictional guidance, not legal advice. Requirements differ outside Texas — confirm with your local authority having jurisdiction before quoting work.</p>
+  <h2>Kit contents (verify against your packing list)</h2>
+  <p>WQM-1 controller · LoRa 915 MHz antenna · GPS antenna · sensor probes per order · quick-start card with claim QR. Enclosure, 24 V supply, and control-load hardware per order or sourced per Section 10.</p>
+  <h2>Tools &amp; materials</h2>
+  <div class="kv">
+    <div class="k">Tools</div><div class="v">PH1 screwdriver + 2.5 mm flat blade · wire strippers (12–26 AWG) · multimeter · drill + step bit for gland holes · ferrule crimper (recommended for stranded wire).</div>
+    <div class="k">Truck spares</div><div class="v">Spare pH electrode · pH 7.00 / 4.00 buffer sachets · conductivity standard · 3 A and 1 A fuses · MOV snubbers and 1N4007 diodes · spare 5.08 mm terminal plugs · SMA pigtail · ferrules and heat-shrink.</div>
+    <div class="k">Materials</div><div class="v">NEMA 4X enclosure + cable glands · listed 24 V DC 2 A Class-2 supply · pH 7.00 and 4.00 buffers + conductivity standard + distilled water · zip ties and drip-loop hardware · suppression parts for every inductive load (Section 09).</div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="3"></span></div>
+</section>
+
+<!-- ================================================================ 4 -->
+<section class="page">
+  <div class="head"><span class="l">Section 00 · Start here</span><span class="r">Voltage is the boundary</span></div>
+  <h1>The install, start to finish</h1>
+  <table class="t">
+    <thead><tr><th style="width:36pt">Step</th><th>Do</th><th style="width:1.5in">Section</th></tr></thead>
+    <tbody>
+      <tr><td class="n">01</td><td>Survey the site; pick enclosure, probe, and antenna locations</td><td class="k">06</td></tr>
+      <tr><td class="n">02</td><td>Mount enclosure and board — power stays OFF</td><td class="k">06</td></tr>
+      <tr><td class="n">03</td><td>Wire 24 V DC power (do not energize)</td><td class="k">07 · SLD-000</td></tr>
+      <tr><td class="n">04</td><td>Install and wire sensors; route away from power</td><td class="k">08</td></tr>
+      <tr><td class="n">05</td><td>Wire control loads — electrician for anything AC</td><td class="k">09–10 · SLD-001…003</td></tr>
+      <tr><td class="n">06</td><td>Connect both antennas — LoRa before power, always</td><td class="k">08</td></tr>
+      <tr><td class="n">07</td><td>Energize · claim to cloud · verify uplink + GPS</td><td class="k">11</td></tr>
+      <tr><td class="n">08</td><td>Calibrate pH, TDS, turbidity</td><td class="k">12</td></tr>
+      <tr><td class="n">09</td><td>Run the commissioning checklist; photo; hand off</td><td class="k">13</td></tr>
+    </tbody>
+  </table>
+  <div class="cols mt12">
+    <div class="stat"><div class="v">2.5–3.5 h</div><div class="l">Typical first install</div></div>
+    <div class="stat"><div class="v">~90 min</div><div class="l">Repeat installs · standard channel map</div></div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="4"></span></div>
+</section>
+
+<!-- ================================================================ 5 -->
+<section class="page">
+  <div class="head"><span class="l">Section 00 · Quick reference</span><span class="r">Tape this page inside the truck</span></div>
+  <h1>Wiring quick reference.</h1>
+  <table class="t compact">
+    <thead><tr><th>Connection</th><th>Accepts</th><th>Strip / torque</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="k">VIN</td><td>5.08 mm screw, 18–12 AWG (ferrules recommended)</td><td>6–7 mm · 0.4–0.5 N·m</td><td>Verify polarity with a meter before energizing</td></tr>
+      <tr><td class="k">NC·COM·NO ×4</td><td>5.08 mm screw, 18–12 AWG per load circuit</td><td>6–7 mm · 0.4–0.5 N·m</td><td>Dry contacts — the load's own supply passes through</td></tr>
+      <tr><td class="k">Sensor headers (JST-XH)</td><td>Pre-terminated latching plugs</td><td>no tools</td><td>Push until the latch clicks; pull the housing, never the wires</td></tr>
+      <tr><td class="k">PH BNC</td><td>pH electrode connector</td><td>push + quarter-twist</td><td>No splices; keep clear of power wiring</td></tr>
+      <tr><td class="k">GPS / LoRa SMA</td><td>Antenna cables</td><td>finger-tight + 1/8 turn</td><td>Never energize with the LoRa antenna disconnected</td></tr>
+    </tbody>
+  </table>
+  <div class="cols3">
+    <div class="stat"><div class="l">NO contact</div><div class="v" style="font-size:12pt;margin-top:4pt">10 A @ 250 VAC · 5 A @ 30 VDC</div></div>
+    <div class="stat"><div class="l">NC contact · fail-safe</div><div class="v" style="font-size:12pt;margin-top:4pt">3 A max</div></div>
+    <div class="stat"><div class="l">pH lead</div><div class="v" style="font-size:12pt;margin-top:4pt">5 m max · no splices</div></div>
+  </div>
+  <h2>Status LEDs (silkscreen PWR · STA1–STA4 · firmware v2.x)</h2>
+  <table class="t compact">
+    <tbody>
+      <tr><td class="k" style="width:50pt">STA1</td><td>Heartbeat — 1 Hz blink means firmware is alive and sampling</td></tr>
+      <tr><td class="k">STA2</td><td>LoRa — lights during each uplink</td></tr>
+      <tr><td class="k">STA3</td><td>GPS — lights while attempting a fix</td></tr>
+      <tr><td class="k">STA4</td><td>Fault — blinks on a sensor/system fault; details on the dashboard</td></tr>
+    </tbody>
+  </table>
+  <p class="small">PWR is a rail indicator only — it lights whenever 3.3 V is present, firmware running or not. There is no relay/alarm LED: a steady STA1 heartbeat is your real power-good.</p>
+  <h2>Ten terms, ten seconds</h2>
+  <table class="t compact">
+    <tbody>
+      <tr><td class="k" style="width:1.05in">Dry contact</td><td>A switch with no power of its own — the load's supply passes through it</td></tr>
+      <tr><td class="k">NO / NC / COM</td><td>Normally Open / Normally Closed / Common. COM → NO closes when the relay fires; COM → NC opens</td></tr>
+      <tr><td class="k">Fail-safe (NC)</td><td>Load wired ON by default, so a dead controller leaves it running — 3 A max on NC</td></tr>
+      <tr><td class="k">Class 2</td><td>NEC low-voltage, power-limited circuit (our 24 V DC side) — safe for non-electricians</td></tr>
+      <tr><td class="k">EGC</td><td>Equipment grounding conductor — the green safety ground</td></tr>
+      <tr><td class="k">Contactor</td><td>A heavy relay: the WQM-1 switches its small coil, it switches the big motor</td></tr>
+      <tr><td class="k">Suppression</td><td>MOV/snubber (AC) or flyback diode (DC) across a load — absorbs the switch-off spike</td></tr>
+      <tr><td class="k">Deadband</td><td>Gap between on and off setpoints so equipment doesn't rapid-cycle</td></tr>
+      <tr><td class="k">Flow cell</td><td>Small chamber that lets probes read pressurized/flowing water and be serviced in place</td></tr>
+      <tr><td class="k">LoRaWAN</td><td>Long-range low-power radio — kilometers of range, no Wi-Fi or cell plan</td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="5"></span></div>
+</section>
+
+<!-- ================================================================ 6 -->
+<section class="page">
+  <div class="head"><span class="l">Section 01 · What it is</span><span class="r">bluesignal.xyz</span></div>
+  <h1>One box that watches the water — <span class="b">and acts on it.</span></h1>
+  <p class="lede">The BlueSignal WQM-1 is a professional water quality monitoring and control unit. It measures the water, decides against your setpoints, acts through four relay outputs, and reports everything — timestamped and geotagged — to the BlueSignal Cloud. One box, one 24 V feed, one antenna mast. No PLC, no panel PC, no programming: control rules are configured from the dashboard.</p>
+  <h2>What it measures</h2>
+  <table class="t compact">
+    <thead><tr><th style="width:1.2in">Channel</th><th>Sensor / input</th><th style="width:1.9in">Typical use</th></tr></thead>
+    <tbody>
+      <tr><td class="k">pH</td><td>Standard BNC electrode via precision guarded analog front end (LMP91200). The BNC is a pH input — ORP is measured by the RS485 digital probe below</td><td>Acidity</td></tr>
+      <tr><td class="k">TDS / conductivity</td><td>Two-electrode probe, AC-excited (no electrode polarization)</td><td>Dissolved solids, salinity, RO performance</td></tr>
+      <tr><td class="k">Turbidity</td><td>Optical probe (5 V, LED drive, 0–4.5 V analog)</td><td>Clarity, sediment, filtration performance</td></tr>
+      <tr><td class="k">Temperature</td><td>Two 1-Wire ports (DS18B20-compatible)</td><td>Water + ambient, or two vessels</td></tr>
+      <tr><td class="k">Location</td><td>Onboard GPS (u-blox MAX-M10S)</td><td>Geotagged, compliance-grade records</td></tr>
+      <tr><td class="k">Chlorine · EC/salinity · ORP</td><td>Optional BlueSignal-supplied RS485 digital probes on a shared Modbus bus (Section 08) — the ORP measurement lives here, alongside pH on the BNC</td><td>Chlorine residual, salinity, oxidation-reduction potential for disinfection</td></tr>
+      <tr><td class="k">Expansion</td><td>ESD-protected I²C port · RS485/Modbus probe bus</td><td>Add-on sensors &amp; modules</td></tr>
+    </tbody>
+  </table>
+  <h2>What it does with the data</h2>
+  <ol class="steps">
+    <li><strong>Logs locally first</strong> — every reading is written to onboard storage (SQLite, write-ahead logging). A network outage never loses data; readings backfill automatically.</li>
+    <li><strong>Transmits over LoRaWAN</strong> — 915 MHz long-range radio, AES-128 encrypted, up to 15 km line-of-sight. No Wi-Fi, no cellular contract, no site IT dependency.</li>
+    <li><strong>Controls equipment</strong> — four independent relay outputs (NO: 10 A AC / 5 A DC · NC: 3 A) switch dosing pumps, valves, aerators, sterilizers, and alarms against cloud-configured rules (setpoint, deadband, schedule, timeout). Relay-based control is a separately priced tier with its own terms — see Section 11.</li>
+    <li><strong>Reports to cloud.bluesignal.xyz</strong> — live dashboard, alerting, exportable compliance records. Wi-Fi and LoRa units run free on the Hobbyist tier (one device); LTE units include 90 days, then a paid plan (Section 11).</li>
+  </ol>
+  <div class="cols4 mt8">
+    <div class="stat"><div class="v">6</div><div class="l">Sensor channels</div></div>
+    <div class="stat"><div class="v">4</div><div class="l">Relay outputs</div></div>
+    <div class="stat"><div class="v">15 km</div><div class="l">LoRa range, line-of-sight</div></div>
+    <div class="stat"><div class="v">60 s</div><div class="l">Default sampling interval</div></div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="6"></span></div>
+</section>
+
+<!-- ================================================================ 7 -->
+<section class="page">
+  <div class="head"><span class="l">Sections 02–03 · Where it lives · The numbers</span><span class="r">Full datasheet online — bluesignal.xyz</span></div>
+  <h1>Applications.</h1>
+  <table class="t compact">
+    <thead><tr><th style="width:1.55in">Application</th><th>Monitor</th><th>Control (typical)</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Storage tanks &amp; cisterns <span class="tag">Primary</span></td><td>pH, TDS, turbidity, temperature of stored water</td><td>Fill/drain/divert valves, dosing, recirculation, contamination lockout</td></tr>
+      <tr><td class="k">Rainwater harvesting</td><td>Treated water quality verification</td><td>First-flush diverter, UV sterilizer, pump interlock</td></tr>
+      <tr><td class="k">Aquaculture tanks &amp; ponds</td><td>pH, temperature, solids for stock protection</td><td>Aeration blowers, dosing pumps, excursion alarm</td></tr>
+      <tr><td class="k">Residential &amp; agricultural wells</td><td>Water quality at the pressure tank</td><td>Well pump shutoff / diversion via contactor</td></tr>
+      <tr><td class="k">Stormwater / MS4 compliance</td><td>Continuous logged outfall monitoring</td><td>Sampler trigger, alarm output</td></tr>
+      <tr><td class="k">Atmospheric water generation &amp; reuse</td><td>Production water verification</td><td>Off-spec diversion valve, polish loop</td></tr>
+    </tbody>
+  </table>
+  <h1 style="margin-top:14pt">Specifications.</h1>
+  <table class="t compact">
+    <thead><tr><th style="width:1.3in">Parameter</th><th>Specification</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Sampling / sync</td><td>All channels every 60 s by default (cloud-configurable 5–3600 s) · LoRa uplink every 5 min · cloud sync every 5 min</td></tr>
+      <tr><td class="k">Input power</td><td>24 V DC nominal; onboard resettable fuse (PTC), 40 V TVS surge clamp, Schottky reverse-polarity protection</td></tr>
+      <tr><td class="k">Internal rails</td><td>5 V @ 4 A (compute) · automotive-qualified 6.5 V pre-regulator feeding low-noise ±3.0 V and 5.0 V analog rails · 3.3 V logic — all onboard</td></tr>
+      <tr><td class="k">Compute</td><td>Raspberry Pi Zero 2W on 40-pin header — full analog + LoRa + relay I/O · digital-first option: Arduino UNO Q / VENTUNO Q (RS485 probes + USB GPS + Wi-Fi sync; analog, LoRa, and relays require the Pi) · local SQLite (WAL) buffering</td></tr>
+      <tr><td class="k">ADC</td><td>ADS1115-Q1, 16-bit, I²C — AEC-Q100 automotive-qualified</td></tr>
+      <tr><td class="k">pH front end</td><td>LMP91200 guarded high-impedance AFE with 2.048 V precision reference (REF3020) — accepts a standard pH electrode on the BNC. ORP is not measured on the BNC; use the RS485 digital ORP probe (Section 08)</td></tr>
+      <tr><td class="k">Relay outputs</td><td>4× SPDT (Omron G5Q-14) — NO: 10 A @ 250 VAC · 5 A @ 30 VDC; NC: 3 A. Optically isolated, 5.08 mm screw terminals</td></tr>
+      <tr><td class="k">Radio</td><td>LoRa 915 MHz (SX1262, TCXO), SMA antenna, AES-128 LoRaWAN, up to 15 km LOS</td></tr>
+      <tr><td class="k">GPS</td><td>u-blox MAX-M10S, SMA antenna</td></tr>
+      <tr><td class="k">RS485 expansion</td><td>Optional third-party digital probes (Modbus RTU), supplied by BlueSignal, via supplied RS485 → USB adapter · 12 V probe power from the unit rail · data over USB</td></tr>
+      <tr><td class="k">Cooling / indicators</td><td>Software-controlled 5 V fan header · rail LED (PWR) + 4 status LEDs (STA1–STA4) — heartbeat · LoRa · GPS · fault</td></tr>
+      <tr><td class="k">Board / environment</td><td>120 mm × 105 mm, 4× M3 mounts · enclosure-mounted; NEMA 4X / IP65 enclosure required outdoors</td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="7"></span></div>
+</section>
+
+<!-- ================================================================ 8 -->
+<section class="page">
+  <div class="head"><span class="l">Section 04 · Know the board</span><span class="r">PCBA Rev Fin_3</span></div>
+  <p class="fig-cap">Fig 4.1 — WQM-1 PCBA as shipped · numbered callouts keyed at right</p>
+  <div style="display:grid;grid-template-columns:1fr 1.85in;gap:16pt;align-items:start">
+    <div style="border:1px solid var(--rule);border-radius:6pt;overflow:hidden;background:#fff"><img src="assets/fig-4-1-pcba.png" alt="WQM-1 PCBA Fin_3 with numbered callouts" style="width:100%;display:block"></div>
+    <div>
+      <h3 class="mt0">Callouts</h3>
+      <table class="t compact" style="margin-top:2pt">
+        <tbody>
+          <tr><td class="n" style="width:16pt">01</td><td>VIN 24 V DC input · P1, 2-pos 5.08 mm</td></tr>
+          <tr><td class="n">02</td><td>FAN 5 V header · CN8</td></tr>
+          <tr><td class="n">03</td><td>Relay terminals NC·COM·NO ×4 · CN1/CN2/CN4/CN5</td></tr>
+          <tr><td class="n">04</td><td>Relay channels CH1–CH4 · Omron G5Q-14</td></tr>
+          <tr><td class="n">05</td><td>Optoisolators LTV-354T (channel isolation)</td></tr>
+          <tr><td class="n">06</td><td>Status LEDs — PWR · STA1–STA4</td></tr>
+          <tr><td class="n">07</td><td>40-pin compute header · P2, Pi mounted under</td></tr>
+          <tr><td class="n">08</td><td>GPIO breakout P3 · I²C PWR Select jumpers</td></tr>
+          <tr><td class="n">09</td><td>GPS · SMA (u-blox MAX-M10S)</td></tr>
+          <tr><td class="n">10</td><td>LoRa 915 MHz · SMA (SX1262 TCXO)</td></tr>
+          <tr><td class="n">11</td><td>pH · BNC</td></tr>
+          <tr><td class="n">12</td><td>Sensor headers — I²C · 1-Wire ×2 · TDS · turbidity</td></tr>
+        </tbody>
+      </table>
+      <p class="tiny mono" style="margin-top:8pt;letter-spacing:.08em;text-transform:uppercase">120 mm × 105 mm<br>4× M3 mounts<br>Connectors down in enclosure</p>
+    </div>
+  </div>
+  <div class="cols4 mt12">
+    <div class="stat"><div class="l">Top edge</div><p class="small" style="margin:4pt 0 0">VIN · relay terminals ×4</p></div>
+    <div class="stat"><div class="l">Bottom edge</div><p class="small" style="margin:4pt 0 0">Sensor headers — I²C · 1-Wire ×2 · TDS · turbidity</p></div>
+    <div class="stat"><div class="l">Right edge</div><p class="small" style="margin:4pt 0 0">GPS SMA · LoRa SMA · pH BNC</p></div>
+    <div class="stat"><div class="l">Left edge</div><p class="small" style="margin:4pt 0 0">FAN 5V · compute module USB (bench use only)</p></div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="8"></span></div>
+</section>
+
+<!-- ================================================================ 9 -->
+<section class="page">
+  <div class="head"><span class="l">Section 04 · Board map</span><span class="r">PCBA Rev Fin_3</span></div>
+  <h1>Board map — every terminal, on the real board.</h1>
+  <table class="t compact">
+    <thead><tr><th style="width:18pt">#</th><th style="width:1.35in">Marking</th><th style="width:1.15in">Function</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="n">01</td><td class="k">VIN / GND · P1</td><td>24 V DC power input</td><td>PTC resettable fuse, 40 V TVS clamp (SMCJ40CA), Schottky reverse-polarity diode. Fuse the feed at 3 A at the supply.</td></tr>
+      <tr><td class="n">02</td><td class="k">FAN 5V · CN8</td><td>Enclosure fan</td><td>Software-controlled. Observe polarity.</td></tr>
+      <tr><td class="n">03</td><td class="k">NC·COM·NO ×4 · CN1/2/4/5</td><td>Relay contact terminals</td><td>SPDT dry — NO: 10 A AC / 5 A DC · NC: 3 A. Drawing set, Section 09.</td></tr>
+      <tr><td class="n">04</td><td class="k">CH1 – CH4</td><td>Relay channels</td><td>Ships inert — example map: CH1 dosing · CH2 dosing/valve · CH3 aeration · CH4 flush/alarm (Section 09).</td></tr>
+      <tr><td class="n">05</td><td class="k">—</td><td>Optoisolators</td><td>LTV-354T optocouplers — full isolation between logic and relay drive.</td></tr>
+      <tr><td class="n">06</td><td class="k">PWR · STA1–STA4</td><td>Status LEDs</td><td>PWR is a rail indicator; STA1 Heartbeat · STA2 LoRa · STA3 GPS · STA4 Fault (Section 00).</td></tr>
+      <tr><td class="n">07</td><td class="k">40-pin header · P2</td><td>Compute module</td><td>Factory-fitted Raspberry Pi. Pin map in Appendix A.</td></tr>
+      <tr><td class="n">08</td><td class="k">P3 · I2C PWR Select</td><td>GPIO breakout</td><td>Developer access — spare GPIO for custom integrations. Adjacent jumpers select the I²C rail (3V3 or +5V), level-translated by PCA9306.</td></tr>
+      <tr><td class="n">09</td><td class="k">GPS SMA</td><td>GPS antenna</td><td>Needs open sky view.</td></tr>
+      <tr><td class="n">10</td><td class="k">LoRa SMA</td><td>915 MHz antenna</td><td>Never power up with the LoRa antenna disconnected.</td></tr>
+      <tr><td class="n">11</td><td class="k">PH BNC</td><td>pH electrode</td><td>High-impedance — never splice; keep clear of power wiring. pH only: there is no ORP mode on this input (Section 08 for ORP).</td></tr>
+      <tr><td class="n">12</td><td class="k">CN3 · J3 / J4 · CN6 · J1</td><td>Sensor terminals</td><td>CN3 I²C expansion (4-pin, ESD-protected) · J3 / J4 1-Wire temperature ×2 · CN6 TDS (2-pin, 0–2.3 V) · J1 turbidity (3-pin, 0–4.5 V).</td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="9"></span></div>
+</section>
+
+<!-- ================================================================ 10 -->
+<section class="page">
+  <div class="head"><span class="l">Section 05 · Read first</span><span class="r">NEC + local code govern</span></div>
+  <h1>Safety.</h1>
+  <ol class="steps">
+    <li><strong>Disconnect all power</strong> — the 24 V DC supply AND any line voltage at the relay terminals — before opening the enclosure.</li>
+    <li>Relay terminals may carry up to 250 VAC. Treat as live until verified with a meter. Line-voltage wiring must be performed by a licensed electrician per the NEC and local code.</li>
+    <li>Never exceed 10 A AC / 5 A DC on NO contacts, or 3 A on NC contacts. Motors above roughly 1/3 HP go through an external contactor (DWG WQM1-SLD-002).</li>
+    <li>Outdoor or wet locations require a NEMA 4X enclosure. The board is not sealed. Metallic enclosures must be bonded to the equipment grounding conductor.</li>
+    <li>Chemical dosing: follow the chemical supplier's containment and injection-point instructions, and always configure a dosing timeout in the cloud.</li>
+    <li>Do not power the unit with the LoRa antenna disconnected — this can damage the radio.</li>
+    <li><strong>Life-critical loads are wired fail-safe (NC). This is a rule, not an option.</strong> Any load whose loss kills stock — aeration, circulation — must be wired through NC, so that a dead controller, a crashed compute module, or a lost supply leaves the load RUNNING. Where load current exceeds the 3 A NC rating, switch a contactor coil through NC rather than the load itself (DWG WQM1-SLD-002).</li>
+    <li><strong>Control decisions execute on-device.</strong> The cloud is supervisory only and is never in the actuation path. Do not design or expect cloud-dependent control: if the link drops, on-device rules and fail-safe states continue to govern.</li>
+  </ol>
+  <div class="panel">
+    <h3>Hard rules</h3>
+    <p>Dry contacts only · suppression on every inductive load · contactor for every motor over 1/3 HP · Class 2 DC wiring kept out of line-voltage raceways · life-critical loads on NC · never place the cloud in the actuation path. Every one of these is also a warranty condition (Section 15).</p>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="10"></span></div>
+</section>
+
+<!-- ================================================================ 11 -->
+<section class="page">
+  <div class="head"><span class="l">Section 06 · In the field</span><span class="r">Photo every enclosure before closing</span></div>
+  <h1>Installation methods.</h1>
+  <p>Fundamentals for every install: NEMA 4X enclosure outdoors · board on M3 standoffs, connectors down · antennas outside the enclosure (LoRa vertical and high, GPS with sky view) · drip loops on every cable · interior photo uploaded to the site record before closing up.</p>
+  <h2><span class="n">6.1</span>Tank / cistern (standard install)</h2>
+  <ol class="plain">
+    <li>Mount the enclosure on the tank stand or adjacent wall, above the high-water line.</li>
+    <li>Suspend probes at mid-depth, 300 mm minimum from walls and inlets, on a probe rack or weighted tether. The pH electrode must never be left dry on drawdown — mount below the low-water line or use a flow cell.</li>
+    <li>Typical control: CH1 dosing pump at the inlet · CH2 motorized fill/divert valve · CH4 alarm.</li>
+  </ol>
+  <h2><span class="n">6.2</span>Well / pressure tank (flow-cell install)</h2>
+  <ol class="plain">
+    <li>Install a flow cell (or tee manifold) on a branch off the pressure-tank outlet with isolation valves, so probes see flowing water and can be serviced without depressurizing.</li>
+    <li>Keep the pH cable run under 5 m.</li>
+    <li>Typical control: CH4 to a contactor in the well-pump circuit for out-of-spec shutoff · CH2 diversion valve.</li>
+  </ol>
+  <h2><span class="n">6.3</span>Aquaculture tank / pond</h2>
+  <ol class="plain">
+    <li>Mount the enclosure on a post at the pond edge or tank rail, out of splash.</li>
+    <li>Deploy probes off a float or fixed rack in circulating water — never the settling zone. Shade the turbidity probe; keep it clear of aeration bubbles.</li>
+    <li>Typical control: CH3 aeration blower — wired fail-safe through NC per Section 05; above 3 A switch a contactor coil through NC, not the blower itself · CH1 dosing · CH4 stock-protection alarm.</li>
+  </ol>
+  <div class="callout">
+    <h3>Aeration is not a DO safeguard</h3>
+    <p class="small">Temperature- and schedule-driven aeration is a baseline runtime strategy, not dissolved-oxygen protection. Temperature is a weak proxy for DO: a pond can sag to lethal dissolved oxygen at dawn while temperature still reads normal. DO-critical operations require independent dissolved-oxygen monitoring and alarming. Because aeration is wired fail-safe, the failure mode to guard against is a rule that switches aeration off — never issue an aeration-off command on temperature alone, and always configure a dwell time and deadband.</p>
+  </div>
+  <h2><span class="n">6.4</span>Freeze &amp; seasonal care</h2>
+  <p class="small">Texas freezes are infrequent and severe — the February 2021 event destroyed a great deal of outdoor water instrumentation. Plan for it at install, not in December.</p>
+  <div class="kv">
+    <div class="k">pH &amp; RS485 probes</div><div class="v">The glass bulb and reference junction crack when the fill solution freezes. Below freezing, either keep the probe in moving water (which resists freezing) or pull it, cap it wet with storage solution, and store above 4 °C. A probe frozen dry is a replacement, not a recalibration.</div>
+    <div class="k">Flow cells</div><div class="v">Drain or heat-trace any flow cell that can be isolated from flow. A frozen flow cell splits and floods the enclosure.</div>
+    <div class="k">Enclosure</div><div class="v">The board tolerates cold better than the probes, but condensation on thaw is the real risk. Fit a vent/drain plug at the low point and keep glands downward-facing.</div>
+    <div class="k">Aeration on freeze</div><div class="v">If aeration is used for de-icing, remember it is wired fail-safe NC (Section 05) — it runs on controller loss, which is the behavior you want in a freeze.</div>
+    <div class="k">Warranty</div><div class="v">Freeze damage to probes is normal seasonal exposure, not a defect (Section 15). Tell the customer at handoff.</div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="11"></span></div>
+</section>
+
+<!-- ================================================================ 12 -->
+<section class="page">
+  <div class="head"><span class="l">Section 06 · Installation</span><span class="r">Photo every enclosure before closing</span></div>
+  <h2 class="mt0"><span class="n">6.5</span>Distributed sites — when to add a second WQM-1</h2>
+  <p>Copper has a hard ceiling. With 12 AWG (the largest wire the terminals accept) at 3% drop, a 24 VDC load tops out around 180 ft at 1 A and 90 ft at 2 A. Line-voltage loads reach further, but past roughly 60–125 ft the installed cost of trench and conduit exceeds the cost of a second unit. Beyond those limits, put a second WQM-1 at the load and link the two over LoRa instead of pulling wire.</p>
+  <div class="callout">
+    <h3>A second unit is not a remote relay</h3>
+    <p class="small">Each WQM-1 must sense locally and decide locally. Section 05 requires that control decisions execute on-device with no network in the actuation path; that rule does not stop applying because the network is LoRa instead of the internet. A remote unit therefore needs its own probe for the parameter that drives its channel. Never wire an installation where unit A reads the water and unit B switches the load on A's command.</p>
+  </div>
+  <table class="t compact">
+    <thead><tr><th style="width:1.9in">Situation</th><th style="width:1.6in">Solution</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Load within copper limits (App. B), same vessel</td><td class="ink">One unit</td><td>Simplest; one probe set, one subscription.</td></tr>
+      <tr><td>Load beyond copper limits, but driven by the same water body</td><td class="ink">Second unit with its own probe</td><td>The remote unit measures the same vessel at its own location and decides independently.</td></tr>
+      <tr><td>Second tank, pond, or wellhead with its own water</td><td class="ink">Second unit</td><td>Different water needs its own measurement regardless of distance.</td></tr>
+      <tr><td>Remote load, no local power available</td><td class="ink">Copper, or relocate the load</td><td>A unit needs 24 VDC. If you must trench for power anyway, run control with it.</td></tr>
+      <tr><td>Life-critical load (aeration, circulation) at distance</td><td class="ink">Second unit, local probe, NC wiring</td><td>Never place a radio link between the condition and the load that protects stock.</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Commissioning a multi-unit site: claim each unit to the same site record, run the Section 13 checklist per unit, and test-fire each unit's channels independently. Each unit carries its own control-tier subscription. Cross-unit visibility is a dashboard and alerting feature — it is not a control path.</p>
+  <h2><span class="n">6.6</span>Stormwater / MS4 outfall</h2>
+  <ol class="plain">
+    <li>Mount above the design flood elevation; use a solar + battery 24 V supply where grid power is unavailable.</li>
+    <li>Secure probes in the low-flow channel with a stainless guard; the GPS fix provides the location record for MS4 reporting.</li>
+    <li>Typical control: CH4 auto-sampler trigger or telemetry alarm.</li>
+  </ol>
+  <h2><span class="n">6.7</span>Atmospheric water generation / reuse</h2>
+  <ol class="plain">
+    <li>Install probes in the product-water line via flow cell, downstream of final treatment.</li>
+    <li>Typical control: CH2 three-way diversion valve returning off-spec water to treatment · CH3 polish/UV loop.</li>
+  </ol>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="12"></span></div>
+</section>
+
+<!-- ================================================================ 13 -->
+<section class="page">
+  <div class="head"><span class="l">Section 07 · Feed it right</span><span class="r">Verify polarity before energizing</span></div>
+  <h1>Power wiring.</h1>
+  <ol class="steps">
+    <li>Confirm the supply is 24 V DC, 2 A minimum, and OFF.</li>
+    <li>Wire + and − to the VIN terminal. 18 AWG minimum; fuse at 3 A at the supply end; keep DC runs under 10 m or upsize.</li>
+    <li>Verify polarity with a meter before energizing — the input is protected, but do not rely on it.</li>
+    <li>Optional: connect a 5 V enclosure fan to FAN 5V for hot locations.</li>
+    <li>Do not energize until sensor, antenna, and relay wiring are complete.</li>
+  </ol>
+  <div class="callout">
+    <h3>Over-voltage</h3>
+    <p class="small">VIN is 24 V DC nominal. Over-voltage is the failure mode that kills boards — a mis-set bench supply or an unregulated “24 V” brick that idles high. Use a regulated, listed supply and meter it before connecting. Powering the compute module from its own USB connector is for bench work only and does not substitute for VIN. The board <em>tolerates</em> a wider input range than the 24 V DC it is specified to be installed with — the published warranty page states that tolerated range (9–24 V DC), and it reaches below 24 V only because the compute module's USB input is used on the bench. That is not a conflict: this section specifies what to install, the warranty states what the board survives.</p>
+  </div>
+  <h2><span class="n">7.1</span>Grounding, bonding &amp; surge protection</h2>
+  <p class="small">An elevated LoRa antenna is a lightning collector wired directly to the radio. In Central Texas this is the most common cause of unexplained radio failure, and surge damage is excluded from warranty (Section 15) — so the protection below is not optional advice, it is how the installation stays covered.</p>
+  <table class="t compact">
+    <thead><tr><th style="width:1.3in">Element</th><th>Requirement</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Mast / pole bonding</td><td>Bond any metallic mast, pole, or tank stand carrying the antenna to the grounding electrode system with 6 AWG CU minimum, run as straight and short as practical. Avoid sharp bends — surge does not turn corners well.</td></tr>
+      <tr><td class="k">Grounding electrode</td><td>Where no electrode is within reach (pond edge, remote outfall), drive a 5/8″ × 8 ft ground rod at the mast base and bond it back to the building's grounding electrode system per NEC 250.50 and 250.53. Two rods 6 ft apart where soil resistivity is poor. Never create an isolated ground — a second unbonded electrode makes things worse, not better.</td></tr>
+      <tr><td class="k">LoRa antenna arrestor</td><td>Install a bulkhead gas-discharge-tube coaxial arrestor (SMA, 915 MHz rated) where the feedline enters the enclosure. Bond the arrestor body to the mast ground with 6 AWG. Budget its ~0.3 dB against the 3 dB loss limit in Appendix B.</td></tr>
+      <tr><td class="k">GPS antenna arrestor</td><td>Must be a DC-passing type. The GPS port feeds bias voltage up the coax to the active antenna, and a standard DC-blocking arrestor will kill the antenna. Verify DC continuity before energizing.</td></tr>
+      <tr><td class="k">24 VDC supply side</td><td>Fit a surge protective device at the panel feeding the Class 2 supply. Onboard TVS handles transients, not a direct or nearby strike.</td></tr>
+      <tr><td class="k">Enclosure</td><td>Bond metallic enclosures to the equipment grounding conductor. Keep the antenna ground path and the EGC bonded to the same system — never to separate electrodes.</td></tr>
+    </tbody>
+  </table>
+  <div class="panel">
+    <h3>Single-point ground</h3>
+    <p class="small">Every ground in the installation (enclosure, mast, arrestors, PSU EGC) must land on one bonded system. Separate ground electrodes at different potentials will drive surge current through the board looking for the lower path. This is the failure mode that destroys otherwise-healthy units.</p>
+  </div>
+  <p class="tiny">Grounding and bonding at line voltage is licensed-electrician work (Section 00). Have the grounding scheme reviewed as part of the electrical inspection.</p>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="13"></span></div>
+</section>
+
+<!-- ================================================================ 14 -->
+<section class="page">
+  <div class="head"><span class="l">Section 07 · DWG WQM1-SLD-000</span><span class="r">Branch circuit → Class 2 supply → VIN · NTS</span></div>
+  <img class="dwg" src="assets/sld-000.png" alt="WQM1-SLD-000 — 24 VDC power detail">
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="14"></span></div>
+</section>
+
+<!-- ================================================================ 15 -->
+<section class="page">
+  <div class="head"><span class="l">Section 08 · Probes in the water</span><span class="r">Six channels · one board</span></div>
+  <h1>Sensor installation.</h1>
+  <table class="t compact">
+    <thead><tr><th style="width:1.6in">Sensor</th><th>Installation</th></tr></thead>
+    <tbody>
+      <tr><td class="k">pH BNC · RF1</td><td>Accepts a standard pH electrode. Push-and-twist the electrode BNC. Route away from power and relay wiring. Do not splice or extend beyond 5 m without a preamp. Keep the electrode wet for life. The BNC is pH only — there is no ORP mode to select; ORP is an RS485 digital probe (below).</td></tr>
+      <tr><td class="k">TDS OUT/IN · CN6</td><td>Two wires, no polarity. Strip 7 mm, ferrule recommended, terminal screws snug.</td></tr>
+      <tr><td class="k">Turbidity 5V/LED/IN · J1</td><td>Match wire colors to the probe datasheet. Shade the probe; keep clear of bubbles and reflective surfaces.</td></tr>
+      <tr><td class="k">Temperature GND/3V3/1W · J3 / J4</td><td>Wiring order matters — verify against probe leads. Two ports; multiple probes may share a port.</td></tr>
+      <tr><td class="k">Antennas · RF2 / RF3</td><td>GPS to the upper SMA, LoRa to the lower SMA. Both mounted outside the enclosure (or use polycarbonate).</td></tr>
+      <tr><td class="k">Placement</td><td>Probes in representative, moving water; immersion to the marked line; drip loops before every gland.</td></tr>
+    </tbody>
+  </table>
+  <h2>RS485 digital probe expansion (optional)</h2>
+  <p class="small">Optional third-party digital probes, supplied by BlueSignal, share one Modbus bus through the supplied RS485 → USB adapter — data over USB, 12 V probe power from the unit's rail. This bus is where ORP is measured on the WQM-1: fit the digital ORP probe when a site needs oxidation-reduction potential, and it runs alongside pH on the BNC.</p>
+  <table class="t compact">
+    <thead><tr><th style="width:1.4in">Probe</th><th>Range / notes</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Residual chlorine</td><td>0–20 mg/L · flow cell at 15–30 L/h · guided zero/slope calibration · recalibrate every 30–60 days · activate in 3M KCl</td></tr>
+      <tr><td class="k">Digital ORP probe</td><td>±1999 mV · the ORP measurement on the WQM-1 — runs alongside pH on the BNC</td></tr>
+      <tr><td class="k">5-in-1 probe</td><td>pH · EC 0–10,000 µS/cm · TDS · salinity 0–8 ppt · temperature, in one probe · pH buffers 4.01/6.86/9.18 via the Service Window wizard</td></tr>
+    </tbody>
+  </table>
+  <p class="tiny">No dissolved-oxygen probe is qualified for the RS485 bus at this revision. Where DO is life-critical, install independent DO monitoring and alarming — see Section 06.3.</p>
+  <div class="cols">
+    <div class="panel"><h3>Bus discipline</h3><p class="small">Probes ship at Modbus address 1: add them one at a time via Service Window → RS485 Sensors → Scan/Add. Wiring: A yellow · B green · 12 V red (unit rail) · GND black. I²C add-on modules land on CN3, jumper-selected 3V3 or +5V.</p></div>
+    <div class="panel"><h3>Cable discipline</h3><p class="small">Sensor leads are signal wiring. Never bundle them with relay or line-voltage conductors; cross at 90° where paths must meet. The pH BNC lead is the most sensitive conductor on the site.</p></div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="15"></span></div>
+</section>
+
+<!-- ================================================================ 16 -->
+<section class="page">
+  <div class="head"><span class="l">Section 09 · Close the loop</span><span class="r">SLD-000 · 001 · 002 · 003</span></div>
+  <h1>Control wiring &amp; the drawing set.</h1>
+  <div class="callout">
+    <h3>Monitoring and control are different products</h3>
+    <p class="small">Monitoring observes and alerts — it reads the water and tells someone. Control actuates equipment — it starts pumps, opens valves, and stops motors, with physical and biological consequences when it is wrong. The two carry different obligations.</p>
+  </div>
+  <p>Before any channel is enabled, a control site requires all three of: the control-tier subscription, the signed control addendum to the install agreement, and the control commissioning steps in Section 11 recorded on the Section 13 checklist. A site without these is a monitoring site — leave the relays inert.</p>
+  <p>Each channel is an isolated SPDT dry contact: the WQM-1 switches the load's own supply, it does not power the load. Route the load's supply through COM → NO (load OFF by default) or COM → NC (load ON by default / fail-safe).</p>
+  <div class="panel">
+    <h3>Rating</h3>
+    <p class="small">NO contact: 10 A @ 250 VAC / 5 A @ 30 VDC. NC contact: 3 A. Resistive ratings (Omron G5Q-14). Inductive loads (valves, motors, contactor coils) require suppression — an MOV or RC snubber across AC loads, a flyback diode across DC coils. Unsuppressed inductive switching arcs the contacts and is excluded from warranty (Section 15). Relay coils are suppressed onboard — the requirement here is for the load side of every external circuit.</p>
+  </div>
+  <h2>Drawing index</h2>
+  <table class="t compact">
+    <thead><tr><th style="width:1.1in">Drawing</th><th style="width:2in">Title</th><th>Use when</th><th style="width:1.45in">Voltage class</th></tr></thead>
+    <tbody>
+      <tr><td class="k">WQM1-SLD-000</td><td>24 VDC power detail</td><td>Every install (Section 07)</td><td><span class="tag">24 VDC · DIY-OK</span></td></tr>
+      <tr><td class="k">WQM1-SLD-001</td><td>Typical site single-line — tank/cistern</td><td>Whole-site design reference</td><td><span class="tag">Mixed · AC by electrician</span></td></tr>
+      <tr><td class="k">WQM1-SLD-002</td><td>CH4 contactor control detail</td><td>Any motor over 1/3 HP</td><td><span class="tag">Line V · electrician</span></td></tr>
+      <tr><td class="k">WQM1-SLD-003</td><td>CH1 dosing pump detail — 24 VDC</td><td>Any Class-2 DC load</td><td><span class="tag">24 VDC · DIY-OK</span></td></tr>
+    </tbody>
+  </table>
+  <h2>Channel assignments — editable examples</h2>
+  <div class="callout">
+    <h3>Ships inert</h3>
+    <p class="small">No automation runs until the installer enables rules in the cloud. A channel's meaning is set entirely by its cloud rule; the map below is an illustrative starting point, not fixed hardware behavior.</p>
+  </div>
+  <table class="t compact">
+    <thead><tr><th style="width:50pt">Channel</th><th>Example assignment</th><th style="width:1.7in">Typical trigger</th></tr></thead>
+    <tbody>
+      <tr><td class="k">CH1</td><td>Chemical dosing (e.g. acid / pH-down)</td><td>pH setpoint</td></tr>
+      <tr><td class="k">CH2</td><td>Second dosing pump (base / alkalinity) or valve, per site</td><td>pH / alkalinity · turbidity</td></tr>
+      <tr><td class="k">CH3</td><td>Aeration / circulation</td><td>Temperature · schedule</td></tr>
+      <tr><td class="k">CH4</td><td>Circulation / flush valve — or alarm / pump contactor if wired so</td><td>Site rules · out-of-spec</td></tr>
+    </tbody>
+  </table>
+  <p class="tiny">Consistent mapping across a fleet keeps remote support fast. The SLD-002 contactor and SLD-003 dosing details remain the wiring patterns regardless of which channel you assign.</p>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="16"></span></div>
+</section>
+
+<!-- ================================================================ 17 -->
+<section class="page">
+  <div class="head"><span class="l">Section 09 · DWG WQM1-SLD-001</span><span class="r">Drawing set 1 of 3 · line-voltage work by licensed electrician</span></div>
+  <img class="dwg" src="assets/sld-001.png" alt="WQM1-SLD-001 — typical site single-line diagram, tank / cistern installation">
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="17"></span></div>
+</section>
+
+<!-- ================================================================ 18 -->
+<section class="page">
+  <div class="head"><span class="l">Section 09 · DWG WQM1-SLD-002</span><span class="r">Coil circuit dashed · motor circuit solid · NTS</span></div>
+  <img class="dwg" src="assets/sld-002.png" alt="WQM1-SLD-002 — CH4 well-pump contactor control detail">
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="18"></span></div>
+</section>
+
+<!-- ================================================================ 19 -->
+<section class="page">
+  <div class="head"><span class="l">Section 09 · DWG WQM1-SLD-003</span><span class="r">Suppression is a warranty condition</span></div>
+  <img class="dwg" src="assets/sld-003.png" alt="WQM1-SLD-003 — CH1 dosing pump detail, 24 VDC Class 2">
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="19"></span></div>
+</section>
+
+<!-- ================================================================ 20 -->
+<section class="page">
+  <div class="head"><span class="l">Section 10 · What to hang off the relays</span><span class="r">Verify ratings before wiring</span></div>
+  <h1>Control applications &amp; recommended products.</h1>
+  <p class="small">Field-proven load classes for each relay channel, with sourcing links. Any equivalent product meeting the stated ratings is acceptable. Verify current draw is under 10 A AC / 5 A DC (or use a contactor) before wiring. Every row carries a voltage class: <strong>24 VDC · DIY-OK</strong> work may be done by the owner or installer; <strong>LINE V · ELECTRICIAN</strong> rows require a licensed electrician for the line-voltage termination (Sections 00 and 05).</p>
+  <table class="t compact">
+    <thead><tr><th style="width:1.25in">Application</th><th style="width:1.05in">Trigger</th><th>Recommended products / sourcing</th><th style="width:0.95in">Voltage class</th></tr></thead>
+    <tbody>
+      <tr><td class="ink">Chemical dosing — pH up/down, chlorine, nutrient feed</td><td>pH setpoint, or ORP (RS485) setpoint</td><td>12/24 V peristaltic dosing pumps (Kamoer, Gikfun, INTLLAB, ~$10–40): Amazon — peristaltic dosing pumps. Metering-grade (Stenner 45M, Pulsatron, ~$250–350): Amazon — dosing pump best sellers.</td><td><span class="tag">24 VDC · DIY-OK</span></td></tr>
+      <tr><td class="ink">Fill / drain / divert / first-flush / RO flush valves</td><td>Turbidity or TDS threshold</td><td>12 V motorized ball valves, 1/2″–1″, brass/SS/PVC (~$25–60): U.S. Solid — motorized ball valves · U.S. Solid — 12 V DC valves · Amazon — 12 V ball valves · ElectricSolenoidValves.com. Prefer motorized ball valves over solenoids for dirty water — full bore, no diaphragm to foul.</td><td><span class="tag">24 VDC · DIY-OK</span></td></tr>
+      <tr><td class="ink">Aeration &amp; circulation — ponds, tanks, de-icing</td><td>Schedule or temperature — runtime only, not a DO safeguard (06.3)</td><td>Linear diaphragm &amp; piston air pumps, 110 V, 1–3 A (~$100–300): Pentair AES — air pumps · Webb's — pond air pumps · Amazon — pond aerators. Regenerative blowers 1/2 HP+ (via contactor): Sweetwater 1/2 HP blower · Pentair AES — aeration &amp; oxygenation. These are 110 VAC loads: they switch directly — line-voltage termination by licensed electrician.</td><td><span class="tag">Line V · electrician</span></td></tr>
+      <tr><td class="ink">Disinfection — UV sterilizer, ozone</td><td>ORP (RS485) demand or flow interlock</td><td>In-line UV sterilizers 15–55 W and small ozone generators switch directly — line-voltage termination by licensed electrician (verify under 10 A). Search: “UV water sterilizer 110V”, “aquarium ozone generator”.</td><td><span class="tag">Line V · electrician</span></td></tr>
+      <tr><td class="ink">Alarms — siren, strobe, auto-dialer</td><td>Any out-of-spec condition</td><td>12/24 V piezo sirens and LED strobes (under 1 A) switch directly. Search: “12V alarm siren strobe”.</td><td><span class="tag">24 VDC · DIY-OK</span></td></tr>
+      <tr><td class="ink">Large motors — well pumps, blowers, pumps over 1/3 HP</td><td>Contamination lockout / control</td><td>Definite-purpose contactor, 30–40 A, 2-pole, coil to match site (24 VAC/VDC or 120 VAC), ~$12–30, with coil suppression module. Search: “definite purpose contactor 40A”. Wire per DWG WQM1-SLD-002 — the WQM-1 switches the coil only.</td><td><span class="tag">Line V · electrician</span></td></tr>
+    </tbody>
+  </table>
+  <div class="panel">
+    <h3>Sourcing note</h3>
+    <p class="small">Third-party products are referenced for convenience only; BlueSignal does not manufacture, warrant, or support third-party equipment — their manufacturers' warranties and instructions govern. Links point to product categories, not single listings, so they stay current. For volume installs, BlueSignal can quote pre-kitted control packages (pump + valve + snubbers + contactor) — ask your channel manager.</p>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="20"></span></div>
+</section>
+
+<!-- ================================================================ 21 -->
+<section class="page">
+  <div class="head"><span class="l">Section 11 · Go live</span><span class="r">Runs itself after you leave</span></div>
+  <h1>Power-up &amp; cloud activation.</h1>
+  <ol class="steps">
+    <li>Verify both antennas connected. Energize 24 V. Boot takes about 60 seconds — STA1 settles into its 1 Hz heartbeat when the firmware is up.</li>
+    <li>From a phone browser, join the unit's Service Window — the first-boot wizard walks PIN setup, cloud claim (QR) on cloud.bluesignal.xyz, sensor auto-detect, a live first-reading check, and a go/no-go.</li>
+    <li>Confirm first uplink: live sensor values on the device page and a GPS fix (up to 5 minutes on first boot).</li>
+    <li>Configure each relay channel's control rules — setpoints, deadbands, schedules, and dosing timeouts — per the site design sheet.</li>
+    <li>Walk the customer through the dashboard and confirm the plan at handoff in the site record. Wi-Fi and LoRa devices run free on the Hobbyist tier (one device). LTE devices include 90 days, after which a paid plan applies — Residential $4.99/mo or $49.99/yr, or Commercial $10/mo with API access. Relay-based control is a separate subscription tier, priced per device, with its own terms and the signed control addendum; contact BlueSignal for current control-tier pricing. Without an active control tier, relay channels remain inert.</li>
+  </ol>
+  <h2>Control commissioning (control tier only)</h2>
+  <p class="small">Enabling a relay channel is a deliberate, recorded act. In Service Window → Control, declare the following per channel:</p>
+  <table class="t compact">
+    <thead><tr><th style="width:1.6in">Declare</th><th>Why it matters</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Channel role</td><td>What this channel actuates — drives dashboard labels and the alarm text your customer reads</td></tr>
+      <tr><td class="k">Contact type (NO / NC)</td><td>Must match the physical wiring; firmware inverts rule logic accordingly</td></tr>
+      <tr><td class="k">Fail-safe direction</td><td>The state the load holds when control is lost — mandatory NC for life-critical loads (Section 05)</td></tr>
+      <tr><td class="k">Load type &amp; declared current</td><td>Checked against contact ratings (NO 10 A AC / 5 A DC · NC 3 A); flags loads that require a contactor</td></tr>
+      <tr><td class="k">Dwell times</td><td>Minimum on and off time — prevents relay chatter and short-cycling of pumps and compressors</td></tr>
+    </tbody>
+  </table>
+  <p class="small">The wizard then requires a logged test-fire: each channel actuates once under explicit operator confirmation, and the result is written to the site record. Channels that are not test-fired stay inert.</p>
+  <div class="kv">
+    <div class="k">OTA updates</div><div class="v">Signed, automatic, self-testing with auto-rollback. SSH is break-glass only; see the OTA runbook.</div>
+    <div class="k">Remote configuration</div><div class="v">Cadence, thresholds, and rules change from the dashboard, no site visit. Credentials and URLs can never be pushed remotely.</div>
+    <div class="k">Heartbeat diagnostics</div><div class="v">Uptime, buffer depth, disk, CPU temperature, link quality, and per-sensor plain-language health on the device page.</div>
+    <div class="k">Drift / stuck / spike</div><div class="v">A dead or drifting probe is flagged, that channel's relay rules are suspended, and the dashboard nags “recalibrate soon” instead of acting on bad data. Reversion de-energizes the channel: because fail-safe direction is set by your wiring, a load on NO stops and a load on NC runs — the same behaviour as a dead controller, which is what Section 05's NC rule is for.</div>
+    <div class="k">Service Window</div><div class="v">Commissioning and calibration wizards run in any phone browser.</div>
+  </div>
+  <div class="panel">
+    <h3>Bench-claim first</h3>
+    <p class="small">Power the unit on the bench with just the antennas and one temperature probe, claim it, and watch data arrive on the dashboard before the field trip. Ten minutes on the bench converts field debugging into bench debugging.</p>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="21"></span></div>
+</section>
+
+<!-- ================================================================ 22 -->
+<section class="page">
+  <div class="head"><span class="l">Section 12 · Keep it honest</span><span class="r">Rinse · stabilize · set · verify</span></div>
+  <h1>Calibration.</h1>
+  <div class="kv">
+    <div class="k">pH (BNC)</div><div class="v">Two-point. Rinse in distilled water; stabilize in pH 7.00 buffer, set point 1; rinse; stabilize in pH 4.00 (or 10.00), set point 2. Verify 6.95–7.05 back in the 7.00 buffer.</div>
+    <div class="k">TDS</div><div class="v">Single-point. Stabilize in a conductivity standard (1413 µS/cm typical), set the point in the dashboard.</div>
+    <div class="k">Turbidity</div><div class="v">Zero. Zero in clean water; for compliance sites, cross-check a handheld turbidimeter and record both values.</div>
+    <div class="k">ORP (RS485)</div><div class="v">Single-point, via the Service Window RS485 wizard. Stabilize the digital ORP probe in a commercial ORP standard (Zobell or quinhydrone) and set the offset. ORP reports raw mV and is not temperature-compensated. There is no ORP calibration on the BNC — the BNC is pH only.</div>
+    <div class="k">Temperature</div><div class="v">Factory calibrated; no field calibration.</div>
+  </div>
+  <table class="t compact mt12">
+    <thead><tr><th style="width:1.6in">Sensor</th><th>Recalibrate</th><th style="width:1.9in">Consumable life</th></tr></thead>
+    <tbody>
+      <tr><td class="k">pH (BNC)</td><td>90 days (30 days on dosing-control sites)</td><td>Electrode: 12–18 months</td></tr>
+      <tr><td class="k">Residual chlorine (RS485)</td><td>30–60 days, guided zero/slope wizard</td><td>Activate &amp; store in 3M KCl</td></tr>
+      <tr><td class="k">Digital ORP (RS485)</td><td>90 days (30 days on disinfection-control sites)</td><td>Keep the junction wet; store in KCl</td></tr>
+      <tr><td class="k">5-in-1 (RS485)</td><td>pH via 4.01 / 6.86 / 9.18 buffers — Service Window wizard</td><td>Clean at every visit</td></tr>
+      <tr><td class="k">TDS</td><td>180 days</td><td>Clean at every visit</td></tr>
+      <tr><td class="k">Turbidity</td><td>90 days</td><td>Wipe optics at every visit</td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="22"></span></div>
+</section>
+
+<!-- ================================================================ 23 -->
+<section class="page">
+  <div class="head"><span class="l">Section 13 · Before you leave site</span><span class="r">19 checks · no exceptions</span></div>
+  <h1>Commissioning checklist.</h1>
+  <p>Complete every line before leaving site. Photograph and attach to the site record.</p>
+  <table class="t compact">
+    <thead><tr><th style="width:18pt">#</th><th>Check</th><th style="width:30pt">Pass</th></tr></thead>
+    <tbody>
+      <tr><td class="n">01</td><td>Enclosure sealed, glands tight, drip loops; screw terminals torqued 0.4–0.5 N·m</td><td class="tick"></td></tr>
+      <tr><td class="n">02</td><td>24 V DC verified at VIN; supply fused at 3 A</td><td class="tick"></td></tr>
+      <tr><td class="n">03</td><td>Both antennas connected; LoRa vertical and elevated; GPS sky view</td><td class="tick"></td></tr>
+      <tr><td class="n">04</td><td>All sensors reading plausible live values on dashboard</td><td class="tick"></td></tr>
+      <tr><td class="n">05</td><td>pH two-point calibration complete and verified</td><td class="tick"></td></tr>
+      <tr><td class="n">06</td><td>TDS calibrated; turbidity zeroed</td><td class="tick"></td></tr>
+      <tr><td class="n">07</td><td>GPS fix acquired; site location correct on map</td><td class="tick"></td></tr>
+      <tr><td class="n">08</td><td>Each wired relay channel toggled from dashboard; load responds</td><td class="tick"></td></tr>
+      <tr><td class="n">09</td><td>Suppression fitted on ALL inductive loads (warranty condition)</td><td class="tick"></td></tr>
+      <tr><td class="n">10</td><td>Contactors on all motor loads over 1/3 HP (per SLD-002)</td><td class="tick"></td></tr>
+      <tr><td class="n">11</td><td>Control rules + dosing timeouts configured per site design</td><td class="tick"></td></tr>
+      <tr><td class="n">12</td><td>Alarm test: forced excursion reaches customer contact</td><td class="tick"></td></tr>
+      <tr><td class="n">13</td><td>Customer dashboard walkthrough done; subscription handoff confirmed</td><td class="tick"></td></tr>
+      <tr><td class="n">14</td><td>Interior photo + this checklist uploaded to site record</td><td class="tick"></td></tr>
+      <tr><td class="n">15</td><td>Fail-safe direction verified per channel against the site design sheet</td><td class="tick"></td></tr>
+      <tr><td class="n">16</td><td>Life-critical loads (aeration, circulation) confirmed wired to NC</td><td class="tick"></td></tr>
+      <tr><td class="n">17</td><td>Dwell times and deadbands configured; anti-chatter verified</td><td class="tick"></td></tr>
+      <tr><td class="n">18</td><td>Staleness reversion tested — driving probe pulled, channel reverts to its fail-safe state and logs the cause</td><td class="tick"></td></tr>
+      <tr><td class="n">19</td><td>Control tier active and control addendum signed</td><td class="tick"></td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="23"></span></div>
+</section>
+
+<!-- ================================================================ 24 -->
+<section class="page">
+  <div class="head"><span class="l">Section 14 · When it fights back</span><span class="r">Tickets via site record</span></div>
+  <h1>Troubleshooting &amp; support.</h1>
+  <table class="t compact">
+    <thead><tr><th style="width:1.45in">Symptom</th><th style="width:1.9in">Likely cause</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td class="ink">No heartbeat (STA1)</td><td>Supply off / polarity / supply fuse / boot fail</td><td>Meter VIN; check supply-end fuse; allow 60 s boot</td></tr>
+      <tr><td class="ink">No data on dashboard</td><td>Coverage, antenna, unit not claimed</td><td>Check/elevate LoRa antenna; verify claim. Buffered data backfills once uplink restores.</td></tr>
+      <tr><td class="ink">pH drifts or sticks</td><td>Dry/aged electrode; cable near power; stale cal</td><td>Rehydrate or replace; reroute; recalibrate</td></tr>
+      <tr><td class="ink">TDS zero or full-scale</td><td>Probe unplugged / out of water / open wiring</td><td>Reseat terminal; verify immersion; continuity-check</td></tr>
+      <tr><td class="ink">Turbidity noisy / negative</td><td>Sunlight, bubbles, fouled optics</td><td>Shade, relocate from aeration, clean, re-zero</td></tr>
+      <tr><td class="ink">Temp not reading</td><td>1-Wire wiring order</td><td>Verify GND/3V3/1W order matches probe</td></tr>
+      <tr><td class="ink">Relay clicks, load dead</td><td>Load supply not routed through COM/NO</td><td>Dry contacts — the relay switches the load's own supply (SLD-001)</td></tr>
+      <tr><td class="ink">Relay channel failed</td><td>Contact wear from unsuppressed inductive load</td><td>Fit suppression; move load to spare channel; schedule service</td></tr>
+      <tr><td class="ink">No GPS fix</td><td>No sky view</td><td>Relocate GPS antenna; allow 5 min</td></tr>
+      <tr><td class="ink">Reboots / brownouts</td><td>Undersized 24 V supply</td><td>2 A minimum; check voltage drop under load</td></tr>
+    </tbody>
+  </table>
+  <h2>Reading a fault with no signal</h2>
+  <p>STA4 tells you a fault exists, not what it is. When there is no cellular or LoRa coverage at the site, get the detail locally: join the unit's Service Window from a phone browser (Section 11). It reports per-sensor health, buffer depth, uplink state, and the current fault in plain language without any network connection. This is the fastest diagnostic path in the field and does not depend on the dashboard.</p>
+  <h2>Escalation</h2>
+  <ol class="steps">
+    <li>This manual + device page diagnostics on cloud.bluesignal.xyz.</li>
+    <li>Support ticket from the site record with interior photo and checklist. Support replies with troubleshooting steps or, for a confirmed defect, a return authorization.</li>
+    <li>Confirmed hardware faults: return authorization issued by support. No field repair of the board — it voids the warranty.</li>
+  </ol>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="24"></span></div>
+</section>
+
+<!-- ================================================================ 25 -->
+<section class="page">
+  <div class="head"><span class="l">Section 15 · The promise</span><span class="r">Board 90 days · probes 30 days</span></div>
+  <h1>Limited warranty.</h1>
+  <p class="small">This section reproduces the BlueSignal WQM-1 Limited Hardware Warranty as published at <strong>bluesignal.xyz/warranty</strong> on the revision date of this manual. The published warranty in effect on the date of purchase is the warranty on the unit; it is reproduced here so the installer and the customer have it in hand at handover.</p>
+  <h2><span class="n">15.1</span>Coverage</h2>
+  <p>This warranty runs to the original end purchaser of the product and is not transferable. Units purchased through an authorized BlueSignal dealer or installer are covered on the same terms, running from the date of the original end-customer invoice.</p>
+  <div class="kv">
+    <div class="k">Board — 90 days</div><div class="v">BlueSignal warrants the WQM-1 hardware product — the HAT board and its on-board components (ADC, LoRa transceiver, relays, power regulation) — against defects in materials and workmanship, under normal use and service per this manual, for ninety (90) days from the date of delivery.</div>
+    <div class="k">Probes — 30 days</div><div class="v">Sensor probes — pH electrode, TDS probe, turbidity sensor, the waterproof DS18B20 temperature probe, and RS485 digital probes (ORP, residual chlorine, 5-in-1) — are consumable items and carry a thirty (30) day warranty from the date of delivery. Probes degrade naturally with use and exposure to measured media.</div>
+    <div class="k">Antennas &amp; accessories — 90 days</div><div class="v">Supplied antennas and accessories, including the power cable and enclosure, carry a ninety (90) day warranty from the date of delivery.</div>
+  </div>
+  <h2><span class="n">15.2</span>Remedy</h2>
+  <p>BlueSignal's sole obligation, and the buyer's exclusive remedy, is — at BlueSignal's option — repair of the defective unit, replacement with a new or refurbished unit, or a full or partial refund of the original purchase price, following return under an issued return authorization. A replacement carries the remainder of the applicable original warranty period. Return shipping within the United States is covered by BlueSignal.</p>
+  <h2><span class="n">15.3</span>Exclusions</h2>
+  <p>This warranty does not cover failures caused by:</p>
+  <ol class="steps">
+    <li>Relay contact wear or failure from switching inductive loads without the required suppression (Section 09), from loads exceeding rated contact current (NO: 10 A AC / 5 A DC · NC: 3 A, Omron G5Q-14), or from motor loads switched directly rather than through a contactor.</li>
+    <li>Water ingress or corrosion from installation outside a suitable enclosure, operation outside stated environmental limits, or installation contrary to this manual or applicable electrical code; water ingress beyond the rated IP65 enclosure specification.</li>
+    <li>Radio damage from operating with the LoRa antenna disconnected.</li>
+    <li>Field repair, modification, unauthorized repair, or component-level rework of the board.</li>
+    <li>Use outside the specified input voltage range (9–24 V DC), lightning or surge events beyond onboard protection ratings, physical damage from drops, impacts or improper handling, misuse, neglect, or accident.</li>
+    <li>Normal wear and tear and normal consumable wear: electrode aging, probe fouling, calibration drift.</li>
+    <li>Life-critical loads wired to the normally-open (NO) contact rather than the normally-closed (NC) contact, contrary to Section 05.</li>
+    <li>Relay channels actuated without completing the commissioning steps in Section 11 — declared contact type, fail-safe direction, load current, dwell times, and the logged test-fire.</li>
+    <li>Defeat, bypass, or override of fail-safe direction or of staleness reversion.</li>
+  </ol>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="25"></span></div>
+</section>
+
+<!-- ================================================================ 26 -->
+<section class="page">
+  <div class="head"><span class="l">Section 15 · Limited warranty · continued</span><span class="r">Governing law · Texas</span></div>
+  <h2 class="mt0"><span class="n">15.4</span>Firmware, updates &amp; cloud service</h2>
+  <p>The WQM-1 firmware is free software licensed under the <strong>GNU General Public License, version 3</strong>. Its source code is published at <strong>github.com/BlueSignal-XYZ/wqm-1</strong>, and the licence grants the right to use, study, modify and redistribute it on the licence's terms; nothing in this warranty narrows those rights. Open-source components remain governed by their respective licences. Any genuinely proprietary software component, where one is supplied, is licensed and not sold. During the warranty period BlueSignal provides signed over-the-air firmware updates for the WQM-1 and will give at least ninety (90) days' notice before ending update support for a hardware revision. Firmware defects are addressed through software updates rather than under this hardware warranty.</p>
+  <p>The BlueSignal Cloud — including monitoring, alerting, and the relay-control tier — is a subscription service, not part of this hardware warranty. It carries no uptime, latency, or delivery guarantee unless a separate written service-level agreement is executed. Alerts and control commands depend on radio coverage, internet connectivity, and third-party infrastructure outside BlueSignal's control. Consistent with Section 05, control decisions execute on-device: the cloud is supervisory only, and no cloud outage should be relied upon to actuate or to stop equipment.</p>
+  <p>Subscription service terms, acceptable use, privacy, and the control-tier addendum are published at bluesignal.xyz/terms. Order of precedence: for the hardware, the Limited Hardware Warranty published at bluesignal.xyz/warranty as in effect on the date of purchase governs, and this section reproduces it; for the cloud subscription, the online terms govern. Where the online terms and the warranty conflict as to the hardware, the warranty controls, and no later change to the online terms modifies the warranty on a unit already sold.</p>
+  <h2><span class="n">15.5</span>Disclaimer &amp; limitation of liability</h2>
+  <div class="panel">
+    <p class="small" style="text-transform:uppercase;letter-spacing:.01em">Any implied warranties, including the implied warranties of merchantability and fitness for a particular purpose, are limited in duration to the duration of this written warranty. BlueSignal is not liable for indirect, incidental, special, or consequential damages arising from use of the product — whether arising from monitoring and alerting or from relay-based control, and including any act or failure to act of a controlled pump, valve, aerator, sterilizer, blower, or contactor — including loss of water, product, crops, livestock or aquatic stock, chemical overfeed or underfeed, equipment damage, business interruption, or regulatory penalties. Total liability for any claim relating to the hardware shall not exceed the purchase price paid for the unit; liability relating to the cloud subscription is capped separately under the online terms. The WQM-1 is a monitoring and control aid and is not a safety device; critical processes require independent safeguards.</p>
+    <p class="small" style="text-transform:uppercase;letter-spacing:.01em">Some states do not allow limitations on how long an implied warranty lasts, or the exclusion or limitation of incidental or consequential damages, so the above limitations may not apply to you. This warranty gives you specific legal rights, and you may also have other rights which vary from state to state.</p>
+  </div>
+  <p class="small"><strong>Warranty claims:</strong> email warranty@bluesignal.xyz with the order number, device serial number, and a description of the issue, or open a ticket from the site record on cloud.bluesignal.xyz — either channel starts the same process. Include proof of purchase and the commissioning checklist. BlueSignal will provide troubleshooting steps or a return authorization; if a return is authorized, ship the unit to the address provided, and return shipping within the US is covered by BlueSignal. Governing law: State of Texas, without regard to conflict of law principles; venue in the courts of Travis County, Texas. Any action for breach of this warranty must be commenced within two (2) years after the cause of action accrues. Warrantor: BlueSignal XYZ, Inc., Bee Cave, Texas.</p>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="26"></span></div>
+</section>
+
+<!-- ================================================================ 27 -->
+<section class="page">
+  <div class="head"><span class="l">Appendix A · For builders</span><span class="r">Raspberry Pi Zero 2W · 40-pin P2</span></div>
+  <h1>Developer pin map.</h1>
+  <p>The WQM-1 is built for integrators. GPIO assignments for custom logic on the onboard compute module are published below. The firmware is GPL-3.0 and its source is public (Section 15.4) — fork it, read it, and build on it.</p>
+  <table class="t compact">
+    <thead><tr><th style="width:2in">Function</th><th>GPIO / bus</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Relay CH1 / CH2 / CH3 / CH4</td><td class="mono ink">GPIO17 / GPIO27 / GPIO22 / GPIO23</td></tr>
+      <tr><td class="k">Status LEDs STA1–STA4</td><td class="mono ink">GPIO24 / GPIO25 / GPIO12 / GPIO13</td></tr>
+      <tr><td class="k">Fan enable</td><td class="mono ink">GPIO21</td></tr>
+      <tr><td class="k">1-Wire (temperature)</td><td class="mono ink">GPIO4</td></tr>
+      <tr><td class="k">ADC (ADS1115) + pH AFE</td><td class="mono ink">I2C1 (GPIO2 SDA / GPIO3 SCL) · ADC ready GPIO5</td></tr>
+      <tr><td class="k">LoRa (SX1262)</td><td class="mono ink">SPI0 (MOSI GPIO10 / MISO GPIO9 / CLK GPIO11) · CS GPIO8 · RST GPIO18 · DIO1 GPIO16 · BUSY GPIO20</td></tr>
+      <tr><td class="k">GPS (MAX-M10S)</td><td class="mono ink">UART (TX GPIO14 / RX GPIO15) · EXTINT GPIO19</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Host boards: Raspberry Pi Zero 2W for full analog + LoRa + relay I/O; Arduino UNO Q / VENTUNO Q for digital-first builds (RS485 probes, USB GPS, Wi-Fi cloud sync — analog, LoRa, and relays require the Pi).</p>
+  <p class="small">The I²C expansion rail is jumper-selectable between 3.3 V and 5 V via the onboard I2C PWR Select header and level-translated (PCA9306) to the compute module. Relay logic: GPIO high energizes the relay (optically isolated). ADC channels: AIN0 = TDS (0–2.3 V conditioned), AIN1 = turbidity (0–4.5 V), AIN2 = pH (LMP91200 output) · <strong>AIN3 — reserved: it carries PH_INN, the pH front end's reference leg. Do not drive it, and do not read it as a sensor</strong> — on PCBA Fin_3 there is no ORP conditioning circuit and no ORP connector, so a value read from AIN3 is the reference voltage, not the water. The BNC channel runs through the dedicated LMP91200 front end and carries pH only; add an RS485 digital ORP probe (Section 08) when ORP is needed.</p>
+  <div class="cols3 mt12">
+    <div class="stat"><div class="l">Analog front end</div><div class="v" style="font-size:11pt;margin-top:4pt">LMP91200 · REF3020</div></div>
+    <div class="stat"><div class="l">ADC</div><div class="v" style="font-size:11pt;margin-top:4pt">ADS1115-Q1 · 16-bit</div></div>
+    <div class="stat"><div class="l">Relay drive</div><div class="v" style="font-size:11pt;margin-top:4pt">LTV-354T → G5Q-14</div></div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="27"></span></div>
+</section>
+
+<!-- ================================================================ 28 -->
+<section class="page">
+  <div class="head"><span class="l">Appendix B · Size it right</span><span class="r">Drop for copper · loss for coax</span></div>
+  <h1>Wire gauge, voltage drop &amp; antenna cable.</h1>
+  <p>Two different problems. Copper runs fail on voltage drop long before they fail on ampacity — a 24 V circuit has only 0.72 V of headroom at the 3% design target, so DC control runs drive gauge selection. Antenna runs fail on insertion loss, which is a different calculation entirely.</p>
+  <div class="callout">
+    <h3>Terminal limit</h3>
+    <p class="small">The VIN and relay terminals accept 18–12 AWG. If the tables below call for 10 AWG, land the heavy conductor in an adjacent junction box and pigtail 12 AWG into the board. Never force oversized wire into a 5.08 mm terminal.</p>
+  </div>
+  <h2><span class="n">B.1</span>24 VDC control circuits — maximum one-way run</h2>
+  <p class="tiny">Feet, at 3% drop (0.72 V). Stranded uncoated copper, 75 °C, per NEC Chapter 9 Table 8. Two-wire: Vd = 2 × L × I × R ÷ 1000.</p>
+  <table class="t compact">
+    <thead><tr><th>AWG</th><th class="num">0.5 A</th><th class="num">1 A</th><th class="num">2 A</th><th class="num">3 A</th><th class="num">5 A</th><th style="padding-left:14pt">Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="k">18</td><td class="num">89</td><td class="num">43</td><td class="num">22</td><td class="num">15</td><td class="num">9</td><td style="padding-left:14pt">Class 2 control only</td></tr>
+      <tr><td class="k">16</td><td class="num">142</td><td class="num">71</td><td class="num">35</td><td class="num">24</td><td class="num">14</td><td style="padding-left:14pt">Class 2 control only</td></tr>
+      <tr><td class="k">14</td><td class="num">229</td><td class="num">115</td><td class="num">57</td><td class="num">38</td><td class="num">23</td><td style="padding-left:14pt">15 A ampacity</td></tr>
+      <tr><td class="k">12</td><td class="num">364</td><td class="num">182</td><td class="num">91</td><td class="num">61</td><td class="num">36</td><td style="padding-left:14pt">20 A ampacity · terminal max</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <h3>The common mistake</h3>
+    <p class="small">18 AWG on a 1 A dosing pump: fine at 25 ft (1.7% drop), marginal at 50 ft (3.4%), and 6.7% at 100 ft — the pump sees 22.4 V and may stall or dose slow without ever tripping a fault. Past 43 ft on a 1 A DC load, go to 16 AWG or heavier.</p>
+  </div>
+  <h2><span class="n">B.2</span>120 VAC loads — maximum one-way run</h2>
+  <p class="tiny">Feet, at 3% drop (3.6 V). Line-voltage work by licensed electrician.</p>
+  <table class="t compact">
+    <thead><tr><th>AWG</th><th class="num">2 A</th><th class="num">5 A</th><th class="num">8 A</th><th class="num">10 A</th><th style="padding-left:14pt">Notes</th></tr></thead>
+    <tbody>
+      <tr><td class="k">14</td><td class="num">287</td><td class="num">115</td><td class="num">72</td><td class="num">57</td><td style="padding-left:14pt">15 A ampacity · minimum for line voltage</td></tr>
+      <tr><td class="k">12</td><td class="num">455</td><td class="num">182</td><td class="num">114</td><td class="num">91</td><td style="padding-left:14pt">20 A ampacity · terminal max</td></tr>
+      <tr><td class="k">10</td><td class="num">726</td><td class="num">290</td><td class="num">181</td><td class="num">145</td><td style="padding-left:14pt">30 A · junction box + pigtail required</td></tr>
+    </tbody>
+  </table>
+  <p class="tiny">Contactor coil circuits draw well under 1 A holding; drop is never the constraint. Size them for code minimum and mechanical strength — 14 AWG for line-voltage coils, 18 AWG acceptable for 24 V coils under NEC 430.72.</p>
+  <h2><span class="n">B.3</span>Antenna feedline — loss, not drop</h2>
+  <p class="tiny">Insertion loss in dB. Budget 3 dB maximum for LoRa; every 6 dB halves usable range in free space. Add ~0.2 dB per connector or adapter.</p>
+  <table class="t compact">
+    <thead><tr><th>Cable</th><th class="num">10 ft</th><th class="num">25 ft</th><th class="num">50 ft</th><th class="num">100 ft</th><th style="padding-left:14pt">Max run @ 3 dB</th></tr></thead>
+    <tbody>
+      <tr><td class="k">RG-174</td><td class="num">2.7</td><td class="num">6.8</td><td class="num">13.5</td><td class="num">27.0</td><td style="padding-left:14pt">11 ft — pigtails only</td></tr>
+      <tr><td class="k">RG-58</td><td class="num">1.6</td><td class="num">4.0</td><td class="num">8.0</td><td class="num">16.0</td><td style="padding-left:14pt">19 ft</td></tr>
+      <tr><td class="k">LMR-195</td><td class="num">1.1</td><td class="num">2.8</td><td class="num">5.5</td><td class="num">11.1</td><td style="padding-left:14pt">27 ft</td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="28"></span></div>
+</section>
+
+<!-- ================================================================ 29 -->
+<section class="page">
+  <div class="head"><span class="l">Appendix B · Cable sizing</span><span class="r">915 MHz reality</span></div>
+  <table class="t compact mt0">
+    <thead><tr><th>Cable</th><th class="num">10 ft</th><th class="num">25 ft</th><th class="num">50 ft</th><th class="num">100 ft</th><th style="padding-left:14pt">Max run @ 3 dB</th></tr></thead>
+    <tbody>
+      <tr><td class="k">LMR-240</td><td class="num">0.8</td><td class="num">1.9</td><td class="num">3.8</td><td class="num">7.6</td><td style="padding-left:14pt">39 ft</td></tr>
+      <tr><td class="k">LMR-400</td><td class="num">0.4</td><td class="num">1.0</td><td class="num">1.9</td><td class="num">3.9</td><td style="padding-left:14pt">77 ft</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <h3>915 MHz reality</h3>
+    <p class="small">Loss at 915 MHz is severe. The stock RG-174 pigtail is fine at its shipped length and unusable as an extension. Elevation beats cable every time: 10 ft of mast with a short LMR-240 run outperforms 60 ft of coax to a high antenna. If the run must exceed ~40 ft, relocate the enclosure rather than lengthen the feedline.</p>
+  </div>
+  <h2><span class="n">B.4</span>GPS antenna cable</h2>
+  <p class="small">GPS is more forgiving because the antenna is active — its internal LNA (typically 26–30 dB) is applied before the cable loss. Budget up to 10 dB of feedline loss and keep net gain at the receiver in the 15–25 dB range.</p>
+  <table class="t compact">
+    <thead><tr><th>Cable</th><th class="num">10 ft</th><th class="num">25 ft</th><th class="num">50 ft</th><th class="num">100 ft</th><th style="padding-left:14pt">Max run @ 10 dB</th></tr></thead>
+    <tbody>
+      <tr><td class="k">RG-174</td><td class="num">3.6</td><td class="num">9.0</td><td class="num">18.0</td><td class="num">36.0</td><td style="padding-left:14pt">28 ft</td></tr>
+      <tr><td class="k">RG-58</td><td class="num">2.1</td><td class="num">5.4</td><td class="num">10.8</td><td class="num">21.5</td><td style="padding-left:14pt">47 ft</td></tr>
+      <tr><td class="k">LMR-195</td><td class="num">1.5</td><td class="num">3.6</td><td class="num">7.3</td><td class="num">14.6</td><td style="padding-left:14pt">68 ft</td></tr>
+      <tr><td class="k">LMR-240</td><td class="num">1.0</td><td class="num">2.5</td><td class="num">5.0</td><td class="num">10.0</td><td style="padding-left:14pt">100 ft</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <h3>Active antenna</h3>
+    <p class="small">The GPS port supplies DC bias up the coax to the antenna LNA. Any inline device on the GPS run — arrestor, attenuator, adapter — must be DC-passing: a DC-blocking arrestor or attenuator will kill the active antenna. This is the same requirement as the DC-passing GPS arrestor in Section 7.1. A passive GPS antenna will not work on a long cable at all.</p>
+  </div>
+  <h2><span class="n">B.5</span>Sensor and data cable limits</h2>
+  <table class="t compact">
+    <thead><tr><th style="width:1.5in">Run</th><th style="width:1.1in">Max length</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td class="k">pH (BNC coax)</td><td>5 m / 16 ft</td><td>Gigaohm-source electrode — any added capacitance or leakage shows as drift. No splices, ever.</td></tr>
+      <tr><td class="k">TDS, turbidity (analog)</td><td>10 m / 33 ft</td><td>Low-level analog; upsize to shielded pair and ground the shield at the board end only.</td></tr>
+      <tr><td class="k">1-Wire temperature</td><td>30 m / 100 ft</td><td>Star topologies degrade badly — daisy-chain instead. Use one twisted pair for data + ground.</td></tr>
+      <tr><td class="k">RS485 digital probes</td><td>300 m / 1000 ft</td><td>Differential and robust. Daisy-chain, terminate the far end, keep stubs short.</td></tr>
+      <tr><td class="k">24 VDC power to board</td><td>10 m / 33 ft</td><td>Per Section 07; upsize per B.1 beyond this.</td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="29"></span></div>
+</section>
+
+<!-- ================================================================ 30 -->
+<section class="page">
+  <div class="head"><span class="l">Appendix C · Mechanical</span><span class="r">DWG WQM1-MECH-001 · NTS</span></div>
+  <img class="dwg" src="assets/mech-001.png" alt="WQM1-MECH-001 — mechanical envelope, WQM-1 PCBA Rev Fin_3">
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="30"></span></div>
+</section>
+
+<!-- ================================================================ 31 -->
+<section class="page">
+  <div class="head"><span class="l">Appendix D · Fill this in first</span><span class="r">Copy one per unit</span></div>
+  <h1>Site design sheet.</h1>
+  <p>Complete before the install visit. This is the document Sections 11 and 13 refer to — it defines what each channel does, which way it fails, and who signed off on that. Copy one per unit.</p>
+  <h3>Site</h3>
+  <div class="form">
+    <div class="f">Customer / site name</div><div class="f">Address / GPS</div>
+    <div class="f">Vessel or water body</div><div class="f">Unit label (multi-unit sites)</div>
+    <div class="f">Service voltage available</div><div class="f">Longest control run (ft) / AWG per App. B</div>
+  </div>
+  <h3>Channel plan</h3>
+  <table class="grid">
+    <thead><tr><th style="width:24pt">CH</th><th>Load</th><th style="width:0.8in">Volts / A</th><th style="width:0.7in">NO or NC</th><th style="width:0.85in">Fail-safe state</th><th>Trigger &amp; setpoint</th><th style="width:1in">Deadband / dwell</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>2</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>3</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>4</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <h3>Before you sign this</h3>
+    <p class="small">Any life-critical load (aeration, circulation) must show NC and a fail-safe state of RUNNING. If a row shows a life-critical load on NO, the design is wrong — fix it here, not on site (Section 05).</p>
+  </div>
+  <h3>Sensors &amp; infrastructure</h3>
+  <div class="form">
+    <div class="f">Probes fitted (pH / TDS / turbidity / temp / RS485)</div><div class="f">Probe mounting (tether / rack / flow cell)</div>
+    <div class="f">Antenna type &amp; mast height / feedline (App. B)</div><div class="f">Grounding: mast bond / rod / arrestors (§7.1)</div>
+    <div class="f">Enclosure &amp; rating</div><div class="f">Control tier required?</div>
+  </div>
+  <div class="sig">
+    <div class="s">Designed by / date</div>
+    <div class="s">Electrician (line voltage)</div>
+    <div class="s">Customer approval</div>
+  </div>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="31"></span></div>
+</section>
+
+<!-- ================================================================ 32 -->
+<section class="page">
+  <div class="head"><span class="l">Appendix E · Leave this with the customer</span><span class="r">One per unit · signed at handover</span></div>
+  <h1>Commissioning record &amp; handover.</h1>
+  <h3>Unit</h3>
+  <div class="form">
+    <div class="f">Device serial number</div><div class="f">Site / unit label</div>
+    <div class="f">Install date</div><div class="f">Installer name &amp; company</div>
+    <div class="f">Licensed electrician (if line voltage)</div><div class="f">Firmware version at handover</div>
+    <div class="f">Control tier active?</div><div class="f"></div>
+  </div>
+  <h3>Verified at handover</h3>
+  <table class="t compact">
+    <thead><tr><th>The customer was shown and understood</th><th style="width:44pt">Initial</th><th style="width:50pt">Date</th></tr></thead>
+    <tbody>
+      <tr><td>All 19 commissioning checks (Section 13) completed and passed</td><td></td><td></td></tr>
+      <tr><td>Fail-safe behaviour of each channel — what runs and what stops if the controller loses power</td><td></td><td></td></tr>
+      <tr><td>Staleness reversion demonstrated — probe pulled, channel reverted, cause logged</td><td></td><td></td></tr>
+      <tr><td>Alarm test: forced excursion reached the customer's contact</td><td></td><td></td></tr>
+      <tr><td>The WQM-1 is a monitoring and control aid, not a safety device; critical processes require independent safeguards</td><td></td><td></td></tr>
+      <tr><td>Calibration intervals and probe consumable life (Section 12)</td><td></td><td></td></tr>
+      <tr><td>Freeze and seasonal care (Section 6.4)</td><td></td><td></td></tr>
+      <tr><td>Dashboard walkthrough; subscription plan confirmed</td><td></td><td></td></tr>
+      <tr><td>Limited warranty terms and exclusions (Section 15) provided</td><td></td><td></td></tr>
+    </tbody>
+  </table>
+  <div class="sig two">
+    <div class="s">Installer signature / date</div>
+    <div class="s">Customer signature / date</div>
+  </div>
+  <p class="tiny mt12">Photograph this page and the enclosure interior, and upload both to the site record. Customer keeps the original.</p>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="32"></span></div>
+</section>
+
+<!-- ================================================================ 33 -->
+<section class="page">
+  <div class="head"><span class="l">Apéndice F · Seguridad</span><span class="r">Español</span></div>
+  <h1>Seguridad y lista de verificación.</h1>
+  <p>Resumen en español de las Secciones 00, 05 y 13. En caso de discrepancia, prevalece el texto en inglés.</p>
+  <h2>Quién puede hacer qué</h2>
+  <div class="cols">
+    <div class="panel"><h3>Usted puede hacerlo</h3><p class="small">Montaje de la caja y la tarjeta · todo el cableado de sensores · antenas · alimentación de 24 V CC desde una fuente Clase 2 homologada · cargas de control de 24 V CC (bombas dosificadoras, válvulas CC) · configuración en la nube y calibración</p></div>
+    <div class="panel"><h3>Solo electricista con licencia</h3><p class="small">Todo lo de 120/240 V CA: circuitos derivados nuevos, trabajo en el tablero, cargas de tensión de línea en CH3/CH4, contactores y circuitos de bomba de pozo. Según el NEC y la mayoría de los códigos locales, esto no es opcional.</p></div>
+  </div>
+  <h2>Reglas de seguridad</h2>
+  <ol class="steps">
+    <li>Desconecte toda la energía — la fuente de 24 V CC Y cualquier tensión de línea en los terminales de relé — antes de abrir la caja.</li>
+    <li>Los terminales de relé pueden llevar hasta 250 V CA. Trátelos como energizados hasta verificarlo con un multímetro.</li>
+    <li>Nunca exceda 10 A CA / 5 A CC en los contactos NO, ni 3 A en los contactos NC. Los motores de más de 1/3 HP requieren un contactor externo.</li>
+    <li>Las cargas críticas para la vida se cablean en NC. Es una regla, no una opción. Aireación y circulación deben cablearse por NC para que un controlador muerto deje la carga FUNCIONANDO. Cuando la corriente de la carga supere los 3 A del contacto NC, conmute por NC la bobina de un contactor y no la carga misma (DWG WQM1-SLD-002).</li>
+    <li>El control se ejecuta en el dispositivo. La nube es solo supervisora y nunca está en la ruta de accionamiento.</li>
+    <li>Ubicaciones exteriores o húmedas requieren caja NEMA 4X / IP65. Las cajas metálicas deben conectarse al conductor de puesta a tierra.</li>
+    <li>Nunca energice con la antena LoRa desconectada — puede dañar el radio.</li>
+    <li>Dosificación química: configure siempre un tiempo límite de dosificación en la nube.</li>
+  </ol>
+  <div class="panel">
+    <h3>Reglas firmes</h3>
+    <p class="small">Solo contactos secos · supresión en toda carga inductiva · contactor para todo motor de más de 1/3 HP · cableado Clase 2 separado de canalizaciones de tensión de línea · cargas críticas en NC · nunca dependa de la nube para accionar. Todas son condiciones de la garantía.</p>
+  </div>
+  <h2>Lista de verificación (19 puntos)</h2>
+  <table class="t compact">
+    <thead><tr><th style="width:18pt">#</th><th>Verificación</th><th style="width:30pt">OK</th></tr></thead>
+    <tbody>
+      <tr><td class="n">01</td><td>Caja sellada, prensaestopas apretados, lazos de goteo; terminales a 0.4–0.5 N·m</td><td class="tick"></td></tr>
+      <tr><td class="n">02</td><td>24 V CC verificados en VIN; fusible de 3 A en la fuente</td><td class="tick"></td></tr>
+      <tr><td class="n">03</td><td>Ambas antenas conectadas; LoRa vertical y elevada; GPS con vista al cielo</td><td class="tick"></td></tr>
+      <tr><td class="n">04</td><td>Todos los sensores muestran valores plausibles en el panel</td><td class="tick"></td></tr>
+      <tr><td class="n">05</td><td>Calibración de pH de dos puntos completa y verificada</td><td class="tick"></td></tr>
+      <tr><td class="n">06</td><td>TDS calibrado; turbidez en cero</td><td class="tick"></td></tr>
+      <tr><td class="n">07</td><td>Posición GPS adquirida; ubicación correcta en el mapa</td><td class="tick"></td></tr>
+      <tr><td class="n">08</td><td>Cada canal de relé accionado desde el panel; la carga responde</td><td class="tick"></td></tr>
+      <tr><td class="n">09</td><td>Supresión instalada en TODAS las cargas inductivas (condición de garantía)</td><td class="tick"></td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="33"></span></div>
+</section>
+
+<!-- ================================================================ 34 -->
+<section class="page">
+  <div class="head"><span class="l">Apéndice F · Español</span><span class="r">19 verificaciones · sin excepciones</span></div>
+  <table class="t compact mt0">
+    <thead><tr><th style="width:18pt">#</th><th>Verificación</th><th style="width:30pt">OK</th></tr></thead>
+    <tbody>
+      <tr><td class="n">10</td><td>Contactores en todos los motores de más de 1/3 HP</td><td class="tick"></td></tr>
+      <tr><td class="n">11</td><td>Reglas de control y tiempos límite configurados según la hoja de diseño</td><td class="tick"></td></tr>
+      <tr><td class="n">12</td><td>Prueba de alarma: la excursión forzada llega al contacto del cliente</td><td class="tick"></td></tr>
+      <tr><td class="n">13</td><td>Recorrido del panel con el cliente; suscripción confirmada</td><td class="tick"></td></tr>
+      <tr><td class="n">14</td><td>Foto del interior y esta lista subidas al registro del sitio</td><td class="tick"></td></tr>
+      <tr><td class="n">15</td><td>Dirección de falla segura verificada por canal contra la hoja de diseño</td><td class="tick"></td></tr>
+      <tr><td class="n">16</td><td>Cargas críticas (aireación, circulación) confirmadas en NC</td><td class="tick"></td></tr>
+      <tr><td class="n">17</td><td>Tiempos de permanencia y bandas muertas configurados; sin rebote</td><td class="tick"></td></tr>
+      <tr><td class="n">18</td><td>Reversión por datos obsoletos probada: sonda retirada, canal revierte y registra la causa</td><td class="tick"></td></tr>
+      <tr><td class="n">19</td><td>Nivel de control activo y adenda de control firmada</td><td class="tick"></td></tr>
+    </tbody>
+  </table>
+  <div class="foot"><span>WQM-1 Installer Manual · Rev H</span><span class="pn" data-n="34"></span></div>
+</section>
+
+<!-- ================================================================ 35 -->
+<section class="page back">
+  <div class="head"><span class="l">Appendix A · continued</span><span class="r">Shipped &amp; installed from Austin, TX</span></div>
+  <h1>Compliance.</h1>
+  <h2>Regulatory compliance</h2>
+  <p>This device complies with Part 15 of the FCC Rules. Operation is subject to the following two conditions: (1) this device may not cause harmful interference, and (2) this device must accept any interference received, including interference that may cause undesired operation. Changes or modifications not expressly approved by BlueSignal could void the user's authority to operate the equipment.</p>
+  <p class="mono ink" style="font-size:7.4pt;letter-spacing:.1em;text-transform:uppercase">Contains FCC ID: 2AD66-1262 — LoRa module</p>
+  <h2>Firmware source</h2>
+  <p>The WQM-1 firmware is licensed under the GNU General Public License v3.0. Complete corresponding source for the firmware shipped on this unit is published at <strong>github.com/BlueSignal-XYZ/wqm-1</strong>; the licence text is included with the source. Hardware design files are published under their own licence in the same repository.</p>
+  <p class="tiny mt12">All trademarks are the property of their respective owners. BlueSignal WQM-1 Product &amp; Installer Manual · WQM1-IM-100 Rev H · © 2026 BlueSignal. Specifications subject to change.</p>
+  <div class="bottom">
+    <div>
+      <div class="name"><svg width="26" height="26" viewBox="0 0 28 28" fill="none"><path d="M4 8 C8 5, 16 5, 24 8" stroke="#2d8cf0" stroke-width="2.2" stroke-linecap="round"/><path d="M4 14 C8 11, 16 11, 24 14" stroke="#2d8cf0" stroke-width="2.2" stroke-linecap="round"/><path d="M4 20 C8 17, 16 17, 24 20" stroke="#2d8cf0" stroke-width="2.2" stroke-linecap="round"/></svg>BlueSignal</div>
+      <div class="k">Know your water</div>
+    </div>
+    <div class="r">bluesignal.xyz<br>Bee Cave, TX<br>WQM1-IM-100 · Rev H</div>
+  </div>
+</section>
+
+</body>
+</html>
