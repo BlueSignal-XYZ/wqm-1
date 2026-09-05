@@ -47,6 +47,12 @@ Cayenne LPP, AES-128) and/or HTTPS to the cloud over WiFi.
 The two transports coexist. The SQLite buffer is store-and-forward: readings
 survive an outage and upload when the link returns.
 
+**Optional AWG load control:** the unit can ask an existing Eaton AbleEdge
+smart breaker to energise or de-energise the site's AWG circuit (the four
+G5Q-14 relays stay as the local interlock; the unit is not a breaker). Off
+unless configured — see
+[docs/smart-breaker-integration.md](docs/smart-breaker-integration.md).
+
 **Supported platforms:**
 
 Tested on Debian Trixie (13), kernels 6.12–6.18, Pi Zero 2W (aarch64).
@@ -80,6 +86,7 @@ wqm-1/
 │   ├── radio/             # SX1262 driver + LoRaWAN MAC
 │   ├── cloud/             # HTTPS store-and-forward client
 │   ├── control/           # Relays, LEDs, automation rules
+│   ├── integrations/      # Talks TO customer-owned systems (Eaton AbleEdge smart breaker)
 │   ├── storage/           # SQLite buffer + migrations
 │   ├── service_window/    # Flask UI: first-boot wizard, calibration, diagnostics
 │   ├── ota/               # Signed over-the-air update agent
