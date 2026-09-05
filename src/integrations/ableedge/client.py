@@ -117,7 +117,7 @@ class HttpAbleEdgeClient:
         token = data.get("token") if isinstance(data, dict) else None
         if status != 200 or not isinstance(token, str) or not token:
             logger.warning("AbleEdge auth failed (HTTP %s)", status)
-            self._token = ""
+            self._token = ""  # nosec B105 — clear cached token, not a password
             self._token_expires_mono = 0.0
             raise AbleEdgeAuthError(f"auth HTTP {status}")
         self._token = token
@@ -218,7 +218,7 @@ class HttpAbleEdgeClient:
         except urllib.error.HTTPError as e:
             logger.warning("AbleEdge %s %s -> HTTP %d", method, path, e.code)
             if e.code in (401, 403) and authed:
-                self._token = ""
+                self._token = ""  # nosec B105 — drop stale bearer on 401/403
             return e.code, None
         except (urllib.error.URLError, OSError, ValueError) as e:
             logger.warning("AbleEdge %s %s failed: %s", method, path, e)

@@ -28,7 +28,8 @@ LOCKED_VENDORS = frozenset({"span", "lumin", "savant"})
 DEFAULT_API_BASE = "https://api.em.eaton.com"
 DEFAULT_SECRETS_DIR = "/etc/bluesignal/secrets/ableedge"
 DEFAULT_CLIENT_ID_ENV = "ABLEEDGE_CLIENT_ID"
-DEFAULT_CLIENT_SECRET_ENV = "ABLEEDGE_CLIENT_SECRET"
+# Env *name* only — the secret value is never in this tree.
+DEFAULT_CLIENT_SECRET_ENV = "ABLEEDGE_CLIENT_SECRET"  # nosec B105
 DEFAULT_SUBSCRIPTION_KEY_ENV = "ABLEEDGE_SUBSCRIPTION_KEY"
 DEFAULT_POLL_S = 30
 MIN_POLL_S = 5
@@ -37,7 +38,7 @@ MAX_POLL_S = 3600
 # Filenames inside secrets_dir — values never belong in config.yaml.
 SECRET_FILES = {
     "client_id": "client_id",
-    "client_secret": "client_secret",
+    "client_secret": "client_secret",  # nosec B105 — filename on disk, not a secret
     "subscription_key": "subscription_key",
 }
 
