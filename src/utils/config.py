@@ -319,6 +319,12 @@ class Settings:
     # Automation rules
     rules: list[dict[str, Any]] = field(default_factory=list)
 
+    # Optional AWG load control via Eaton AbleEdge (or G5Q-14 fallback).
+    # Nested mapping — validated by integrations.ableedge.schema.parse_load_control.
+    # Credential *values* never belong here; only env/file names. Local-only
+    # (not in SETTINGS_SCHEMA) so a remote overlay cannot re-bind a breaker.
+    load_control: dict[str, Any] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Settings schema — the contract for validation and remote config.
@@ -529,11 +535,13 @@ class ConfigManager:
         if not isinstance(raw, dict):
             logger.warning("Config at %s is not a mapping — ignored", path)
             return
-        # rules is free-form (validated by the RulesEngine), everything else
-        # goes through the schema. Unknown-but-dataclass keys are accepted from
+        # rules is free-form (validated by the RulesEngine), load_control is
+        # nested (validated by integrations.ableedge), everything else goes
+        # through the schema. Unknown-but-dataclass keys are accepted from
         # the LOCAL base file for backward compatibility, with a warning.
         values = dict(raw)
         rules = values.pop("rules", None)
+        load_control = values.pop("load_control", None)
         values.pop("service_window", None)  # read by the Flask app, not us
         accepted, errors = validate_values(values, remote=remote)
         for err in errors:
@@ -551,6 +559,10 @@ class ConfigManager:
             setattr(s, key, val)
         if isinstance(rules, list):
             s.rules = rules
+        if isinstance(load_control, dict):
+            s.load_control = load_control
+        elif load_control is not None:
+            logger.warning("Config %s: load_control is not a mapping — ignored", path)
         logger.info("Config loaded from %s", path)
 
     def _apply_remote_overlay(self, s: Settings) -> int | None:

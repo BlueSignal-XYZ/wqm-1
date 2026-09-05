@@ -179,3 +179,32 @@ rules:
     relay: 2
     action: "off"
     duration_s: 0
+
+# --- Optional AWG load control (Eaton AbleEdge only) ---
+# WQM-1 talks to the site's existing AbleEdge smart breaker. This is not a
+# breaker SKU and does not replace the G5Q-14 relays — those stay as
+# fallback / interlock. See docs/ableedge-integration.md.
+#
+# vendor: ableedge | none | relay_only
+# fail_safe: off (default, prefer fail-OFF for compressor/AWG) | last | on
+# circuit_ampacity_a: installer input only — never guessed
+# credentials: env/file *names* only. Do not put Client ID/secret/API key here.
+#
+# Live smoke is blocked until jacques@bluesignal.xyz installs the Eaton
+# developer-app credentials as env vars or files under secrets_dir.
+load_control:
+  vendor: none
+  site_id: ""
+  device_id: ""          # AbleEdge device UUID (installer binds site AWG here)
+  circuit_id: ""         # optional; defaults to device_id
+  circuit_ampacity_a:    # e.g. 20 — only if the installer entered it
+  poll_s: 30
+  fail_safe: off
+  fallback_relay:        # 1-4 G5Q-14 interlock channel, or leave empty
+  api_base: "https://api.em.eaton.com"
+  backend: http          # http | mock (mock is for tests/bench only)
+  credentials:
+    client_id_env: ABLEEDGE_CLIENT_ID
+    client_secret_env: ABLEEDGE_CLIENT_SECRET
+    subscription_key_env: ABLEEDGE_SUBSCRIPTION_KEY
+    secrets_dir: /etc/bluesignal/secrets/ableedge

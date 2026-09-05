@@ -32,6 +32,7 @@ from app.reboot import REBOOT_REQUEST_FLAG, request_host_reboot
 from app.state import StateStore
 from app.supervisor import Supervisor
 from app.workers import (
+    AbleEdgePollWorker,
     CloudSyncWorker,
     CommandWorker,
     GpsWorker,
@@ -152,6 +153,7 @@ class WQM1App:
         self._monitor: Any = None
         self._adaptive: Any = None
         self._heartbeat_worker: HeartbeatWorker | None = None
+        self._load: Any = None
         self._cmd_sock: socket.socket | None = None
         self._cmd_thread: threading.Thread | None = None
         self._running = False
@@ -358,6 +360,7 @@ class WQM1App:
 
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
+        self._load = self._build_load_controller()
         self._load_policies()
         if self._settings.rules:
             self._rules.load_rules(self._settings.rules)
@@ -458,6 +461,8 @@ class WQM1App:
                 ),
             )
             workers.append(self._heartbeat_worker)
+        if self._load is not None and self._load.vendor == "ableedge":
+            workers.append(AbleEdgePollWorker(self._load))
         return workers
 
     # -- service-window command socket ---------------------------------------
@@ -516,6 +521,8 @@ class WQM1App:
                 self._relays.set(channel, state)
                 return {"ok": True, "channel": channel, "state": state}
             return {"ok": False, "error": "relays not initialised"}
+        if action in ("circuit_set", "awg_set"):
+            return self._set_awg_circuit(cmd.get("state"), cmd.get("reason"))
         if action == "restart":
             self._state.request_restart()
             return {"ok": True, "restarting": True}
@@ -531,6 +538,36 @@ class WQM1App:
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
         return {"ok": False, "error": f"unknown action: {action}"}
+
+    def _build_load_controller(self) -> Any:
+        """AbleEdge / fallback-relay front door. Relays stay as interlock only."""
+        from integrations.ableedge import LoadController
+
+        controller = LoadController.from_settings(self._settings.load_control, relays=self._relays)
+        logger.info(
+            "Load control vendor=%s fail_safe=%s device_bound=%s",
+            controller.vendor,
+            controller.cfg.fail_safe,
+            bool(controller.cfg.device_id),
+        )
+        return controller
+
+    def _set_awg_circuit(self, state: Any, reason: Any = None) -> dict[str, Any]:
+        """Shared hook for cloud + service-window AWG on/off (not sensor sampling)."""
+        if not isinstance(state, bool):
+            return {"ok": False, "error": "state must be boolean"}
+        if self._load is None:
+            return {"ok": False, "error": "load control not initialised"}
+        why = reason if isinstance(reason, str) else ""
+        result = self._load.set_circuit(state, reason=why)
+        return {
+            "ok": result.ok,
+            "on": result.on,
+            "via": result.via,
+            "reachable": result.reachable,
+            "error": result.error,
+            "fail_safe_applied": result.fail_safe_applied,
+        }
 
     _POLICIES_PATHS: list[str | Path] = [
         "/opt/bluesignal/config/policies.yaml",
@@ -607,6 +644,19 @@ class WQM1App:
                     ).start()
                 self._cloud.ack_command(cmd_id, "done")
                 logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
+            elif cmd_type in ("awg", "circuit"):
+                result = self._set_awg_circuit(cmd.get("state"), cmd.get("reason"))
+                if not result.get("ok") and result.get("via") != "fail_safe":
+                    raise ValueError(result.get("error", "circuit_set failed"))
+                status = "done" if result.get("ok") else "error"
+                err = None if result.get("ok") else result.get("error")
+                self._cloud.ack_command(cmd_id, status, err)
+                logger.info(
+                    "Cloud AWG circuit command: %s via=%s reachable=%s",
+                    "on" if result.get("on") else "off",
+                    result.get("via"),
+                    result.get("reachable"),
+                )
             elif cmd_type == "restart":
                 self._cloud.ack_command(cmd_id, "done")
                 self._state.request_restart()
@@ -748,6 +798,7 @@ class WQM1App:
                     sock_path.unlink()
         for obj, method in [
             (self._cloud, "stop"),
+            (self._load, "shutdown"),
             (self._leds, "heartbeat_stop"),
             (self._relays, "all_off"),
             (self._radio, "close"),
