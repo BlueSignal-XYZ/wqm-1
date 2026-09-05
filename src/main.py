@@ -151,6 +151,7 @@ class WQM1App:
         self._rules: Any = None
         self._monitor: Any = None
         self._adaptive: Any = None
+        self._smart_breaker: Any = None
         self._heartbeat_worker: HeartbeatWorker | None = None
         self._cmd_sock: socket.socket | None = None
         self._cmd_thread: threading.Thread | None = None
@@ -366,6 +367,20 @@ class WQM1App:
         self._profile_synced_mono = float("-inf")
         self._load_cached_water_profile()
 
+        # --- Smart breaker / AWG circuit (optional; off unless configured) ---
+        # Talks TO the customer's breaker; the G5Q relays stay the interlock.
+        # Built after the relays so relay_only and the interlock can use them.
+        try:
+            from integrations.smart_breaker import build_smart_breaker
+
+            self._smart_breaker = build_smart_breaker(
+                self._settings_provider,
+                relays=self._relays,
+                event_sink=self._state.emit_event,
+            )
+        except ImportError:
+            logger.info("Smart breaker integration not present")
+
         # --- Command listener (for service window) ---
         self._start_cmd_listener()
 
@@ -458,6 +473,10 @@ class WQM1App:
                 ),
             )
             workers.append(self._heartbeat_worker)
+        if self._smart_breaker is not None and self._smart_breaker.vendor == "ableedge":
+            from integrations.smart_breaker import SmartBreakerWorker
+
+            workers.append(SmartBreakerWorker(self._settings_provider, self._smart_breaker))
         return workers
 
     # -- service-window command socket ---------------------------------------
@@ -530,6 +549,24 @@ class WQM1App:
             return {"ok": True, "configVersion": self._config.remote_version}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
+        if action == "awg_set":
+            # "AWG circuit on/off" — vendor-agnostic. Goes through the smart
+            # breaker controller (interlock relay + breaker), never straight to
+            # a coil, so fail-safe bookkeeping sees every request.
+            state = cmd.get("state")
+            if not isinstance(state, bool):
+                return {"ok": False, "error": "state must be boolean"}
+            if self._smart_breaker is None:
+                return {"ok": False, "error": "smart breaker integration not configured"}
+            source = str(cmd.get("source") or "service_window")
+            reason = cmd.get("reason")
+            return self._smart_breaker.request(
+                state, source=source, reason=str(reason) if reason else None
+            )
+        if action == "awg_status":
+            if self._smart_breaker is None:
+                return {"ok": True, "configured": False, "vendor": "none"}
+            return {"ok": True, "configured": True, **self._smart_breaker.status()}
         return {"ok": False, "error": f"unknown action: {action}"}
 
     _POLICIES_PATHS: list[str | Path] = [
@@ -607,6 +644,43 @@ class WQM1App:
                     ).start()
                 self._cloud.ack_command(cmd_id, "done")
                 logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
+            elif cmd_type == "awg":
+                # Cloud asks for the AWG circuit on/off. Same dispatcher as the
+                # Service Window so one code path owns interlock + fail-safe.
+                state = bool(cmd.get("state"))
+                result = self._handle_cmd(
+                    {
+                        "action": "awg_set",
+                        "state": state,
+                        "source": "cloud",
+                        "reason": cmd.get("reason") or f"cloud command {cmd_id}",
+                    }
+                )
+                duration = cmd.get("durationSeconds")
+                if result.get("ok") and state and duration:
+                    threading.Timer(
+                        float(duration),
+                        lambda: self._handle_cmd(
+                            {
+                                "action": "awg_set",
+                                "state": False,
+                                "source": "cloud",
+                                "reason": f"cloud command {cmd_id} duration elapsed",
+                            }
+                        ),
+                    ).start()
+                if result.get("ok"):
+                    self._cloud.ack_command(cmd_id, "done")
+                else:
+                    self._cloud.ack_command(
+                        cmd_id, "error", str(result.get("error") or "awg_set failed")
+                    )
+                logger.info(
+                    "Cloud AWG command: %s -> %s (%s)",
+                    "on" if state else "off",
+                    "ok" if result.get("ok") else "error",
+                    result.get("breaker", "-"),
+                )
             elif cmd_type == "restart":
                 self._cloud.ack_command(cmd_id, "done")
                 self._state.request_restart()
@@ -749,6 +823,7 @@ class WQM1App:
         for obj, method in [
             (self._cloud, "stop"),
             (self._leds, "heartbeat_stop"),
+            (self._smart_breaker, "shutdown"),
             (self._relays, "all_off"),
             (self._radio, "close"),
             (self._gps, "close"),
