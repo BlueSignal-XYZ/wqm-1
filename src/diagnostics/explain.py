@@ -36,6 +36,9 @@ SYSTEM_SUBJECTS: tuple[str, ...] = (
     "rs485",
     "wifi",
     "cloud_auth",
+    # The optional AWG load-control path through the site's Eaton AbleEdge
+    # smart breaker. Only shown when a vendor is bound.
+    "smart_breaker",
 )
 
 SENSOR_STATES: tuple[str, ...] = (
@@ -66,6 +69,7 @@ _DISPLAY_NAMES: dict[str, str] = {
     "gps": "GPS receiver",
     "storage": "local storage",
     "rs485": "RS485 sensor bus",
+    "smart_breaker": "AWG smart breaker",
 }
 
 # state -> status. Anything unknown maps to "attention" (safe middle ground).
@@ -264,6 +268,27 @@ _SYSTEM_COPY: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
         "Confirm the site's internet works, then re-run this check. Readings are "
         "stored locally and upload once the connection is back.",
     ),
+    # Smart breaker link for AWG load control. {circuit} is the installer's
+    # panel label ("Garage AWG") and {position} is ON/OFF/unknown — both come
+    # from the live awg_status snapshot, with sentence-safe fallbacks.
+    ("smart_breaker", "ok"): ("{circuit} is {position} and the breaker link is up.", None, None),
+    ("smart_breaker", "degraded"): (
+        "The smart breaker has not answered for {minutes} minutes.",
+        "No internet at the site, or the Eaton cloud is having a moment.",
+        "Check the site's internet. The circuit keeps its current state until "
+        "the grace period runs out, then the fail-safe ({fail_safe}) applies.",
+    ),
+    ("smart_breaker", "down"): (
+        "The smart breaker is unreachable — fail-safe ({fail_safe}) has been applied.",
+        "Internet outage, Eaton cloud outage, or the Eaton credentials were rejected.",
+        "Check the internet and that the breaker shows online in the Eaton app. "
+        "When the link returns the circuit stays as it is until someone turns it on again.",
+    ),
+    ("smart_breaker", "stale"): (
+        "The monitoring service is not reporting the smart breaker.",
+        "The service is stopped or restarting, or the binding was saved but not applied.",
+        "Restart the monitoring service from Settings, then refresh this page.",
+    ),
 }
 
 # Fallback values for template keys so formatting never raises and still
@@ -273,6 +298,9 @@ _CONTEXT_DEFAULTS: dict[str, Any] = {
     "age_days": "many",
     "ssid": "this network",
     "rssi": "an unknown",
+    "circuit": "The AWG circuit",
+    "position": "in an unknown state",
+    "fail_safe": "as configured",
 }
 
 

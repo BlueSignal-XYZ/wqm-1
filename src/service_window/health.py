@@ -146,6 +146,43 @@ def system_cards(
     return cards
 
 
+def smart_breaker_card(config: dict[str, Any], awg: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Traffic-light card for the AWG smart breaker link, or None when no
+    vendor is bound (so an unbound unit's dashboard is untouched).
+
+    Unlike the other system cards this needs the LIVE controller snapshot
+    (``awg_status`` over the command socket) — link health is not in SQLite.
+    ``awg`` is that snapshot, or None / ``{"ok": False}`` when the firmware
+    did not answer, which reads as *stale* rather than as a breaker fault.
+    """
+    vendor = str(config.get("smart_breaker_vendor") or "none")
+    if vendor == "none":
+        return None
+    if vendor == "relay_only":
+        # No link to judge — the relay is on the Relays page and the firmware
+        # drives it locally, so there is nothing that can be "down" here.
+        return None
+
+    ctx: dict[str, Any] = {
+        "circuit": config.get("smart_breaker_circuit_label") or None,
+        "fail_safe": str(config.get("smart_breaker_fail_safe") or "off").upper(),
+    }
+    if not awg or not awg.get("ok") or not awg.get("configured"):
+        return explain("smart_breaker", "stale", ctx)
+
+    breaker = awg.get("breaker") or {}
+    if isinstance(breaker, dict) and breaker.get("isOn") is not None:
+        ctx["position"] = "ON" if breaker.get("isOn") else "OFF"
+    ctx["fail_safe"] = str(awg.get("failSafe") or ctx["fail_safe"]).upper()
+    ctx["minutes"] = max(1, int(awg.get("unreachableForS") or 0) // 60)
+
+    if awg.get("linkOk"):
+        return explain("smart_breaker", "ok", ctx)
+    if awg.get("failSafeApplied"):
+        return explain("smart_breaker", "down", ctx)
+    return explain("smart_breaker", "degraded", ctx)
+
+
 def worst_status(cards: dict[str, dict[str, Any]]) -> str:
     """Aggregate status across cards: fault > attention > ok."""
     statuses = {c.get("status") for c in cards.values()}

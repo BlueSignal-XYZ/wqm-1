@@ -21,6 +21,7 @@ sensor reads, relay rules, or LoRa receive windows.
 | `CommandWorker` | Poll the cloud command queue; apply remote config; nudge OTA |
 | `HeartbeatWorker` | Periodic self-report (health + diagnostics) |
 | `GpsWorker` | Blocking UART GPS fixes, isolated from everything else |
+| `SmartBreakerWorker` | Optional: poll the bound Eaton AbleEdge breaker, track link health, apply fail-safe |
 | `Supervisor` (main thread) | Fan, LEDs, liveness, systemd watchdog pets, shutdown |
 
 The supervisor pets the systemd watchdog **only** while every worker's liveness
@@ -71,12 +72,26 @@ Source: `src/storage/database.py`, `src/cloud/client.py`, `src/utils/health.py`.
   apply live, restart keys apply on the next restart, and a bad config can
   never brick the device (last-known-good is kept). Credentials and URLs can
   never be pushed remotely.
-- **Commands** — `restart`, `config_reload`, `ota_check`, `diagnostics`,
-  plus `awg` / `circuit` for optional Eaton AbleEdge AWG load control
-  (see [ableedge-integration.md](ableedge-integration.md)). G5Q-14 relays
-  stay as fallback / interlock and are not the AbleEdge path.
+- **Commands** — `relay`, `awg`, `restart`, `config_reload`, `ota_check`,
+  `diagnostics`.
 
 Source: `src/ota/`, `src/utils/config.py` (ConfigManager), `src/main.py`.
+
+## Smart breaker / AWG load control
+
+Optional (`smart_breaker_vendor`, default `none`). WQM-1 talks **to** a
+residential smart breaker the customer already owns — Eaton AbleEdge — so the
+cloud or the installer can ask for the site's AWG circuit on/off and read what
+it draws. The G5Q-14 relays stay as the local interlock/fallback; the unit is
+not a breaker and does no panel work. Fail-safe on API loss is configurable
+(`off` shipped for compressor loads). Command paths: Service Window socket
+`awg_set` / `awg_status`, cloud command `type: "awg"`. The Service Window's
+**AWG circuit** page (`/awg/`) binds the breaker, switches the load, and shows
+link / position / power; the dashboard carries a matching traffic light. See
+[smart-breaker-integration.md](smart-breaker-integration.md) and
+[smart-breaker-installer-guide.md](smart-breaker-installer-guide.md).
+
+Source: `src/integrations/smart_breaker/`.
 
 ## LoRaWAN
 
@@ -96,5 +111,6 @@ Wi-Fi sync; analog/LoRa/relay require the Pi). See [platforms.md](platforms.md).
 - [platforms.md](platforms.md) — supported host boards
 - [ota-runbook.md](ota-runbook.md) — over-the-air update operations
 - [sensor-calibration.md](sensor-calibration.md) — per-probe calibration
+- [smart-breaker-integration.md](smart-breaker-integration.md) — AWG circuit control via Eaton AbleEdge (design, auth, fail-safe)
+- [smart-breaker-installer-guide.md](smart-breaker-installer-guide.md) — binding a site's AWG to a breaker id
 - [hardware-overview.md](hardware-overview.md) — board, BOM, pinout; BUILD provisional TDS / 3.3 V estimates
-- [ableedge-integration.md](ableedge-integration.md) — Eaton AbleEdge AWG load-control skeleton (mock-tested; live smoke blocked on credentials)

@@ -316,14 +316,52 @@ class Settings:
     fan_on_temp_c: float = 60.0
     fan_off_temp_c: float = 55.0
 
+    # Smart-breaker / AWG load control (src/integrations/smart_breaker/).
+    #
+    # WQM-1 talks TO an existing residential smart breaker; it is not one. The
+    # circuit this controls is the customer's AWG (atmospheric water generator)
+    # or similar compressor load, and the G5Q-14 relays remain the local
+    # interlock / fallback path. See docs/smart-breaker-integration.md.
+    #
+    #   vendor:     none        — feature off (default; nothing is built)
+    #               relay_only  — AWG enable is a G5Q relay channel; no cloud API
+    #               ableedge    — Eaton AbleEdge / Smart Breaker API
+    #   fail_safe:  off | last | on — what to do with the load when the breaker
+    #               API has been unreachable for smart_breaker_unreachable_grace_s.
+    #               `off` is the shipped default for compressor loads.
+    #   interlock_relay: 0 = none, 1-4 = the G5Q channel wired in series with
+    #               the AWG enable / contactor coil. Required for relay_only.
+    #   circuit_amps: breaker ampacity as entered by the INSTALLER from the
+    #               panel label. 0 = not entered. Never guessed by firmware.
+    smart_breaker_vendor: str = "none"
+    smart_breaker_device_id: str = ""  # Eaton device UUID for the AWG circuit
+    smart_breaker_site_id: str = ""  # Eaton locationId the device belongs to
+    smart_breaker_circuit_label: str = ""  # installer's panel label, e.g. "AWG-1 (20 A)"
+    smart_breaker_circuit_amps: int = 0
+    smart_breaker_interlock_relay: int = 0
+    smart_breaker_poll_s: int = 60
+    smart_breaker_fail_safe: str = "off"
+    smart_breaker_unreachable_grace_s: int = 300
+    # Auth mode. `direct` = this device holds Eaton organisation service-account
+    # credentials (below) and calls Eaton itself. `cloud_proxy` = the device
+    # calls the BlueSignal device API with its existing X-API-Key and the Cloud
+    # Functions hold the Eaton secrets (preferred once the proxy ships).
+    smart_breaker_auth_mode: str = "direct"
+    smart_breaker_api_base: str = "https://api.em.eaton.com/api/v1"
+    smart_breaker_token_url: str = "https://api.em.eaton.com/oauth2/token"
+    # Eaton credentials — provisioning-time only, never remotely pushable, and
+    # never committed. Empty = unconfigured (the client refuses to start).
+    smart_breaker_client_id: str = ""
+    smart_breaker_client_secret: str = ""
+    smart_breaker_subscription_key: str = ""
+
     # Automation rules
     rules: list[dict[str, Any]] = field(default_factory=list)
 
-    # Optional AWG load control via Eaton AbleEdge (or G5Q-14 fallback).
-    # Nested mapping — validated by integrations.ableedge.schema.parse_load_control.
-    # Credential *values* never belong here; only env/file names. Local-only
-    # (not in SETTINGS_SCHEMA) so a remote overlay cannot re-bind a breaker.
-    load_control: dict[str, Any] = field(default_factory=dict)
+
+SMART_BREAKER_VENDORS = ("none", "relay_only", "ableedge")
+SMART_BREAKER_FAIL_SAFE_MODES = ("off", "last", "on")
+SMART_BREAKER_AUTH_MODES = ("direct", "cloud_proxy")
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +384,7 @@ class SettingSpec:
     max: float | None = None
     max_length: int | None = None
     remote: bool = True  # may this key arrive via cloud desired-config?
+    choices: tuple[str, ...] | None = None  # closed set of accepted string values
 
 
 SETTINGS_SCHEMA: dict[str, SettingSpec] = {
@@ -410,6 +449,36 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     # Thermal
     "fan_on_temp_c": SettingSpec(float, hot=True, min=30.0, max=90.0),
     "fan_off_temp_c": SettingSpec(float, hot=True, min=25.0, max=85.0),
+    # Smart breaker / AWG load control. The circuit BINDING (vendor, which
+    # breaker, which interlock relay, the installer-entered ampacity) is
+    # restart-required because the client and worker are built at start-up,
+    # and LOCAL-ONLY: it is set by the installer standing at the panel (AWG
+    # page or config.yaml) and a cloud overlay must never be able to re-point
+    # the unit at a different breaker or relay channel. The operating policy
+    # (poll cadence, fail-safe mode, grace) is hot and remote-tunable. The
+    # panel label is cosmetic and may be tidied from the cloud. Credentials,
+    # URLs and the auth mode follow api_key: provisioning-time only.
+    "smart_breaker_vendor": SettingSpec(
+        str, hot=False, max_length=16, remote=False, choices=SMART_BREAKER_VENDORS
+    ),
+    "smart_breaker_device_id": SettingSpec(str, hot=False, max_length=64, remote=False),
+    "smart_breaker_site_id": SettingSpec(str, hot=False, max_length=64, remote=False),
+    "smart_breaker_circuit_label": SettingSpec(str, hot=False, max_length=64),
+    "smart_breaker_circuit_amps": SettingSpec(int, hot=False, min=0, max=200, remote=False),
+    "smart_breaker_interlock_relay": SettingSpec(int, hot=False, min=0, max=4, remote=False),
+    "smart_breaker_poll_s": SettingSpec(int, hot=True, min=15, max=3600),
+    "smart_breaker_fail_safe": SettingSpec(
+        str, hot=True, max_length=8, choices=SMART_BREAKER_FAIL_SAFE_MODES
+    ),
+    "smart_breaker_unreachable_grace_s": SettingSpec(int, hot=True, min=0, max=86400),
+    "smart_breaker_auth_mode": SettingSpec(
+        str, hot=False, max_length=16, remote=False, choices=SMART_BREAKER_AUTH_MODES
+    ),
+    "smart_breaker_api_base": SettingSpec(str, hot=False, max_length=256, remote=False),
+    "smart_breaker_token_url": SettingSpec(str, hot=False, max_length=256, remote=False),
+    "smart_breaker_client_id": SettingSpec(str, hot=False, max_length=128, remote=False),
+    "smart_breaker_client_secret": SettingSpec(str, hot=False, max_length=256, remote=False),
+    "smart_breaker_subscription_key": SettingSpec(str, hot=False, max_length=128, remote=False),
 }
 
 _SETTINGS_FIELDS = {f.name for f in fields(Settings)}
@@ -460,10 +529,18 @@ def validate_values(
                 continue
         elif spec.type is str:
             if not isinstance(value, str):
-                errors.append(f"{key} must be a string")
+                hint = ""
+                if isinstance(value, bool) and spec.choices and {"on", "off"} & set(spec.choices):
+                    # YAML reads bare on/off/yes/no as booleans — the classic
+                    # way to lose a fail-safe setting to a missing pair of quotes.
+                    hint = ' (quote it: "on" / "off")'
+                errors.append(f"{key} must be a string{hint}")
                 continue
             if spec.max_length is not None and len(value) > spec.max_length:
                 errors.append(f"{key} must be at most {spec.max_length} chars")
+                continue
+            if spec.choices is not None and value not in spec.choices:
+                errors.append(f"{key} must be one of {', '.join(spec.choices)}")
                 continue
         accepted[key] = value
     return accepted, errors
@@ -535,13 +612,16 @@ class ConfigManager:
         if not isinstance(raw, dict):
             logger.warning("Config at %s is not a mapping — ignored", path)
             return
-        # rules is free-form (validated by the RulesEngine), load_control is
-        # nested (validated by integrations.ableedge), everything else goes
-        # through the schema. Unknown-but-dataclass keys are accepted from
+        # rules is free-form (validated by the RulesEngine), everything else
+        # goes through the schema. Unknown-but-dataclass keys are accepted from
         # the LOCAL base file for backward compatibility, with a warning.
         values = dict(raw)
         rules = values.pop("rules", None)
-        load_control = values.pop("load_control", None)
+        # A nested `load_control:` block shipped briefly (PR #112) before the
+        # flat smart_breaker_* keys became the one schema. Drop it silently so
+        # a unit provisioned in that window still boots; the AWG page rewrites
+        # the binding in the flat form.
+        values.pop("load_control", None)
         values.pop("service_window", None)  # read by the Flask app, not us
         accepted, errors = validate_values(values, remote=remote)
         for err in errors:
@@ -559,10 +639,6 @@ class ConfigManager:
             setattr(s, key, val)
         if isinstance(rules, list):
             s.rules = rules
-        if isinstance(load_control, dict):
-            s.load_control = load_control
-        elif load_control is not None:
-            logger.warning("Config %s: load_control is not a mapping — ignored", path)
         logger.info("Config loaded from %s", path)
 
     def _apply_remote_overlay(self, s: Settings) -> int | None:

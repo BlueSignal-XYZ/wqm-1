@@ -584,29 +584,3 @@ class HeartbeatWorker(Worker):
 
     def step(self) -> None:
         self.send_now()
-
-
-class AbleEdgePollWorker(Worker):
-    """Refresh AbleEdge reachability / status. Does not sample water sensors."""
-
-    name = "ableedge"
-    error_bucket = "cloud"
-
-    def __init__(
-        self,
-        load: Any,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        super().__init__(clock)
-        self._load = load
-
-    def interval_s(self) -> float:
-        try:
-            return float(self._load.poll_s)
-        except Exception:  # noqa: BLE001 — poll cadence is advisory
-            return 30.0
-
-    def step(self) -> None:
-        if self._load is None:
-            return
-        self._load.poll()

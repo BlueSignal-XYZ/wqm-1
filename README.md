@@ -47,6 +47,13 @@ Cayenne LPP, AES-128) and/or HTTPS to the cloud over WiFi.
 The two transports coexist. The SQLite buffer is store-and-forward: readings
 survive an outage and upload when the link returns.
 
+**Optional AWG load control:** the unit can ask an existing Eaton AbleEdge
+smart breaker to energise or de-energise the site's AWG circuit (the four
+G5Q-14 relays stay as the local interlock; the unit is not a breaker). Off
+unless bound from the Service Window's **AWG circuit** page — see
+[docs/smart-breaker-integration.md](docs/smart-breaker-integration.md) and the
+[installer guide](docs/smart-breaker-installer-guide.md).
+
 **Supported platforms:**
 
 Tested on Debian Trixie (13), kernels 6.12–6.18, Pi Zero 2W (aarch64).
@@ -80,6 +87,7 @@ wqm-1/
 │   ├── radio/             # SX1262 driver + LoRaWAN MAC
 │   ├── cloud/             # HTTPS store-and-forward client
 │   ├── control/           # Relays, LEDs, automation rules
+│   ├── integrations/      # Talks TO customer-owned systems (Eaton AbleEdge smart breaker)
 │   ├── storage/           # SQLite buffer + migrations
 │   ├── service_window/    # Flask UI: first-boot wizard, calibration, diagnostics
 │   ├── ota/               # Signed over-the-air update agent
@@ -296,11 +304,13 @@ full list of fields with comments.
 
 Optional AWG compressor / load control talks to the site's existing
 **Eaton AbleEdge** smart breaker over HTTP (not a breaker SKU; G5Q-14
-relays stay as fallback). Installer binding, fail-safe, and the Eaton
-developer-app checklist are in
-[docs/ableedge-integration.md](docs/ableedge-integration.md). Live API
-smoke is blocked until credentials from `jacques@bluesignal.xyz` are
-installed on the unit — never commit them.
+relays stay as fallback / interlock). The `smart_breaker_*` keys are set
+from the Service Window's AWG circuit page; the installer binding,
+fail-safe, and the Eaton developer-app checklist are in
+[docs/smart-breaker-installer-guide.md](docs/smart-breaker-installer-guide.md)
+and [docs/smart-breaker-integration.md](docs/smart-breaker-integration.md).
+Live API smoke is blocked until the Eaton credentials are installed on the
+unit — never commit them.
 
 ---
 
@@ -529,6 +539,7 @@ http://<pi-ip>:8080/lora/              # set AppKey, view join state
 http://<pi-ip>:8080/relays/            # manual relay control
 http://<pi-ip>:8080/calibration/       # pH/TDS/turbidity calibration
 http://<pi-ip>:8080/rs485/             # add and address RS485 digital probes
+http://<pi-ip>:8080/awg/               # bind / switch the AWG smart-breaker circuit (optional)
 http://<pi-ip>:8080/settings/          # config, PIN, remote reboot
 http://<pi-ip>:8080/diagnostics/       # run hardware probe
 ```

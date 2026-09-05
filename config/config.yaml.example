@@ -50,6 +50,43 @@ db_max_rows: 100000
 fan_on_temp_c: 60.0          # Turn fan on above this CPU temp
 fan_off_temp_c: 55.0         # Turn fan off below this CPU temp
 
+# --- Smart breaker / AWG load control (optional) ---
+# WQM-1 can ask an EXISTING residential smart breaker to energise or
+# de-energise the customer's AWG (atmospheric water generator) circuit. It is
+# not a breaker itself and does no panel work. The G5Q-14 relays stay as the
+# local interlock / fallback path. See docs/smart-breaker-integration.md and
+# docs/smart-breaker-installer-guide.md.
+#
+#   smart_breaker_vendor:  none        - feature off (default)
+#                          relay_only  - AWG enable on a G5Q channel; no cloud API
+#                          ableedge    - Eaton AbleEdge / Smart Breaker API
+#   smart_breaker_fail_safe: off | last | on   - load state when the breaker API
+#                          has been unreachable for smart_breaker_unreachable_grace_s.
+#                          `off` is the shipped default for compressor loads.
+#   smart_breaker_circuit_amps: entered by the INSTALLER from the panel label.
+#                          0 = not entered. The firmware never guesses this.
+smart_breaker_vendor: "none"
+smart_breaker_device_id: ""           # Eaton device UUID bound to the AWG circuit
+smart_breaker_site_id: ""             # Eaton locationId (site) the device belongs to
+smart_breaker_circuit_label: ""       # e.g. "Panel A / 14 — AWG-1"
+smart_breaker_circuit_amps: 0
+smart_breaker_interlock_relay: 0      # 0 = none, 1-4 = G5Q channel in series with AWG enable
+smart_breaker_poll_s: 60
+smart_breaker_fail_safe: "off"          # quote it: bare off/on are YAML booleans
+smart_breaker_unreachable_grace_s: 300
+# Auth. `direct` = this unit holds Eaton ORGANISATION service-account credentials.
+# `cloud_proxy` = the BlueSignal Cloud Functions hold them (preferred; pending).
+# Credentials are provisioning-time only, never pushed remotely, never committed.
+# Leave the three credential keys empty to supply them out of band instead:
+# env ABLEEDGE_CLIENT_ID / ABLEEDGE_CLIENT_SECRET / ABLEEDGE_SUBSCRIPTION_KEY, or
+# files client_id / client_secret / subscription_key in /etc/bluesignal/secrets/ableedge/.
+smart_breaker_auth_mode: "direct"
+smart_breaker_api_base: "https://api.em.eaton.com/api/v1"
+smart_breaker_token_url: "https://api.em.eaton.com/oauth2/token"
+smart_breaker_client_id: ""
+smart_breaker_client_secret: ""
+smart_breaker_subscription_key: ""
+
 # --- Service window (local web UI) ---
 service_window:
   enabled: true
@@ -179,32 +216,3 @@ rules:
     relay: 2
     action: "off"
     duration_s: 0
-
-# --- Optional AWG load control (Eaton AbleEdge only) ---
-# WQM-1 talks to the site's existing AbleEdge smart breaker. This is not a
-# breaker SKU and does not replace the G5Q-14 relays — those stay as
-# fallback / interlock. See docs/ableedge-integration.md.
-#
-# vendor: ableedge | none | relay_only
-# fail_safe: off (default, prefer fail-OFF for compressor/AWG) | last | on
-# circuit_ampacity_a: installer input only — never guessed
-# credentials: env/file *names* only. Do not put Client ID/secret/API key here.
-#
-# Live smoke is blocked until jacques@bluesignal.xyz installs the Eaton
-# developer-app credentials as env vars or files under secrets_dir.
-load_control:
-  vendor: none
-  site_id: ""
-  device_id: ""          # AbleEdge device UUID (installer binds site AWG here)
-  circuit_id: ""         # optional; defaults to device_id
-  circuit_ampacity_a:    # e.g. 20 — only if the installer entered it
-  poll_s: 30
-  fail_safe: off
-  fallback_relay:        # 1-4 G5Q-14 interlock channel, or leave empty
-  api_base: "https://api.em.eaton.com"
-  backend: http          # http | mock (mock is for tests/bench only)
-  credentials:
-    client_id_env: ABLEEDGE_CLIENT_ID
-    client_secret_env: ABLEEDGE_CLIENT_SECRET
-    subscription_key_env: ABLEEDGE_SUBSCRIPTION_KEY
-    secrets_dir: /etc/bluesignal/secrets/ableedge

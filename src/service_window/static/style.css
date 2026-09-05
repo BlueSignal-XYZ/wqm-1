@@ -284,7 +284,8 @@ pre.output {
 .setup-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
 .setup-form input[type="text"],
 .setup-form input[type="password"],
-.setup-form input[type="number"] {
+.setup-form input[type="number"],
+.setup-form select {
     padding: 10px;
     font-size: 1rem;
     border: 1px solid #c6ccd2;

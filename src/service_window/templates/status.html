@@ -19,11 +19,15 @@
 </div>
 
 <h2>Connections</h2>
+{% set system_labels = {'smart_breaker': 'AWG breaker'} %}
 <div class="grid">
     {% for name, card in system_cards.items() %}
-    {{ health_card(name|capitalize, card) }}
+    {{ health_card(system_labels.get(name, name|capitalize), card) }}
     {% endfor %}
 </div>
+{% if 'smart_breaker' in system_cards %}
+<p><a href="{{ url_for('awg.index') }}">Open the AWG circuit page</a> to switch the load or check the breaker binding.</p>
+{% endif %}
 
 {% if reading %}
 <h2>Latest reading</h2>

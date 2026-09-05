@@ -28,6 +28,11 @@ advanced configuration file.</p>
     <button type="submit" name="restart" value="1" class="btn btn-secondary">Restart monitoring service</button>
 </form>
 <hr>
+<h2>AWG load control</h2>
+<p class="lead"><small>Bind this unit to the site's Eaton AbleEdge smart breaker, or
+to a relay-only enable line, and switch the AWG circuit.
+<a href="{{ url_for('awg.index') }}">Open the AWG circuit page</a>.</small></p>
+<hr>
 <h2>Reboot the unit</h2>
 <p class="lead"><small>Restarts the whole device, not just the monitoring service.
 Use this when the unit answers here but not over SSH. Relays are switched off

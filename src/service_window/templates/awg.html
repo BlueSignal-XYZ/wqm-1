@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% from "_health.html" import health_card %}
+{% block title %}AWG circuit{% endblock %}
+{% block content %}
+<h1>AWG circuit</h1>
+<p class="lead">Load control for the atmospheric water generator through the site's
+smart breaker. The WQM-1 interlock relay always switches first; the breaker
+follows, and the fail-safe takes over if the breaker link drops.</p>
+
+{% if status.card %}
+<div class="grid">
+    {{ health_card('AWG breaker', status.card) }}
+</div>
+{% elif values.smart_breaker_vendor == 'relay_only' %}
+<p class="lead">Relay-only mode: the AWG enable line is switched by interlock relay
+{{ values.smart_breaker_interlock_relay }}. No breaker link to monitor.</p>
+{% else %}
+<p class="lead">No smart breaker is bound to this unit yet. Fill in the binding below.</p>
+{% endif %}
+
+{% if status.configured %}
+<h2>Live</h2>
+<div class="grid" id="awg-live">
+    <div class="card">
+        <div class="card-label">Circuit</div>
+        <div class="card-value" id="awg-position">
+            {% if status.breaker %}{{ 'ON' if status.breaker.isOn else 'OFF' }}{% else %}—{% endif %}
+        </div>
+        <div class="card-value-sm">{{ status.circuitLabel or status.deviceId or '' }}
+            {% if status.circuitAmps %}· {{ status.circuitAmps }} A{% endif %}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Breaker link</div>
+        <div class="card-value" id="awg-link">{{ 'Up' if status.linkOk else 'Down' }}</div>
+        <div class="card-value-sm" id="awg-link-detail">
+            {% if not status.linkOk %}{{ status.unreachableForS or 0 }} s · {{ status.lastError or '' }}{% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-label">Fail-safe</div>
+        <div class="card-value" id="awg-failsafe">{{ (status.failSafe or 'off')|upper }}</div>
+        <div class="card-value-sm" id="awg-failsafe-applied">
+            {% if status.failSafeApplied %}applied: {{ status.failSafeApplied|upper }}{% else %}not applied{% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-label">Power</div>
+        <div class="card-value" id="awg-power">
+            {% if status.power and status.power.currentA is not none %}{{ "%.1f"|format(status.power.currentA) }} A{% else %}—{% endif %}
+        </div>
+        <div class="card-value-sm" id="awg-power-detail">
+            {% if status.power %}
+                {% if status.power.voltageV is not none %}{{ "%.0f"|format(status.power.voltageV) }} V{% endif %}
+                {% if status.power.energyDeliveredWh is not none %}· {{ "%.0f"|format(status.power.energyDeliveredWh) }} Wh{% endif %}
+            {% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-label">Interlock relay</div>
+        <div class="card-value">{{ status.interlockRelay or '—' }}</div>
+        <div class="card-value-sm" id="awg-pending">
+            {% if status.pendingCommand %}queued: {{ status.pendingCommand }}{% endif %}
+        </div>
+    </div>
+</div>
+
+<h2>Switch</h2>
+<p><small>Switching goes through the interlock relay and then the breaker. OFF is
+always honoured locally even if the breaker is unreachable; ON is refused when
+the breaker cannot confirm.</small></p>
+<form method="post" action="{{ url_for('awg.set_circuit') }}" class="awg-switch" id="awg-switch-form">
+    <label>Reason (optional, written to the audit log)
+        <input type="text" name="reason" id="awg-reason" maxlength="120" placeholder="e.g. commissioning check">
+    </label>
+    <div class="relay-controls">
+        <button type="submit" name="state" value="on" class="btn btn-on"
+                onclick="return awgSwitch(event, true)">AWG ON</button>
+        <button type="submit" name="state" value="off" class="btn btn-off"
+                onclick="return awgSwitch(event, false)">AWG OFF</button>
+    </div>
+    <p id="awg-result" class="card-value-sm"></p>
+</form>
+{% endif %}
+
+<hr>
+<h2>Breaker binding</h2>
+<p class="lead"><small>Collected on site with the electrician. Nothing here is
+guessed: the ampacity is read off the breaker handle and the UUIDs come from the
+Eaton developer portal (see the installer guide).</small></p>
+<form method="post" action="{{ url_for('awg.bind') }}" class="setup-form" autocomplete="off">
+    <label>Vendor
+        <select name="smart_breaker_vendor">
+            {% for value, label in vendors %}
+            <option value="{{ value }}" {% if values.smart_breaker_vendor == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <small>"Relay only" drives the AWG enable line from a WQM-1 relay with no breaker link.</small>
+    </label>
+    <label>Site UUID (Eaton location)
+        <input type="text" name="smart_breaker_site_id" value="{{ values.smart_breaker_site_id }}"
+               maxlength="{{ specs.smart_breaker_site_id.max_length }}" spellcheck="false">
+        <small>Optional. The Eaton <code>locationId</code> this breaker belongs to.</small>
+    </label>
+    <label>Device UUID (Eaton breaker)
+        <input type="text" name="smart_breaker_device_id" value="{{ values.smart_breaker_device_id }}"
+               maxlength="{{ specs.smart_breaker_device_id.max_length }}" spellcheck="false">
+        <small>The AbleEdge device that feeds the AWG. Not the serial number.</small>
+    </label>
+    <label>Panel label
+        <input type="text" name="smart_breaker_circuit_label" value="{{ values.smart_breaker_circuit_label }}"
+               maxlength="{{ specs.smart_breaker_circuit_label.max_length }}" placeholder="e.g. Garage AWG">
+        <small>How the circuit is labelled in the panel — shown on the dashboard.</small>
+    </label>
+    <label>Circuit ampacity (A)
+        <input type="number" name="smart_breaker_circuit_amps" value="{{ values.smart_breaker_circuit_amps or '' }}"
+               min="{{ specs.smart_breaker_circuit_amps.min }}" max="{{ specs.smart_breaker_circuit_amps.max }}">
+        <small>Read off the breaker handle. Required for an Eaton binding.</small>
+    </label>
+    <label>Interlock relay channel
+        <select name="smart_breaker_interlock_relay">
+            <option value="0" {% if not values.smart_breaker_interlock_relay %}selected{% endif %}>None</option>
+            {% for ch in range(1, 5) %}
+            <option value="{{ ch }}" {% if values.smart_breaker_interlock_relay == ch %}selected{% endif %}>Relay {{ ch }}</option>
+            {% endfor %}
+        </select>
+        <small>WQM-1 relay wired in series with the AWG enable input. Strongly recommended.</small>
+    </label>
+    <label>Fail-safe when the breaker is unreachable
+        <select name="smart_breaker_fail_safe">
+            {% for value, label in fail_safe_modes %}
+            <option value="{{ value }}" {% if values.smart_breaker_fail_safe == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>Grace period before fail-safe (seconds)
+        <input type="number" name="smart_breaker_unreachable_grace_s" value="{{ values.smart_breaker_unreachable_grace_s }}"
+               min="{{ specs.smart_breaker_unreachable_grace_s.min }}" max="{{ specs.smart_breaker_unreachable_grace_s.max }}">
+        <small>How long the link may be down before the fail-safe applies. 0 = immediately.</small>
+    </label>
+    <label>Poll interval (seconds)
+        <input type="number" name="smart_breaker_poll_s" value="{{ values.smart_breaker_poll_s }}"
+               min="{{ specs.smart_breaker_poll_s.min }}" max="{{ specs.smart_breaker_poll_s.max }}">
+        <small>How often the breaker is asked for its position and power.</small>
+    </label>
+
+    <h3>Eaton developer credentials</h3>
+    <p><small>Stored in the device config, never shown again. Leave a field blank to
+    keep the value already on the unit. Alternatively install them as files named
+    <code>client_id</code>, <code>client_secret</code> and <code>subscription_key</code>
+    under <code>{{ secrets_dir }}</code> and leave these blank.</small></p>
+    <label>Client ID
+        <input type="password" name="smart_breaker_client_id" autocomplete="new-password"
+               placeholder="{{ secret_hint.smart_breaker_client_id }}">
+    </label>
+    <label>Client secret
+        <input type="password" name="smart_breaker_client_secret" autocomplete="new-password"
+               placeholder="{{ secret_hint.smart_breaker_client_secret }}">
+    </label>
+    <label>Subscription key
+        <input type="password" name="smart_breaker_subscription_key" autocomplete="new-password"
+               placeholder="{{ secret_hint.smart_breaker_subscription_key }}">
+    </label>
+    <button type="submit" class="btn btn-primary">Save binding</button>
+</form>
+<hr>
+<form method="post" action="{{ url_for('awg.restart') }}">
+    <p><small>The binding takes effect after a restart. Sampling pauses for about a
+    minute; the interlock relay drops during the restart.</small></p>
+    <button type="submit" class="btn btn-secondary">Restart monitoring service</button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function awgSwitch(ev, state) {
+    if (!window.fetch) { return true; }
+    ev.preventDefault();
+    if (!confirm(state ? 'Switch the AWG circuit ON?' : 'Switch the AWG circuit OFF?')) { return false; }
+    const out = document.getElementById('awg-result');
+    out.textContent = 'Sending…';
+    fetch('{{ url_for("awg.api_set_circuit") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({state: state, reason: document.getElementById('awg-reason').value})
+    })
+    .then(r => r.json())
+    .then(data => {
+        out.textContent = data.message || (data.ok ? 'Done.' : ('Error: ' + (data.error || 'unknown')));
+        out.className = data.ok ? 'relay-on' : 'relay-off';
+        awgRefresh();
+    })
+    .catch(() => { out.textContent = 'Connection error'; out.className = 'relay-off'; });
+    return false;
+}
+
+function awgRefresh() {
+    if (!document.getElementById('awg-live')) { return; }
+    fetch('{{ url_for("awg.status_json") }}')
+    .then(r => r.json())
+    .then(s => {
+        if (!s.configured) { return; }
+        const set = (id, text) => { const el = document.getElementById(id); if (el) { el.textContent = text; } };
+        set('awg-position', s.breaker ? (s.breaker.isOn ? 'ON' : 'OFF') : '—');
+        set('awg-link', s.linkOk ? 'Up' : 'Down');
+        set('awg-link-detail', s.linkOk ? '' : ((s.unreachableForS || 0) + ' s · ' + (s.lastError || '')));
+        set('awg-failsafe', String(s.failSafe || 'off').toUpperCase());
+        set('awg-failsafe-applied', s.failSafeApplied ? ('applied: ' + String(s.failSafeApplied).toUpperCase()) : 'not applied');
+        if (s.power && s.power.currentA != null) {
+            set('awg-power', s.power.currentA.toFixed(1) + ' A');
+            let d = '';
+            if (s.power.voltageV != null) { d += s.power.voltageV.toFixed(0) + ' V'; }
+            if (s.power.energyDeliveredWh != null) { d += ' · ' + s.power.energyDeliveredWh.toFixed(0) + ' Wh'; }
+            set('awg-power-detail', d);
+        } else {
+            set('awg-power', '—');
+            set('awg-power-detail', '');
+        }
+        set('awg-pending', s.pendingCommand ? ('queued: ' + s.pendingCommand) : '');
+    })
+    .catch(() => {});
+}
+setInterval(awgRefresh, 10000);
+</script>
+{% endblock %}
