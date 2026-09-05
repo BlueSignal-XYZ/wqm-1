@@ -65,7 +65,8 @@ from integrations.smart_breaker.base import (
 logger = logging.getLogger("wqm1.smart_breaker.ableedge")
 
 DEFAULT_API_BASE = "https://api.em.eaton.com/api/v1"
-DEFAULT_TOKEN_URL = "https://api.em.eaton.com/oauth2/token"
+# B105: a public endpoint URL, not a credential — bandit keys on the word TOKEN.
+DEFAULT_TOKEN_URL = "https://api.em.eaton.com/oauth2/token"  # nosec B105
 DEFAULT_SUBSCRIPTION_HEADER = "Em-Api-Subscription-Key"
 
 # Refresh this many seconds before the token's stated expiry so a request
