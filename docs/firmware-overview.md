@@ -71,7 +71,10 @@ Source: `src/storage/database.py`, `src/cloud/client.py`, `src/utils/health.py`.
   apply live, restart keys apply on the next restart, and a bad config can
   never brick the device (last-known-good is kept). Credentials and URLs can
   never be pushed remotely.
-- **Commands** — `restart`, `config_reload`, `ota_check`, `diagnostics`.
+- **Commands** — `restart`, `config_reload`, `ota_check`, `diagnostics`,
+  plus `awg` / `circuit` for optional Eaton AbleEdge AWG load control
+  (see [ableedge-integration.md](ableedge-integration.md)). G5Q-14 relays
+  stay as fallback / interlock and are not the AbleEdge path.
 
 Source: `src/ota/`, `src/utils/config.py` (ConfigManager), `src/main.py`.
 
@@ -94,3 +97,4 @@ Wi-Fi sync; analog/LoRa/relay require the Pi). See [platforms.md](platforms.md).
 - [ota-runbook.md](ota-runbook.md) — over-the-air update operations
 - [sensor-calibration.md](sensor-calibration.md) — per-probe calibration
 - [hardware-overview.md](hardware-overview.md) — board, BOM, pinout; BUILD provisional TDS / 3.3 V estimates
+- [ableedge-integration.md](ableedge-integration.md) — Eaton AbleEdge AWG load-control skeleton (mock-tested; live smoke blocked on credentials)

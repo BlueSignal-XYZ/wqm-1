@@ -294,6 +294,14 @@ Key settings you may want to adjust:
 See [`config/config.yaml.example`](config/config.yaml.example) for the
 full list of fields with comments.
 
+Optional AWG compressor / load control talks to the site's existing
+**Eaton AbleEdge** smart breaker over HTTP (not a breaker SKU; G5Q-14
+relays stay as fallback). Installer binding, fail-safe, and the Eaton
+developer-app checklist are in
+[docs/ableedge-integration.md](docs/ableedge-integration.md). Live API
+smoke is blocked until credentials from `jacques@bluesignal.xyz` are
+installed on the unit — never commit them.
+
 ---
 
 ### Step 5 — Reboot & Verify Hardware
