@@ -15,6 +15,9 @@
         <a href="{{ url_for('rs485.index') }}" {% if '/rs485' in request.path %}class="active"{% endif %}>RS485 Sensors</a>
         <a href="{{ url_for('lora.index') }}" {% if '/lora' in request.path %}class="active"{% endif %}>LoRaWAN</a>
         <a href="{{ url_for('relays.index') }}" {% if '/relays' in request.path %}class="active"{% endif %}>Relays</a>
+        {% if awg_bound %}
+        <a href="{{ url_for('awg.index') }}" {% if '/awg' in request.path %}class="active"{% endif %}>AWG circuit</a>
+        {% endif %}
         <a href="{{ url_for('diagnostics.index') }}" {% if '/diagnostics' in request.path %}class="active"{% endif %}>Diagnostics</a>
         <a href="{{ url_for('provision.index') }}" {% if '/provision' in request.path %}class="active"{% endif %}>Provisioning</a>
         <a href="{{ url_for('settings.index') }}" {% if '/settings' in request.path %}class="active"{% endif %}>Settings</a>

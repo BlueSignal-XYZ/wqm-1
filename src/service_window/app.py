@@ -90,6 +90,7 @@ def create_app(config: dict | None = None) -> Flask:
     # Register blueprints
     app.register_blueprint(auth_bp)
 
+    from service_window.routes.awg import awg_bp
     from service_window.routes.calibration import calibration_bp
     from service_window.routes.diagnostics import diagnostics_bp
     from service_window.routes.lora import lora_bp
@@ -111,6 +112,17 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(provision_bp)
     app.register_blueprint(setup_bp)
     app.register_blueprint(settings_bp)
+    app.register_blueprint(awg_bp)
+
+    # The sidebar is already long, so the AWG page only earns a nav entry once
+    # a smart breaker (or relay-only load) is actually bound. Before that it
+    # is reached from Settings, where an installer goes to set it up anyway.
+    @app.context_processor
+    def _awg_nav() -> dict:  # type: ignore[reportUnusedFunction]
+        from service_window.config_editor import read_config
+
+        vendor = read_config(app.config["CONFIG_PATH"]).get("smart_breaker_vendor")
+        return {"awg_bound": bool(vendor) and vendor != "none"}
 
     # Until the factory PIN is replaced and the setup wizard finished, every
     # page funnels into /setup — a unit can't be left half-commissioned by

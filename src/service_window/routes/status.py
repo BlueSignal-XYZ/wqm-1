@@ -7,9 +7,10 @@ from flask import Blueprint, current_app, render_template
 
 from service_window import read_firmware_version
 from service_window.auth import login_required
+from service_window.cmd_client import send_command
 from service_window.config_editor import read_config
 from service_window.db_reader import DBReader
-from service_window.health import sensor_cards, system_cards, worst_status
+from service_window.health import sensor_cards, smart_breaker_card, system_cards, worst_status
 
 status_bp = Blueprint("status", __name__)
 
@@ -31,6 +32,13 @@ def index() -> str:
 
     s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
     sys_cards = system_cards(readings, config, session, count)
+    if config.get("smart_breaker_vendor") == "ableedge":
+        # Live snapshot, not SQLite: only asked for when a breaker is bound so
+        # an unbound unit never pays the socket round-trip on its home page.
+        awg = send_command(current_app.config["CMD_SOCK"], "awg_status")
+        card = smart_breaker_card(config, awg)
+        if card is not None:
+            sys_cards["smart_breaker"] = card
     overall = worst_status({**s_cards, **sys_cards})
 
     lora_joined = bool(session and session.get("joined"))
