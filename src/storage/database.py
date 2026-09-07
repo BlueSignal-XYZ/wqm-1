@@ -110,6 +110,11 @@ class WQM1Database:
         self._all_conns: list[sqlite3.Connection] = []
         self._conns_lock = threading.Lock()
         self._closed = False
+        # With cloud sync disabled nothing ever marks a row synced, so the
+        # resolved-only rotation below never fires and the buffer grows for
+        # ever. main.py sets this when cloud_enabled is false: then rotation
+        # also drops the OLDEST pending rows beyond db_max_rows.
+        self.rotate_pending = False
 
         # Create schema + run migrations on the constructing thread.
         with self._conn:
@@ -354,6 +359,28 @@ class WQM1Database:
 
         if deleted > 0:
             logger.info("Rotated %d resolved rows (total was %d)", deleted, total)
+
+        if self.rotate_pending:
+            over = self.get_count() - max_rows
+            if over > 0:
+                with conn:
+                    cur = conn.execute(
+                        """DELETE FROM readings WHERE id IN (
+                               SELECT id FROM readings
+                               WHERE sync_state = 'pending'
+                               ORDER BY timestamp ASC
+                               LIMIT ?
+                           )""",
+                        (over,),
+                    )
+                    dropped = cur.rowcount
+                if dropped > 0:
+                    logger.warning(
+                        "Rotated %d PENDING rows — cloud sync is disabled, buffer capped at %d",
+                        dropped,
+                        max_rows,
+                    )
+                    deleted += dropped
         return deleted
 
     def get_latest(self) -> dict[str, Any] | None:

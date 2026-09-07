@@ -346,6 +346,9 @@ class Settings:
     smart_breaker_poll_s: int = 60
     smart_breaker_fail_safe: str = "off"
     smart_breaker_unreachable_grace_s: int = 300
+    # Compressor short-cycle guard: an ON request within this many seconds of
+    # the last OFF (from any source, fail-safe included) is refused.
+    smart_breaker_min_off_s: int = 180
     # Auth mode. `direct` = this device holds Eaton organisation service-account
     # credentials (below) and calls Eaton itself. `cloud_proxy` = the device
     # calls the BlueSignal device API with its existing X-API-Key and the Cloud
@@ -476,6 +479,7 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
         str, hot=True, max_length=8, choices=SMART_BREAKER_FAIL_SAFE_MODES
     ),
     "smart_breaker_unreachable_grace_s": SettingSpec(int, hot=True, min=0, max=86400),
+    "smart_breaker_min_off_s": SettingSpec(int, hot=True, min=0, max=3600),
     "smart_breaker_auth_mode": SettingSpec(
         str, hot=False, max_length=16, remote=False, choices=SMART_BREAKER_AUTH_MODES
     ),

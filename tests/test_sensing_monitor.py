@@ -53,7 +53,10 @@ class TestFlatline:
         for _ in range(5):
             assert monitor.observe(reading(ph=7.0)) == []
             clock.advance(60)
-        assert monitor.suspended_sensors() == {"ph"}
+        # Flat is advisory: reported in health, but it never suspends rules
+        # (still water looks exactly like this — see suspended_sensors()).
+        assert monitor.health()["ph"]["status"] != "ok"
+        assert monitor.suspended_sensors() == set()
 
     def test_recovery_emits_event_and_clears_suspension(self):
         clock = FakeClock()
@@ -61,7 +64,7 @@ class TestFlatline:
         for _ in range(21):
             monitor.observe(reading(ph=7.0))
             clock.advance(60)
-        assert monitor.suspended_sensors() == {"ph"}
+        assert monitor.health()["ph"]["status"] != "ok"
         events = monitor.observe(reading(ph=7.4))  # variation above noise floor
         assert [e["type"] for e in events] == ["sensor_recovered"]
         assert events[0]["sensor"] == "ph"

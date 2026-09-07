@@ -81,6 +81,9 @@ class SmartBreakerController:
         self._fail_safe_applied: FailSafeMode | None = None
         # (on, reason) to send when the link returns. Only OFF is ever queued.
         self._pending: tuple[bool, str] | None = None
+        # Monotonic time of the last OFF we issued (any source, fail-safe
+        # included) — the compressor short-cycle guard counts from here.
+        self._last_off_mono: float | None = None
 
         s = self._settings()
         if self.vendor == "ableedge" and not int(getattr(s, "smart_breaker_circuit_amps", 0)):
@@ -107,6 +110,20 @@ class SmartBreakerController:
     @property
     def _grace_s(self) -> float:
         return float(getattr(self._settings(), "smart_breaker_unreachable_grace_s", 300))
+
+    @property
+    def min_off_s(self) -> float:
+        """Minimum time the circuit must stay off before it may be re-energised
+        (``smart_breaker_min_off_s``). An AWG is a compressor: restarting it
+        against head pressure within a couple of minutes of stopping is how
+        compressors die. 0 disables the guard."""
+        return float(getattr(self._settings(), "smart_breaker_min_off_s", 0) or 0)
+
+    def short_cycle_remaining_s(self) -> float:
+        """Seconds until an ON request will be accepted (0 = now)."""
+        if self._last_off_mono is None or self.min_off_s <= 0:
+            return 0.0
+        return max(0.0, self.min_off_s - (self._clock() - self._last_off_mono))
 
     @property
     def interlock_relay(self) -> int | None:
@@ -196,6 +213,7 @@ class SmartBreakerController:
             "lastError": self._last_error,
         }
         if mode is FailSafeMode.OFF:
+            self._last_off_mono = self._clock()
             details["interlockDropped"] = self._set_interlock(False, "fail-safe OFF")
             self._desired = False
             self._pending = (False, "WQM-1 fail-safe: breaker API unreachable")
@@ -250,6 +268,25 @@ class SmartBreakerController:
                 "vendor": vendor,
                 "interlockRelay": self.interlock_relay,
             }
+            if on:
+                remaining = self.short_cycle_remaining_s()
+                if remaining > 0:
+                    logger.warning(
+                        "AWG circuit ON refused for %s: short-cycle guard, %.0f s remaining",
+                        source,
+                        remaining,
+                    )
+                    return {
+                        **result,
+                        "ok": False,
+                        "error": (
+                            f"short-cycle guard: wait {remaining:.0f} s before "
+                            "re-energising the compressor circuit"
+                        ),
+                        "retryAfterS": int(remaining + 0.999),
+                    }
+            else:
+                self._last_off_mono = self._clock()
             if vendor == "relay_only":
                 if self.interlock_relay is None:
                     return {**result, "ok": False, "error": "relay_only needs interlock relay 1-4"}

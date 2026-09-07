@@ -14,13 +14,23 @@
 #   threshold:   numeric trigger value
 #   relay:       1-4 (which relay channel to control)
 #   action:      on | off
-#   duration_s:  auto-shutoff after N seconds (0 = stay until cleared)
+#   duration_s:  auto-shutoff after N seconds (0 = stay until cleared).
+#                Enforced by a timer in the relay controller, so it fires
+#                on time whatever the sampling interval is doing.
 # ---------------------------------------------------------------
 
 # --- Safety limits ---
 limits:
   max_on_minutes_per_hour: 10    # Max cumulative relay ON time per hour
+                                 # (gates NEW on-actions; it does not cut a
+                                 # relay that is already on)
   cooldown_seconds: 120          # Min seconds between relay OFF → ON
+  # Hard ceiling on ONE continuous on-period for ANY relay from ANY source
+  # (rule, cloud command, Service Window, LoRa downlink). Enforced by the
+  # relay controller's own timer, independent of the sampling loop. 0 = none.
+  # Set it if a channel drives a dosing pump; leave 0 if a channel must be
+  # able to hold an aerator or circulation pump on for hours.
+  max_continuous_on_minutes: 0
   max_temp_c: 50.0               # Reference limit (informational)
 
 # --- Schedule window ---

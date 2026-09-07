@@ -44,9 +44,11 @@ Source: `src/app/` (supervisor, state, workers), `src/main.py`.
   a USB adapter. When the 5-in-1 is present its pH/TDS/temperature supersede the
   analog equivalents; the digital ORP supersedes analog ORP.
 - **Smarter sensing (`src/sensing/`):** stuck/flatline detection, robust
-  z-score spike flags, and calibration-drift tracking. A stuck probe is
-  reported as a fault (never fake data) and its relay rules are suspended.
-  Adaptive sampling can speed up while a value is changing fast.
+  z-score spike flags, and calibration-drift tracking. A probe that stops
+  producing data is reported as a fault (never fake data) and its relay
+  rules are suspended; a probe that is merely flat (still water) is reported
+  as advisory only. pH publishes nothing until a two-point calibration is
+  stored. Adaptive sampling can speed up while a value is changing fast.
 
 Source: `src/sensors/`, `src/sensing/`, `src/app/workers.py`,
 `src/diagnostics/explain.py` (plain-language health strings).

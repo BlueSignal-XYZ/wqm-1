@@ -18,6 +18,13 @@
         <div class="card-value">{{ session.fcnt_down }}</div>
     </div>
 </div>
+{% if session.joined %}
+<form method="post" action="{{ url_for('lora.rejoin') }}"
+      onsubmit="return confirm('Forget the current LoRaWAN session and rejoin? Uplinks stop until the new join succeeds.');">
+    <button type="submit" class="btn">Forget session and rejoin</button>
+</form>
+<p><small>Use after the device was re-registered, or its session or frame counters were reset, on the network server.</small></p>
+{% endif %}
 {% endif %}
 
 <h2>AppKey</h2>

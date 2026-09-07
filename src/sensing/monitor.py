@@ -272,9 +272,19 @@ class SensorMonitor:
         return result
 
     def suspended_sensors(self) -> set[str]:
-        """Sensors currently stuck — the sampling worker suspends relay
-        rules tied to these (we only expose the set)."""
-        return {sensor for sensor, kind in self._stuck.items() if kind}
+        """Sensors whose relay rules the sampling worker must suspend.
+
+        Only ``no_data`` qualifies — a probe that has produced nothing for the
+        whole window. A ``flat`` sensor is reported (event + health) but NOT
+        suspended: a DS18B20 quantises to 0.0625 °C and pH is published to
+        0.01 through a median filter, so twenty identical readings in twenty
+        minutes is what a large, still body of water looks like. Suspending
+        on that dropped every relay the sensor drives to fail-safe — including
+        the dosing pumps via the over-temperature shutoff rules — on healthy
+        sites. A genuinely dead analog input is caught upstream by the rail /
+        open-input checks and arrives here as ``no_data``.
+        """
+        return {sensor for sensor, kind in self._stuck.items() if kind == "no_data"}
 
     def reset_baseline(self, sensor: str) -> None:
         """Restart the drift baseline for a sensor (wired to calibration)."""

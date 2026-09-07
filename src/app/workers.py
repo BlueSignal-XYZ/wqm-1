@@ -241,15 +241,16 @@ class SamplingWorker(Worker):
             self._sensors.get("orp"),
             self._sensors.get("chlorine"),
         )
+        # Analog pH, TDS and turbidity report a STATUS as well as a value, so
+        # a channel with no number this cycle can say why instead of
+        # vanishing. See sensors/status.py: clean water is a value, an open
+        # or dry probe is a fault, an uncalibrated pH electrode is a fault,
+        # and all must reach the customer's dashboard as themselves.
+        # `sensor_status` below carries the non-ok ones.
+        channel_status: dict[str, str] = {}
         ph = multi.get("ph")
         if ph is None and ph_s:
-            ph = self._safe_read("pH", lambda: ph_s.read(temp_c=temp_c))
-        # Analog TDS and turbidity report a STATUS as well as a value, so a
-        # channel with no number this cycle can say why instead of vanishing.
-        # See sensors/status.py: clean water is a value, an open or dry probe
-        # is a fault, and both must reach the customer's dashboard as
-        # themselves. `sensor_status` below carries the non-ok ones.
-        channel_status: dict[str, str] = {}
+            ph = self._read_channel("pH", "ph", ph_s, channel_status, temp_c=temp_c)
         tds = multi.get("tds_ppm")
         if tds is None and tds_s:
             tds = self._read_channel("TDS", "tds", tds_s, channel_status, temp_c=temp_c)

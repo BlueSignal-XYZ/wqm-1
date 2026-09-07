@@ -120,6 +120,14 @@ _MAC_REQ_LEN = {
 }
 _MAX_FOPTS_LEN = 15
 
+# Session liveness. Every LINK_CHECK_EVERY_UPLINKS uplinks with no downlink of
+# any kind, a LinkCheckReq rides along; after this many go unanswered the
+# session is presumed dead on the network side (device re-registered, session
+# reset, NS migrated) and the device forgets it and rejoins. At the default
+# 300 s cadence: 24 uplinks = 2 h per check, 3 unanswered = ~6-8 h to rejoin.
+LINK_CHECK_EVERY_UPLINKS = 24
+REJOIN_AFTER_UNANSWERED_LINK_CHECKS = 3
+
 
 def rx1_data_rate(uplink_dr: int, rx1_dr_offset: int) -> int:
     """US915 RX1 downlink data rate for an uplink DR and RX1DROffset (RP002)."""
@@ -218,6 +226,10 @@ class LoRaWANMAC:
         self._app_key = app_key
         self._session = LoRaWANSession()
         self._dev_nonce = 0
+        # Monotonic DevNonce counter (persisted in mac_params). LoRaWAN 1.0.3
+        # only asks for a random value, but TTN and ChirpStack refuse a reused
+        # one; a counter can never repeat within 65536 joins.
+        self._dev_nonce_counter = -1
         self._persist_hook = persist_hook
         self._sub_band = sub_band
 
@@ -236,6 +248,8 @@ class LoRaWANMAC:
         self._pending_fopts = bytearray()  # MAC answers for the next uplink
         self._ack_pending = False  # a confirmed downlink awaits FCtrl.ACK
         self._last_link_check: tuple[int, int] | None = None
+        self._uplinks_since_downlink = 0
+        self._unanswered_link_checks = 0
 
     # ------------------------------------------------------------------
     # Session / persisted state
@@ -274,6 +288,7 @@ class LoRaWANMAC:
                 bits |= 1 << i
         return {
             "sf": self._sf,
+            "dev_nonce": self._dev_nonce_counter,
             "rx1_dr_offset": self._rx1_dr_offset,
             "rx2_dr": self._rx2_dr,
             "rx2_frequency": self._rx2_frequency,
@@ -297,8 +312,40 @@ class LoRaWANMAC:
             self._rx1_delay_s,
         )
 
+    def restore_mac_params(self, params: dict[str, Any] | None) -> None:
+        """Restore persisted MAC parameters without a session (an unjoined
+        unit still needs its DevNonce counter and last channel plan)."""
+        if params:
+            self._apply_mac_params(params)
+
+    def forget_session(self) -> None:
+        """Drop the session so the radio worker performs a fresh OTAA join."""
+        self._session = LoRaWANSession()
+        self._reset_mac_params()
+        self._uplinks_since_downlink = 0
+        self._unanswered_link_checks = 0
+        logger.warning("LoRaWAN session forgotten — will rejoin")
+
+    def _persist(self) -> None:
+        if self._persist_hook is None:
+            return
+        try:
+            self._persist_hook()
+        except Exception as e:  # noqa: BLE001 — persistence must not block the radio
+            logger.warning("Session persist failed: %s", e)
+
+    def _next_dev_nonce(self) -> int:
+        if self._dev_nonce_counter < 0:
+            self._dev_nonce_counter = int.from_bytes(os.urandom(2), "little")
+        else:
+            self._dev_nonce_counter = (self._dev_nonce_counter + 1) & 0xFFFF
+        return self._dev_nonce_counter
+
     def _apply_mac_params(self, params: dict[str, Any]) -> None:
         try:
+            nonce = params.get("dev_nonce")
+            if isinstance(nonce, int) and 0 <= nonce <= 0xFFFF:
+                self._dev_nonce_counter = nonce
             sf = int(params.get("sf", self._sf))
             if sf in _SF_TO_UP_DR:
                 self._sf = sf
@@ -381,7 +428,8 @@ class LoRaWANMAC:
         Returns:
             True if join succeeded, False on timeout/failure.
         """
-        self._dev_nonce = int.from_bytes(os.urandom(2), "little")
+        self._dev_nonce = self._next_dev_nonce()
+        self._persist()  # the nonce must never be reused, even across a crash
 
         # Build JoinRequest: MHDR(1) + AppEUI(8) + DevEUI(8) + DevNonce(2) + MIC(4)
         payload = bytearray()
@@ -533,6 +581,22 @@ class LoRaWANMAC:
             logger.error("Cannot send uplink: not joined")
             return None
 
+        # Session liveness probe (see LINK_CHECK_EVERY_UPLINKS).
+        self._uplinks_since_downlink += 1
+        if self._uplinks_since_downlink % LINK_CHECK_EVERY_UPLINKS == 0:
+            if self._unanswered_link_checks >= REJOIN_AFTER_UNANSWERED_LINK_CHECKS:
+                logger.error(
+                    "No downlink for %d uplinks and %d LinkCheckReq unanswered — the network "
+                    "no longer knows this session; forgetting it and rejoining",
+                    self._uplinks_since_downlink,
+                    self._unanswered_link_checks,
+                )
+                self.forget_session()
+                self._persist()
+                return None
+            self._unanswered_link_checks += 1
+            self._queue_answer(bytes([_CID_LINK_CHECK]))
+
         max_len = MAX_PAYLOAD_BY_DR[self.uplink_dr] - len(self._pending_fopts)
         if len(payload) > max_len:
             logger.error(
@@ -580,11 +644,7 @@ class LoRaWANMAC:
         self._session.fcnt_up += 1
         self._pending_fopts = bytearray()
         self._ack_pending = False
-        if self._persist_hook is not None:
-            try:
-                self._persist_hook()
-            except Exception as e:  # noqa: BLE001 — persistence must not block the uplink
-                logger.warning("Session persist before uplink failed: %s", e)
+        self._persist()
 
         channel = self._pick_channel()
         self._configure_tx(channel)
@@ -654,6 +714,8 @@ class LoRaWANMAC:
 
         # Verified — advance the counter so this frame can never be replayed.
         self._session.fcnt_down = fcnt + 1
+        self._uplinks_since_downlink = 0
+        self._unanswered_link_checks = 0
         if mhdr == _MHDR_CONFIRMED_DOWN:
             self._ack_pending = True
 
@@ -739,7 +801,10 @@ class LoRaWANMAC:
             self._queue_answer(bytes([_CID_RX_PARAM_SETUP, status]))
         elif cid == _CID_DEV_STATUS:
             # Battery 0 = connected to an external power source (24 V DC in).
-            margin = 0
+            # Margin = SNR of the last received frame, 6-bit two's complement.
+            snr = getattr(self._radio, "last_snr", None)
+            margin = int(round(float(snr))) if isinstance(snr, int | float) else 0
+            margin = max(-32, min(31, margin))
             self._queue_answer(bytes([_CID_DEV_STATUS, 0x00, margin & 0x3F]))
         elif cid == _CID_RX_TIMING_SETUP:
             delay = args[0] & 0x0F

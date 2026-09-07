@@ -141,10 +141,11 @@ Proper per-form CSRF tokens remain a follow-up.
 swept inside `RulesEngine.evaluate()`, which the sampling worker calls once
 per `sensor_read_s` (60 s default, up to 3600 s). A "30 s" acid dose runs until
 the next sample — 60 s, twice the configured volume — and if sampling stalls
-(no probe declared, worker in backoff) the relay stays on. **DECISION** —
-recommend a dedicated timer thread in `RelayController` that enforces
-`duration_s` independently of sampling (and a hard maximum-on-time for every
-ON, from any source).
+(no probe declared, worker in backoff) the relay stays on. **FIXED** —
+`RelayController` owns a per-channel timer thread: rules, LoRa downlinks and
+cloud `durationSeconds` all arm it, a later command replaces it, and
+`limits.max_continuous_on_minutes` in `policies.yaml` (0 = off) is a hard
+ceiling on any on-period from any source.
 
 **H9 — Flatline detector will trip on genuinely stable water.** A DS18B20
 quantises to 0.0625 °C and pH is rounded to 0.01 through a 5-sample median;
@@ -152,29 +153,32 @@ in a large, still body of water twenty identical readings in a 20-minute
 window are normal. Standard deviation 0 < noise floor → `sensor_stuck` →
 every relay driven by that sensor is dropped to fail-safe (including the
 dosing pumps, via the temp > 45 °C shutoff rules) and its rules stay
-suspended until the value moves. **DECISION** — either lengthen
-`flatline_window_min` (default 20 → 120+) and require a longer flat run for
-temperature, or make "flat" advisory (event only) and reserve the relay
-reversion for "no_data". *BENCH: two hours in a bucket of still water.*
+suspended until the value moves. **FIXED** — "flat" is now advisory (event
++ health "attention", no rule suspension, no relay reversion); only
+"no_data" suspends. A dead analog input still arrives as `no_data` via the
+rail / open-input checks. *BENCH: two hours in a bucket of still water should
+now produce an advisory event and nothing else.*
 
 **H10 — pH default calibration does not match the front-end.** Defaults are
 V@pH4 = 1.04 V, V@pH7 = 1.50 V (a positive 153 mV/pH slope). Through the
 LMP91200 the electrode voltage rides on VOCM (≈ VREF/2 ≈ 1.02 V unless the
 AFE's default VCM selection differs) with the Nernst sign the other way
 (pH 4 above pH 7). An uncalibrated unit therefore publishes pH that is both
-offset and inverted, and nothing marks pH `uncalibrated`. **DECISION /
-BENCH** — measure VOUT and VOCM in pH 4/7/10 buffers, set defaults from the
-measurement, and refuse to publish pH until a two-point calibration exists
-(the `UNCALIBRATED` status already exists for TDS/turbidity). Longer term,
-read AIN2−AIN3 differentially so VOCM drift cancels.
+offset and inverted, and nothing marked pH `uncalibrated`. **FIXED** — pH
+now publishes nothing, with status `uncalibrated`, until a real two-point
+calibration is stored (`CalibrationManager.is_calibrated("ph")`); the
+calibration page says a service restart applies it. *BENCH*: measure VOUT
+and VOCM in pH 4/7/10 buffers and record them. Longer term, read AIN2−AIN3
+differentially so VOCM drift cancels.
 
 **H11 — OTA self-test needs a fresh reading.** `_self_test()` passes only when
 the main service is active **and** a readings row is newer than the apply
 time. A unit with no probes declared, a probe outage, or an AWG-control-only
 deployment can never update: every release rolls back after
-`ota_self_test_timeout_s`. **DECISION** — accept "service active + READY +
-one successful heartbeat/health report" as the self-test, and treat a fresh
-reading as a bonus signal.
+`ota_self_test_timeout_s`. **FIXED** — the supervisor touches
+`/var/lib/bluesignal/alive` every 30 s while every worker is alive, and the
+self-test passes on "service active AND (fresh reading OR fresh liveness
+beat)".
 
 **H12 — Cayenne LPP clips TDS, turbidity and ORP at 327.67.** They are packed
 as value×100 into int16 (LPP type 0x02). Real ranges are 0–2000 ppm, 0–3000
@@ -186,37 +190,38 @@ decoder; not changed here because it is a cloud contract.
 ### MEDIUM
 
 - **M1 Relay commands from the cloud, the Service Window socket and LoRa
-  downlinks bypass every policy guard** (manual override, cooldown, on-time
-  budget) and are not tracked in the budget accounting. A cloud "ON" without
-  `durationSeconds` stays on until something else turns it off; the
-  `threading.Timer` for a cloud duration is never cancelled by a later
-  command. Recommend routing all sources through one guard (H8's timer thread
-  plus a per-channel max-on-time) and logging the source.
+  downlinks bypass the rule-level guards** (manual override, cooldown,
+  hourly budget) — by design, manual control must work in override. **Partly
+  FIXED** with H8: every source now shares the controller's timer, a cloud
+  duration is enforced there (and replaced, not stacked, by a later
+  command), and `max_continuous_on_minutes` caps a duration-less ON from any
+  source. The hourly budget still counts only rule-driven on-time.
 - **M2 `max_on_minutes_per_hour` is a start gate, not a cap.** A relay
   already on (duration 0) is never turned off by the budget; the budget only
   refuses a new ON. Outside the schedule window an ON rule with duration 0 is
   not released by its OFF rule until the window reopens (documented in
   `policies.yaml` now).
-- **M3 Smart breaker: no short-cycle protection.** Nothing enforces a minimum
-  off-time before the AWG compressor circuit is re-energised (cloud commands
-  can toggle at poll cadence). Recommend a 180 s minimum off-time in
-  `SmartBreakerController.request()`.
-- **M4 DevNonce is random and joins retry every 300 s without backoff.** TTN
-  rejects reused DevNonces; ~288 joins/day while un-gatewayed makes an
-  eventual collision (and a permanent join failure until "reset join nonces")
-  plausible. Recommend a persisted monotonic DevNonce and exponential join
-  backoff.
-- **M5 No rejoin or session-recovery path.** Once `joined=1` the device never
-  rejoins, has no LinkCheck probe, and the `/lora/` page has no "forget
-  session". A network-side reset strands the unit silently.
-- **M6 Rotation never drops pending rows.** With `cloud_enabled: false`
-  (LoRa-only sites) nothing marks rows synced, so `db_max_rows` never applies
-  and the buffer grows without bound (~80 MB/year at 60 s cadence — slow, but
-  the claim "rotation at db_max_rows" is false for that configuration).
+- **M3 Smart breaker: no short-cycle protection.** **FIXED** —
+  `smart_breaker_min_off_s` (default 180, hot, remote-tunable): an ON within
+  that many seconds of the last OFF (any source, fail-safe included) is
+  refused with `retryAfterS`.
+- **M4 DevNonce is random and joins retry every 300 s without backoff.**
+  **FIXED** — monotonic DevNonce counter persisted in `mac_params` before
+  each JoinRequest; join attempts back off after the third (doubling to an
+  hour).
+- **M5 No rejoin or session-recovery path.** **FIXED** — a LinkCheckReq
+  rides every 24th uplink that has seen no downlink; after three unanswered
+  the session is forgotten and rejoined. The `/lora/` page has a "Forget
+  session and rejoin" button (socket action `lora_rejoin`).
+- **M6 Rotation never drops pending rows.** **FIXED** — with
+  `cloud_enabled: false` the oldest pending rows beyond `db_max_rows` are
+  rotated too (logged as a warning); with the cloud on, pending rows remain
+  untouchable.
 - **M7 Service Window PIN.** Four digits, plaintext in `config.yaml`, rate
   limited to 5 tries/minute per IP: exhaustive search in ~33 hours from the
-  LAN. Acceptable for a closed site network; not for a unit on a shared
-  network. Recommend lockout escalation and an optional longer PIN.
+  LAN. **Mitigated** — 15 wrong PINs within an hour lock the address out for
+  15 minutes (constant-time compare added); the wizard already accepts 4-8
+  digits, so use more than four on a shared network.
 - **M8 Sync duplicates.** If the ingest POST succeeds but the response is
   lost, the rows stay pending and are re-sent; the payload has no client
   id, so de-duplication depends on the server keying on deviceId+timestamp.
@@ -227,7 +232,7 @@ decoder; not changed here because it is a cloud contract.
   "initialised" and the README's "LoRa init failed" path never fired.
   **FIXED** — `init()` raises when BUSY stays high after reset.
 - **M11 `bluesignal-provision.service` is copied but never enabled** by
-  `setup.sh`, so the first-boot check never runs.
+  `setup.sh`. **FIXED** — enabled.
 - **M12 DevEUI prefix `0018B2`** is registered to Adeunis RF unless BlueSignal
   holds it; TTN enforces DevEUI uniqueness. Verify the OUI.
 - **M13 GPS backup.** V_BCKP is tied to 3.3 V, so every power cycle is a cold
@@ -241,11 +246,12 @@ decoder; not changed here because it is a cloud contract.
 - LoRa1262 pin 11 (`RXE`) is unconnected. On this module the switch is
   chip-controlled, so this is expected; *BENCH-confirm against the module
   datasheet that RXEN needs no host drive.*
-- RSSI is read with `GetRssiInst` after the packet ended (noise floor). Use
-  `GetPacketStatus` for packet RSSI/SNR.
-- DS18B20 driver does not filter the 85.0 °C power-on value; the GPS
-  `power_cycle()` pulses EXTINT high (comment says low) — harmless on an M10
-  in continuous mode.
+- RSSI was read with `GetRssiInst` after the packet ended (noise floor).
+  **FIXED** — `GetPacketStatus` packet RSSI and SNR (the SNR feeds
+  DevStatusAns).
+- DS18B20 driver did not filter the 85.0 °C power-on value (**FIXED**); the
+  GPS `power_cycle()` comment said "low" while the code pulses high
+  (comment fixed; harmless on an M10 in continuous mode).
 - Service Window `SECRET_KEY` is regenerated per process start unless set, so
   sessions log out on every restart (annoyance, not a hole). Non-constant-time
   PIN compare (LAN-only, low value).
@@ -346,3 +352,12 @@ Run these on a Fin_3 unit with the branch flashed, and record the numbers in
 | `src/service_window/app.py` | SameSite=Lax, HttpOnly session cookie | `…::TestServiceWindowCookies` |
 | `setup.sh`, `config/policies.yaml` | Seed `/etc/bluesignal/policies.yaml`; document local time and the ON/OFF window semantics | — |
 | `README.md`, `docs/hardware-overview.md`, `docs/firmware-overview.md` | Power requirements, SMA antenna, real log lines, sub-band, EU868 claim removed | — |
+| `src/control/relay.py`, `src/control/rules.py` | Per-channel auto-off timer thread, `max_continuous_on_minutes` ceiling, rules/downlink/cloud durations routed through it | `tests/test_launch_audit_followups.py::TestRelayAutoOff` |
+| `src/sensing/monitor.py` | "flat" advisory, only "no_data" suspends rules | `…::TestFlatlineAdvisory` |
+| `src/sensors/ph.py`, `src/calibration/calibrate.py`, `src/app/workers.py` | pH `uncalibrated` gate and status | `…::TestPhCalibrationGate` |
+| `src/app/supervisor.py`, `src/ota/agent.py` | Liveness beat file; self-test accepts it | `…::TestOtaLiveness` |
+| `src/integrations/smart_breaker/controller.py`, `src/utils/config.py` | `smart_breaker_min_off_s` short-cycle guard | `…::TestShortCycleGuard` |
+| `src/radio/lorawan.py`, `src/main.py` | DevNonce counter, join backoff, LinkCheck rejoin, `lora_rejoin`; packet RSSI/SNR | `…::TestJoinHygiene` |
+| `src/storage/database.py` | Pending-row cap when cloud sync is off | `…::TestPendingRotation` |
+| `src/service_window/auth.py`, `routes/lora.py`, `routes/calibration.py` | PIN lockout escalation, forget-session button, restart hint after calibration | `…::TestPinLockout` |
+| `src/sensors/temperature.py`, `src/sensors/gps.py`, `setup.sh` | 85.0 °C filter, EXTINT comment, provision service enabled | `…::TestDriverFixes` |

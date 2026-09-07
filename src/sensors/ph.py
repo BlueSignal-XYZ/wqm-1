@@ -10,6 +10,7 @@ import logging
 from statistics import median
 
 from sensors.ads1115 import ADS1115
+from sensors.status import OK, OUT_OF_RANGE, READ_FAILED, UNCALIBRATED, SensorResult
 from utils.config import (
     ADC_CH_PH,
     ADC_FULL_SCALE_V,
@@ -32,14 +33,27 @@ def _nernst_slope(temp_c: float) -> float:
 class PHSensor:
     """pH electrode reading with two-point calibration."""
 
-    def __init__(self, adc: ADS1115) -> None:
+    def __init__(self, adc: ADS1115, calibrated: bool = True) -> None:
+        """
+        Args:
+            adc: ADS1115 driver
+            calibrated: whether the coefficients in force describe a real
+                electrode. main.py passes ``CalibrationManager.is_calibrated``
+                here (and via set_calibration); with False the sensor reports
+                ``uncalibrated`` and no number.
+        """
         self._adc = adc
         self._window: list[float] = []
         self._window_size = 5
 
-        # Default calibration (overridden by CalibrationManager via set_calibration)
+        # Placeholder calibration. These are NOT the Fin_3 front-end's numbers:
+        # the LMP91200 rides the electrode voltage on VOCM (~1 V) with pH 4
+        # ABOVE pH 7, so a unit still on these would publish pH that is both
+        # offset and inverted. The firmware therefore gates publishing on a
+        # stored two-point calibration (see ``calibrated``).
         self._v_ph4 = 1.04
         self._v_ph7 = 1.50
+        self._calibrated = bool(calibrated)
         self._recalc_slope()
 
     def _recalc_slope(self) -> None:
@@ -53,35 +67,63 @@ class PHSensor:
             # slope = ΔpH / ΔV = (7.0 - 4.0) / (V_ph7 - V_ph4)
             self._slope = (7.0 - 4.0) / dv
 
-    def set_calibration(self, v_ph4: float, v_ph7: float) -> None:
+    def set_calibration(self, v_ph4: float, v_ph7: float, calibrated: bool = True) -> None:
         """
         Set two-point calibration.
 
         Args:
             v_ph4: Voltage reading in pH 4.0 buffer
             v_ph7: Voltage reading in pH 7.0 buffer
+            calibrated: False when the values are factory placeholders rather
+                than a measurement — pH then reports ``uncalibrated`` and no
+                number until a real calibration is stored.
         """
         self._v_ph4 = v_ph4
         self._v_ph7 = v_ph7
+        self._calibrated = bool(calibrated)
         self._recalc_slope()
         self._window.clear()
-        logger.info("pH calibrated: V@4=%.4f V@7=%.4f slope=%.4f pH/V", v_ph4, v_ph7, self._slope)
+        if self._calibrated:
+            logger.info(
+                "pH calibrated: V@4=%.4f V@7=%.4f slope=%.4f pH/V", v_ph4, v_ph7, self._slope
+            )
+        else:
+            logger.warning(
+                "pH probe fitted but never calibrated — no pH will be published until a "
+                "two-point calibration is done (Service Window > Calibration)"
+            )
+
+    @property
+    def calibrated(self) -> bool:
+        return self._calibrated
 
     def read(self, temp_c: float | None = 25.0) -> float | None:
         """
         Read pH value.
 
+        Kept for every existing caller: the value, or None for anything that
+        is not a measurement. Use `read_detailed()` when the reason matters.
+        """
+        return self.read_detailed(temp_c=temp_c).value
+
+    def read_detailed(self, temp_c: float | None = 25.0) -> SensorResult:
+        """
+        Read pH, with the reason when there is no number.
+
         Args:
             temp_c: Water temperature for Nernst compensation (default 25°C)
-
-        Returns:
-            pH value (0-14) or None on read failure
         """
+        if not self._calibrated:
+            return SensorResult(None, UNCALIBRATED, "no two-point calibration stored")
         try:
             voltage = self._adc.read_voltage(ADC_CH_PH)
         except Exception as e:
             logger.error("pH ADC read failed: %s", e)
-            return None
+            return SensorResult(None, READ_FAILED, str(e)[:80])
+        return self._convert(voltage, temp_c)
+
+    def _convert(self, voltage: float, temp_c: float | None) -> SensorResult:
+        """Voltage -> filtered pH, with the reason when it is not a measurement."""
 
         # Apply temperature compensation to slope
         if temp_c is not None and temp_c != 25.0:
@@ -99,7 +141,7 @@ class PHSensor:
                 voltage,
                 ADC_FULL_SCALE_V,
             )
-            return None
+            return SensorResult(None, OUT_OF_RANGE, f"input at {voltage:.3f} V")
 
         # pH = 7.0 + (V_measured - V_ph7) * slope * temp_factor
         ph = 7.0 + (voltage - self._v_ph7) * self._slope * temp_factor
@@ -118,7 +160,7 @@ class PHSensor:
                 ph,
                 voltage,
             )
-            return None
+            return SensorResult(None, UNCALIBRATED, f"pH {ph:.1f} from {voltage:.3f} V")
 
         # Moving median filter
         self._window.append(ph)
@@ -146,6 +188,8 @@ class PHSensor:
                 PH_MAX_WINDOW_SPAN,
                 ", ".join(f"{v:.2f}" for v in self._window),
             )
-            return None
+            return SensorResult(
+                None, OUT_OF_RANGE, f"spread {span:.2f} pH over {len(self._window)}"
+            )
 
-        return round(float(median(self._window)), 2)
+        return SensorResult(round(float(median(self._window)), 2), OK)

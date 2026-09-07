@@ -66,6 +66,7 @@ _CMD_SET_REGULATOR_MODE = 0x96
 _CMD_GET_STATUS = 0xC0
 _CMD_GET_RX_BUFFER_STATUS = 0x13
 _CMD_GET_RSSI_INST = 0x15
+_CMD_GET_PACKET_STATUS = 0x14
 _CMD_SET_DIO2_AS_RF_SWITCH_CTRL = 0x9D
 _CMD_CALIBRATE_IMAGE = 0x98
 
@@ -138,6 +139,7 @@ class SX1262:
         self._spi: spidev.SpiDev | None = None
         self._tx_done_event = threading.Event()
         self._last_rssi = -120
+        self._last_snr = 0.0
 
         # lgpio handle + callback for DIO1 edge detection. RPi.GPIO's
         # add_event_detect() is broken on kernel 6.6+ ("Failed to add edge
@@ -574,13 +576,24 @@ class SX1262:
         """Return last packet RSSI in dBm."""
         return self._last_rssi
 
+    @property
+    def last_snr(self) -> float:
+        """SNR (dB) of the last received packet."""
+        return self._last_snr
+
     def _read_rssi(self) -> int:
-        """Read RSSI of last received packet from radio register."""
-        resp = self._xfer([_CMD_GET_RSSI_INST, 0x00, 0x00])
+        """RSSI of the last received PACKET (GetPacketStatus), not the
+        instantaneous channel level, which after RxDone is just noise floor."""
+        resp = self._xfer([_CMD_GET_PACKET_STATUS, 0x00, 0x00, 0x00, 0x00])
         self._wait_busy()
-        # RSSI = -resp[2] / 2
-        raw = resp[2] if len(resp) > 2 else 0
-        return -(raw // 2)
+        # LoRa: [status, RssiPkt, SnrPkt, SignalRssiPkt]; RSSI = -RssiPkt/2,
+        # SNR = SnrPkt/4 (signed).
+        rssi_raw = resp[2] if len(resp) > 2 else 0
+        snr_raw = resp[3] if len(resp) > 3 else 0
+        if snr_raw >= 128:
+            snr_raw -= 256
+        self._last_snr = snr_raw / 4.0
+        return -(rssi_raw // 2)
 
     def _get_irq_status(self) -> int:
         """Read current IRQ status flags."""

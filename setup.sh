@@ -227,6 +227,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-ota.service
+# One-shot first-boot check (prints the provisioning hint to the journal
+# until /etc/bluesignal/.provisioned exists). It was copied but never enabled.
+sudo systemctl enable bluesignal-provision.service 2>/dev/null || true
 
 # --- Service window + provisioning ---
 echo "[7/9] Installing service window and provisioning tools..."

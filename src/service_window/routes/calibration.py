@@ -10,6 +10,9 @@ from service_window.config_editor import read_config, update_config
 
 calibration_bp = Blueprint("calibration", __name__, url_prefix="/calibrate")
 
+# Calibration is loaded by the monitoring service at start-up only.
+_RESTART_HINT = ". Restart the monitoring service (Settings) to apply."
+
 
 def _load_cal(app: Flask) -> dict:
     return read_config(app.config["CAL_PATH"])
@@ -69,7 +72,10 @@ def ph() -> ResponseReturnValue:
                 },
             )
             _stamp_calibrated("ph")
-            flash(f"pH calibrated: slope={slope:.4f}", "success")
+            flash(
+                f"pH calibrated: slope={slope:.4f}" + _RESTART_HINT,
+                "success",
+            )
         except (ValueError, KeyError):
             flash("Invalid input.", "error")
         return redirect(url_for("calibration.index"))
@@ -90,7 +96,10 @@ def tds() -> ResponseReturnValue:
             k = known_ppm / measured_v
             update_config(current_app.config["CAL_PATH"], {"tds_k": round(k, 2)})
             _stamp_calibrated("tds")
-            flash(f"TDS calibrated: k={k:.2f}", "success")
+            flash(
+                f"TDS calibrated: k={k:.2f}" + _RESTART_HINT,
+                "success",
+            )
         except (ValueError, KeyError):
             flash("Invalid input.", "error")
         return redirect(url_for("calibration.index"))
@@ -111,7 +120,10 @@ def turbidity() -> ResponseReturnValue:
                 },
             )
             _stamp_calibrated("turbidity")
-            flash(f"Turbidity calibrated: clear water V={clear_v:.3f}", "success")
+            flash(
+                f"Turbidity calibrated: clear water V={clear_v:.3f}" + _RESTART_HINT,
+                "success",
+            )
         except (ValueError, KeyError):
             flash("Invalid input.", "error")
         return redirect(url_for("calibration.index"))
