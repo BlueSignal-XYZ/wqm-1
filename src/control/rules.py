@@ -21,9 +21,16 @@ from typing import Any
 logger = logging.getLogger("wqm1.rules")
 
 
-def _utc_now() -> datetime:
-    """Default wall clock: timezone-aware UTC."""
-    return datetime.now(UTC)
+def _local_now() -> datetime:
+    """Default wall clock: timezone-aware, in the host's configured zone.
+
+    The schedule window in policies.yaml ("07:00"-"21:00") is written by an
+    installer standing at the site, so it is compared in the unit's local
+    time — the timezone set when the card was imaged. This used to compare
+    against UTC, which in Texas made a 07:00-21:00 window run 01:00-15:00
+    local. Adaptive baselines convert to UTC explicitly where they need it.
+    """
+    return datetime.now(UTC).astimezone()
 
 
 @dataclass
@@ -77,7 +84,7 @@ class RulesEngine:
         """
         self._rules: list[Rule] = []
         self._relay = relay_controller
-        self._clock = clock or _utc_now
+        self._clock = clock or _local_now
         # Track auto-shutoff timers: {relay_channel: shutoff_time}
         self._timers: dict[int, float] = {}
 
@@ -87,6 +94,7 @@ class RulesEngine:
         self._schedule_end: dt_time | None = None
         self._cooldown_s = 0
         self._max_on_s_per_hour = 0  # 0 = unlimited
+        self._max_continuous_on_s = 0  # 0 = no ceiling (enforced by RelayController)
         self._manual_override = False
 
         # --- Per-relay cooldown tracking: relay → monotonic time of last OFF ---
@@ -177,6 +185,8 @@ class RulesEngine:
         self._cooldown_s = limits.get("cooldown_seconds", 0)
         max_min = limits.get("max_on_minutes_per_hour", 0)
         self._max_on_s_per_hour = max_min * 60 if max_min else 0
+        cont_min = limits.get("max_continuous_on_minutes", 0) or 0
+        self._max_continuous_on_s = int(float(cont_min) * 60) if cont_min else 0
 
         manual = policies.get("manual", {})
         self._manual_override = manual.get("override", False)
@@ -187,6 +197,11 @@ class RulesEngine:
             max_min,
             self._manual_override,
         )
+
+    @property
+    def max_continuous_on_s(self) -> int:
+        """Hard ceiling on one relay on-period from policies.yaml (0 = none)."""
+        return self._max_continuous_on_s
 
     def add_rule(self, rule: Rule) -> None:
         """Add a threshold rule (fixed or adaptive). Invalid rules are
@@ -335,6 +350,7 @@ class RulesEngine:
             List of (relay_channel, state) actions to take.
         """
         actions: list[tuple[int, bool]] = []
+        durations: dict[int, int] = {}
         now_mono = time.monotonic()
 
         # --- De-energizing runs BEFORE the guards, always ---
@@ -405,16 +421,20 @@ class RulesEngine:
 
                 actions.append((rule.relay, state))
 
-                # Set auto-shutoff timer if duration specified
+                # Set auto-shutoff timer if duration specified. The engine's
+                # own sweep is the bookkeeping copy; the RelayController's
+                # timer thread (see _apply) is what actually de-energises the
+                # coil on time, independent of the sampling cadence.
                 if state and rule.duration_s > 0:
                     self._timers[rule.relay] = now_mono + rule.duration_s
+                    durations[rule.relay] = rule.duration_s
 
                 # Track OFF for cooldown
                 if not state:
                     self._last_off[rule.relay] = now_mono
                     self._on_since.pop(rule.relay, None)
 
-        return self._apply(actions)
+        return self._apply(actions, durations)
 
     def _expire_timers(self, now_mono: float) -> list[tuple[int, bool]]:
         """Auto-shutoff sweep: channels whose ``duration_s`` has elapsed."""
@@ -472,15 +492,26 @@ class RulesEngine:
         self._pending_failsafe.clear()
         return actions
 
-    def _apply(self, actions: list[tuple[int, bool]]) -> list[tuple[int, bool]]:
+    def _apply(
+        self, actions: list[tuple[int, bool]], durations: dict[int, int] | None = None
+    ) -> list[tuple[int, bool]]:
         """Push actions to the relay controller and return them."""
         if self._relay and actions:
             for channel, state in actions:
                 try:
                     self._relay.set(channel, state)
+                    duration = (durations or {}).get(channel) if state else None
+                    if duration:
+                        self._arm_relay_timer(channel, duration)
                 except Exception as e:
                     logger.error("Relay %d action failed: %s", channel, e)
         return actions
+
+    def _arm_relay_timer(self, channel: int, duration_s: float) -> None:
+        """Hand the on-period to the controller's own timer (if it has one)."""
+        arm = getattr(self._relay, "arm_auto_off", None)
+        if callable(arm):
+            arm(channel, duration_s)
 
     def process_downlink_command(self, fport: int, payload: bytes) -> bool:
         """
@@ -516,5 +547,6 @@ class RulesEngine:
             self._relay.set(channel, state)
             if state and duration > 0:
                 self._timers[channel] = time.monotonic() + duration
+                self._arm_relay_timer(channel, duration)
 
         return True

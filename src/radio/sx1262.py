@@ -66,6 +66,9 @@ _CMD_SET_REGULATOR_MODE = 0x96
 _CMD_GET_STATUS = 0xC0
 _CMD_GET_RX_BUFFER_STATUS = 0x13
 _CMD_GET_RSSI_INST = 0x15
+_CMD_GET_PACKET_STATUS = 0x14
+_CMD_SET_DIO2_AS_RF_SWITCH_CTRL = 0x9D
+_CMD_CALIBRATE_IMAGE = 0x98
 
 # Packet type
 _PACKET_TYPE_LORA = 0x01
@@ -86,6 +89,13 @@ _IRQ_ALL = 0x03FF
 # TCXO voltage (1.8V for LORA1262-915TCXO)
 _TCXO_VOLTAGE_1_8V = 0x03
 
+# Image calibration band for US915 (datasheet table 9-2: 902-928 MHz).
+_IMAGE_CAL_902_928 = (0xE1, 0xE9)
+
+# IQ polarity register (datasheet §15.4 "Optimizing the Inverted IQ Operation"):
+# bit 2 must be CLEARED for inverted IQ and SET for standard IQ.
+_REG_IQ_POLARITY = 0x0736
+
 # Sync word register address for LoRa
 _REG_LORA_SYNC_WORD_MSB = 0x0740
 _REG_LORA_SYNC_WORD_LSB = 0x0741
@@ -104,8 +114,20 @@ _BW_MAP = {
     500000: 0x06,
 }
 
+_BW_HZ = {code: hz for hz, code in _BW_MAP.items()}
+
 # Max SPI clock for SX1262
 _SPI_MAX_SPEED = 2_000_000  # 2 MHz (conservative)
+
+
+def _ldro_for(sf: int, bw_code: int) -> int:
+    """Low-data-rate optimisation must be ON when the symbol time exceeds
+    16.38 ms (SF11/SF12 at 125 kHz, SF12 at 250 kHz) — and OFF otherwise,
+    because it changes the modulation and must match the transmitter. A
+    LoRaWAN US915 downlink at SF12 / 500 kHz (8.2 ms symbols) is sent WITHOUT
+    LDRO; a receiver that enables it on SF alone never decodes RX2."""
+    bw_hz = _BW_HZ.get(bw_code, 125_000)
+    return 1 if (1 << sf) / bw_hz > 0.016 else 0
 
 
 class SX1262:
@@ -117,6 +139,7 @@ class SX1262:
         self._spi: spidev.SpiDev | None = None
         self._tx_done_event = threading.Event()
         self._last_rssi = -120
+        self._last_snr = 0.0
 
         # lgpio handle + callback for DIO1 edge detection. RPi.GPIO's
         # add_event_detect() is broken on kernel 6.6+ ("Failed to add edge
@@ -124,6 +147,16 @@ class SX1262:
         # still go through RPi.GPIO since simple setup/output/input work fine.
         self._lg_handle = None
         self._lg_callback = None
+
+        # Uplink radio parameters. Re-applied before EVERY transmission,
+        # because set_rx_config() retunes the chip for the RX1/RX2 windows and
+        # nothing else puts it back — every uplink after the first RX2 window
+        # used to go out at 923.3 MHz, SF12.
+        self._tx_cfg: tuple[int, int, int] = (
+            LORA_FREQUENCY,
+            LORA_SPREADING_FACTOR,
+            LORA_BANDWIDTH,
+        )
 
         # Setup GPIO
         GPIO.setmode(GPIO.BCM)
@@ -150,7 +183,12 @@ class SX1262:
     def init(self) -> None:
         """Full initialisation sequence for LoRa TX."""
         self._reset()
-        self._wait_busy()
+        if not self._wait_busy():
+            # BUSY stuck high after reset means no chip is answering: an
+            # unpowered module, a lifted pin, or SPI to the wrong device. The
+            # README's "LoRa init failed" troubleshooting path depends on this
+            # being an error rather than a warning that init() then ignores.
+            raise RuntimeError("SX1262 BUSY stays high after reset — radio not responding")
 
         # Set regulator mode to DC-DC (more efficient)
         self._cmd(_CMD_SET_REGULATOR_MODE, [_REGULATOR_DC_DC])
@@ -173,6 +211,10 @@ class SX1262:
         self._cmd(_CMD_CALIBRATE, [0x7F])
         self._wait_busy()
 
+        # Image calibration for the operating band (902-928 MHz)
+        self._cmd(_CMD_CALIBRATE_IMAGE, list(_IMAGE_CAL_902_928))
+        self._wait_busy()
+
         # Set standby with XOSC
         self._cmd(_CMD_SET_STANDBY, [_STDBY_XOSC])
         self._wait_busy()
@@ -181,8 +223,16 @@ class SX1262:
         self._cmd(_CMD_SET_PACKET_TYPE, [_PACKET_TYPE_LORA])
         self._wait_busy()
 
-        # Set RF frequency
-        self._set_frequency(LORA_FREQUENCY)
+        # The LORA1262 module's antenna switch is driven by the SX1262's own
+        # DIO2 ("integrated and controlled by the chip"). That only happens
+        # once the host enables it: without this command DIO2 never rises for
+        # TX, the switch stays on the receive path, and the PA transmits into
+        # an isolated port — no gateway ever hears the device.
+        self._cmd(_CMD_SET_DIO2_AS_RF_SWITCH_CTRL, [0x01])
+        self._wait_busy()
+
+        # Set RF frequency + modulation for uplink
+        self._apply_tx_config()
 
         # Configure PA for +22 dBm
         self._cmd(
@@ -193,19 +243,6 @@ class SX1262:
         # Set TX power and ramp time
         # Power: 0x16 = 22 dBm, ramp: 0x04 = 200 µs
         self._cmd(_CMD_SET_TX_PARAMS, [LORA_TX_POWER & 0xFF, 0x04])
-        self._wait_busy()
-
-        # Set modulation params: SF, BW, CR, LDRO
-        ldro = 1 if LORA_SPREADING_FACTOR >= 10 else 0  # auto LDRO for SF>=10
-        self._cmd(
-            _CMD_SET_MODULATION_PARAMS,
-            [
-                LORA_SPREADING_FACTOR,
-                LORA_BANDWIDTH,
-                LORA_CODING_RATE,
-                ldro,
-            ],
-        )
         self._wait_busy()
 
         # Set sync word (LoRaWAN public: 0x3444)
@@ -246,13 +283,39 @@ class SX1262:
         )
 
         logger.info(
-            "SX1262 initialised: %d MHz, SF%d, BW%d, CR4/%d, %d dBm",
-            LORA_FREQUENCY // 1_000_000,
-            LORA_SPREADING_FACTOR,
-            125,
+            "SX1262 initialised: %.1f MHz, SF%d, BW%d, CR4/%d, %d dBm",
+            self._tx_cfg[0] / 1e6,
+            self._tx_cfg[1],
+            _BW_HZ.get(self._tx_cfg[2], 125_000) // 1000,
             LORA_CODING_RATE + 4,
             LORA_TX_POWER,
         )
+
+    def set_tx_config(self, frequency: int, sf: int, bw: int) -> None:
+        """
+        Set the uplink frequency / spreading factor / bandwidth used by
+        every subsequent send() (the LoRaWAN MAC hops channels per uplink).
+
+        Args:
+            frequency: TX frequency in Hz
+            sf: Spreading factor (7-12)
+            bw: Bandwidth index (SX1262 encoding)
+        """
+        self._tx_cfg = (int(frequency), int(sf), int(bw))
+        self._apply_tx_config()
+
+    def _apply_tx_config(self) -> None:
+        freq, sf, bw = self._tx_cfg
+        self._set_frequency(freq)
+        self._cmd(_CMD_SET_MODULATION_PARAMS, [sf, bw, LORA_CODING_RATE, _ldro_for(sf, bw)])
+        self._wait_busy()
+
+    def _set_iq_inverted(self, inverted: bool) -> None:
+        """Datasheet §15.4 workaround: register 0x0736 bit 2 must track the
+        IQ setting of the packet params (clear for inverted, set for standard)."""
+        value = self._read_register(_REG_IQ_POLARITY)
+        value = (value & ~0x04) if inverted else (value | 0x04)
+        self._write_register(_REG_IQ_POLARITY, value & 0xFF)
 
     def send(self, data: bytes, timeout_s: float = 5.0) -> bool:
         """
@@ -268,6 +331,10 @@ class SX1262:
         if len(data) > 255:
             raise ValueError("Payload exceeds 255 bytes")
 
+        # Uplink frequency / modulation — restored every time, because the
+        # RX1/RX2 windows retune the chip (see _tx_cfg).
+        self._apply_tx_config()
+
         # Set packet params for this payload size
         crc_type = 0x01 if LORA_CRC_ON else 0x00
         self._cmd(
@@ -278,10 +345,11 @@ class SX1262:
                 0x00,  # explicit header
                 len(data),  # payload length
                 crc_type,
-                0x00,  # standard IQ
+                0x00,  # standard IQ (uplink)
             ],
         )
         self._wait_busy()
+        self._set_iq_inverted(False)
 
         # Write payload to TX buffer at offset 0
         self._xfer([_CMD_WRITE_BUFFER, 0x00] + list(data))
@@ -352,14 +420,15 @@ class SX1262:
         GPIO.output(LORA_RST, GPIO.HIGH)
         time.sleep(0.010)  # wait 10 ms after reset
 
-    def _wait_busy(self, timeout_s: float = 1.0) -> None:
-        """Wait until BUSY pin goes low."""
+    def _wait_busy(self, timeout_s: float = 1.0) -> bool:
+        """Wait until BUSY pin goes low. Returns False on timeout."""
         deadline = time.monotonic() + timeout_s
         while GPIO.input(LORA_BUSY):
             if time.monotonic() > deadline:
                 logger.warning("SX1262 BUSY timeout")
-                return
+                return False
             time.sleep(0.0001)
+        return True
 
     def _cmd(self, opcode: int, params: list[int] | None = None) -> None:
         """Send SPI command."""
@@ -417,6 +486,23 @@ class SX1262:
         Returns:
             Received payload bytes, or None on timeout.
         """
+        # LoRaWAN downlinks (JoinAccept included) are sent with INVERTED IQ,
+        # no payload CRC, explicit header. A receiver left on the uplink's
+        # standard-IQ packet params never synchronises on them.
+        self._cmd(
+            _CMD_SET_PACKET_PARAMS,
+            [
+                (LORA_PREAMBLE_LEN >> 8) & 0xFF,
+                LORA_PREAMBLE_LEN & 0xFF,
+                0x00,  # explicit header
+                0xFF,  # max payload length
+                0x00,  # CRC off (downlinks carry none)
+                0x01,  # inverted IQ (downlink)
+            ],
+        )
+        self._wait_busy()
+        self._set_iq_inverted(True)
+
         # Configure DIO1 for RxDone IRQ
         irq_mask = _IRQ_RX_DONE | _IRQ_TIMEOUT
         self._cmd(
@@ -490,13 +576,24 @@ class SX1262:
         """Return last packet RSSI in dBm."""
         return self._last_rssi
 
+    @property
+    def last_snr(self) -> float:
+        """SNR (dB) of the last received packet."""
+        return self._last_snr
+
     def _read_rssi(self) -> int:
-        """Read RSSI of last received packet from radio register."""
-        resp = self._xfer([_CMD_GET_RSSI_INST, 0x00, 0x00])
+        """RSSI of the last received PACKET (GetPacketStatus), not the
+        instantaneous channel level, which after RxDone is just noise floor."""
+        resp = self._xfer([_CMD_GET_PACKET_STATUS, 0x00, 0x00, 0x00, 0x00])
         self._wait_busy()
-        # RSSI = -resp[2] / 2
-        raw = resp[2] if len(resp) > 2 else 0
-        return -(raw // 2)
+        # LoRa: [status, RssiPkt, SnrPkt, SignalRssiPkt]; RSSI = -RssiPkt/2,
+        # SNR = SnrPkt/4 (signed).
+        rssi_raw = resp[2] if len(resp) > 2 else 0
+        snr_raw = resp[3] if len(resp) > 3 else 0
+        if snr_raw >= 128:
+            snr_raw -= 256
+        self._last_snr = snr_raw / 4.0
+        return -(rssi_raw // 2)
 
     def _get_irq_status(self) -> int:
         """Read current IRQ status flags."""
@@ -514,10 +611,9 @@ class SX1262:
             bw: Bandwidth index (SX1262 encoding)
         """
         self._set_frequency(frequency)
-        ldro = 1 if sf >= 10 else 0
         self._cmd(
             _CMD_SET_MODULATION_PARAMS,
-            [sf, bw, LORA_CODING_RATE, ldro],
+            [sf, bw, LORA_CODING_RATE, _ldro_for(sf, bw)],
         )
         self._wait_busy()
 

@@ -71,6 +71,13 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["SECRET_KEY"] = sw_config.get(
         "secret_key", os.environ.get("SW_SECRET_KEY", secrets.token_hex(32))
     )
+    # Every state-changing route (relays, AWG circuit, reboot, PIN, keys) is
+    # a plain form/JSON POST with no CSRF token, so the session cookie must
+    # never be sent on a cross-site request: a page on any other origin the
+    # installer's phone visits could otherwise POST /relays/set. SameSite=Lax
+    # stops that for the same-origin UI without any template changes.
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
 
     # Database path
     app.config["DB_PATH"] = sw_config.get("db_path", "/var/lib/bluesignal/wqm1.db")

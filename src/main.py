@@ -30,7 +30,7 @@ import yaml
 
 from app.reboot import REBOOT_REQUEST_FLAG, request_host_reboot
 from app.state import StateStore
-from app.supervisor import Supervisor
+from app.supervisor import LIVENESS_FILE, Supervisor
 from app.workers import (
     CloudSyncWorker,
     CommandWorker,
@@ -248,7 +248,12 @@ class WQM1App:
         # own calibration state on the probe itself)
         cal = self._cal.data
         if self._ph:
-            self._ph.set_calibration(cal.ph_v_at_4, cal.ph_v_at_7)
+            # A never-calibrated electrode publishes nothing (status
+            # "uncalibrated") — the factory placeholders do not describe the
+            # LMP91200 front-end and would print inverted, offset pH.
+            self._ph.set_calibration(
+                cal.ph_v_at_4, cal.ph_v_at_7, calibrated=self._cal.is_calibrated("ph")
+            )
         if self._tds:
             self._tds.set_calibration(cal.tds_k)
         if self._turbidity:
@@ -258,6 +263,9 @@ class WQM1App:
 
         # --- Database ---
         self._db = WQM1Database()
+        # LoRa-only / offline sites never mark rows synced; cap the buffer
+        # by dropping the oldest pending rows instead of growing for ever.
+        self._db.rotate_pending = not self._settings.cloud_enabled
 
         # --- Health reporter ---
         self._health = HealthReporter(FW_VERSION)
@@ -292,7 +300,14 @@ class WQM1App:
             # will not be accepted unless this matches the JoinEUI the device
             # is registered under on the network server.
             app_eui = bytes.fromhex(self._settings.app_eui) if self._settings.app_eui else APP_EUI
-            self._lorawan = LoRaWANMAC(self._radio, self._dev_eui, app_eui, app_key)
+            self._lorawan = LoRaWANMAC(
+                self._radio,
+                self._dev_eui,
+                app_eui,
+                app_key,
+                sub_band=self._settings.lora_sub_band,
+                persist_hook=self._persist_session,
+            )
 
             # Restore session from DB (join, if needed, happens on the radio
             # worker's thread so a missing gateway can't stall boot).
@@ -306,7 +321,11 @@ class WQM1App:
                     fcnt_down=saved["fcnt_down"],
                     joined=True,
                 )
-                self._lorawan.restore_session(session)
+                self._lorawan.restore_session(session, saved.get("mac_params"))
+            elif saved and saved.get("mac_params"):
+                # Not joined, but the DevNonce counter and last channel plan
+                # still matter for the next join attempt.
+                self._lorawan.restore_mac_params(saved["mac_params"])
         except Exception as e:
             logger.warning("LoRa init failed: %s", e)
 
@@ -360,6 +379,10 @@ class WQM1App:
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
         self._load_policies()
+        # The hard on-time ceiling lives in the relay controller so it binds
+        # every source — rules, cloud, Service Window, LoRa downlink alike.
+        if self._relays is not None and self._rules.max_continuous_on_s:
+            self._relays.max_on_s = float(self._rules.max_continuous_on_s)
         if self._settings.rules:
             self._rules.load_rules(self._settings.rules)
         # Monotonic time of the last water-profile sync attempt; -inf forces a
@@ -399,6 +422,7 @@ class WQM1App:
             hw_watchdog=(
                 HardwareWatchdog() if direct and self._settings.hardware_watchdog_enabled else None
             ),
+            liveness_path=Path(self._settings.db_path).parent / LIVENESS_FILE,
         )
 
         # --- Signal handlers ---
@@ -531,10 +555,25 @@ class WQM1App:
                 return {"ok": False, "error": "channel must be 1-4"}
             if not isinstance(state, bool):
                 return {"ok": False, "error": "state must be boolean"}
+            duration = cmd.get("duration_s")
+            if duration is not None and (
+                isinstance(duration, bool) or not isinstance(duration, int | float) or duration < 0
+            ):
+                return {"ok": False, "error": "duration_s must be a non-negative number"}
             if self._relays:
                 self._relays.set(channel, state)
-                return {"ok": True, "channel": channel, "state": state}
+                result: dict[str, Any] = {"ok": True, "channel": channel, "state": state}
+                arm = getattr(self._relays, "arm_auto_off", None)
+                if state and duration and callable(arm):
+                    result["autoOffS"] = arm(channel, float(duration))
+                return result
             return {"ok": False, "error": "relays not initialised"}
+        if action == "lora_rejoin":
+            if self._lorawan is None:
+                return {"ok": False, "error": "LoRa not initialised"}
+            self._lorawan.forget_session()
+            self._persist_session()
+            return {"ok": True, "rejoining": True}
         if action == "restart":
             self._state.request_restart()
             return {"ok": True, "restarting": True}
@@ -571,7 +610,14 @@ class WQM1App:
             return {"ok": True, "configured": True, **self._smart_breaker.status()}
         return {"ok": False, "error": f"unknown action: {action}"}
 
+    # First match wins. /etc/bluesignal is the only location that survives an
+    # upgrade: setup.sh and the OTA agent install each release into its own
+    # /opt/bluesignal/releases/<version>/ tree with the STOCK policies.yaml, so
+    # a customer's rules and their `manual.override: false` edited in the
+    # release tree were silently reverted by the next update. setup.sh now
+    # seeds /etc/bluesignal/policies.yaml once and never overwrites it.
     _POLICIES_PATHS: list[str | Path] = [
+        "/etc/bluesignal/policies.yaml",
         "/opt/bluesignal/config/policies.yaml",
         Path(__file__).parent.parent / "config" / "policies.yaml",
     ]
@@ -597,7 +643,15 @@ class WQM1App:
     def _persist_session(self) -> None:
         """Save LoRaWAN session to database."""
         s = self._lorawan.session
-        self._db.save_session(s.dev_addr, s.nwk_skey, s.app_skey, s.fcnt_up, s.fcnt_down, s.joined)
+        self._db.save_session(
+            s.dev_addr,
+            s.nwk_skey,
+            s.app_skey,
+            s.fcnt_up,
+            s.fcnt_down,
+            s.joined,
+            mac_params=self._lorawan.mac_params,
+        )
 
     def _radios_snapshot(self) -> dict[str, Any] | None:
         """Current radio status for the cloud Radios card — LoRa presence + GPS
@@ -630,20 +684,16 @@ class WQM1App:
             if cmd_type == "relay":
                 channel = int(cmd.get("channel") or 1)
                 state = bool(cmd.get("state"))
-                result = self._handle_cmd(
-                    {"action": "relay_set", "channel": channel, "state": state}
-                )
-                if not result.get("ok"):
-                    raise ValueError(result.get("error", "relay_set failed"))
-                # Optional auto-off after a duration (cloud sends durationSeconds).
+                req: dict[str, Any] = {"action": "relay_set", "channel": channel, "state": state}
+                # Optional auto-off after a duration (cloud sends durationSeconds);
+                # enforced by the relay controller's own timer, so it fires even
+                # if this process is busy, and a later command replaces it.
                 duration = cmd.get("durationSeconds")
                 if state and duration:
-                    threading.Timer(
-                        float(duration),
-                        lambda ch=channel: self._handle_cmd(
-                            {"action": "relay_set", "channel": ch, "state": False}
-                        ),
-                    ).start()
+                    req["duration_s"] = float(duration)
+                result = self._handle_cmd(req)
+                if not result.get("ok"):
+                    raise ValueError(result.get("error", "relay_set failed"))
                 self._cloud.ack_command(cmd_id, "done")
                 logger.info("Cloud relay command: CH%d -> %s", channel, "on" if state else "off")
             elif cmd_type in ("awg", "circuit"):  # `circuit`: PR #112 alias
@@ -840,6 +890,9 @@ class WQM1App:
         logger.info("Shutdown complete")
 
 
+JOIN_BACKOFF_MAX_S = 3600.0
+
+
 class _JoiningRadioWorker(RadioWorker):
     """RadioWorker that performs the OTAA join on its own thread first, so a
     missing gateway delays LoRa only — never sampling or cloud sync."""
@@ -848,11 +901,23 @@ class _JoiningRadioWorker(RadioWorker):
         super().__init__(*args, **kwargs)
         self._join_attempts = 0
 
+    def interval_s(self) -> float:
+        base = super().interval_s()
+        if self._lorawan is None or self._lorawan.session.joined:
+            return base
+        # Join backoff: three attempts at the normal cadence, then doubling up
+        # to an hour. An un-gatewayed unit used to burn a DevNonce every
+        # 300 s for ever (288 a day), and the network server refuses nonces
+        # it has already seen.
+        extra = max(0, self._join_attempts - 3)
+        return float(min(base * (2**extra), JOIN_BACKOFF_MAX_S))
+
     def step(self) -> None:
         if not self._lorawan.session.joined:
             self._join_attempts += 1
             logger.info("OTAA join attempt %d", self._join_attempts)
             if self._lorawan.join(timeout_s=10.0):
+                self._join_attempts = 0
                 self._persist_session()
             return
         super().step()

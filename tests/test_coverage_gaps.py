@@ -17,8 +17,10 @@ class TestADS1115BusNone:
         with pytest.raises(RuntimeError, match="bus not available"):
             adc.read_raw(0)
 
-    def test_read_raw_timeout_returns_stale_value(self, mock_hardware):
-        """When the conversion-done bit never asserts, read_raw still returns a value."""
+    def test_read_raw_timeout_raises(self, mock_hardware):
+        """When the conversion-done bit never asserts, read_raw must NOT hand
+        back whatever the conversion register holds — that is the previous
+        channel's result, published under this channel's name."""
         from sensors.ads1115 import ADS1115
 
         # Config reads always return 0x00 (OS bit never goes high),
@@ -34,9 +36,9 @@ class TestADS1115BusNone:
 
         mock_hardware["bus"].read_i2c_block_data.side_effect = side_effect
         adc = ADS1115()
-        raw = adc.read_raw(0)
-        # Should eventually read the conversion register even after timeout
-        assert isinstance(raw, int)
+        with pytest.raises(RuntimeError, match="did not complete"):
+            adc.read_raw(0)
+        assert call_count > 1
 
     def test_close_idempotent(self, mock_hardware):
         """Closing an already-closed ADC must not raise."""

@@ -209,6 +209,12 @@ class CalibrationManager:
             ref = ref.replace(tzinfo=UTC)
         return max((ref - ts).total_seconds() / 86400.0, 0.0)
 
+    def is_calibrated(self, sensor: str) -> bool:
+        """True once a real calibration exists for ``sensor`` (see
+        ``_ever_calibrated``): a timestamp, a platform offset, or coefficients
+        that differ from the factory placeholders."""
+        return self._ever_calibrated(sensor)
+
     def _ever_calibrated(self, sensor: str) -> bool:
         """Has any calibration value ever been set for this sensor?
 

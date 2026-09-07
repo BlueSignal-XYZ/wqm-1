@@ -173,8 +173,16 @@ if [ ! -f /etc/bluesignal/config.yaml ]; then
     echo "  Installed default config to /etc/bluesignal/config.yaml"
 fi
 
-# Install policies, diagnostics, and the OTA verification public key
+# Install policies, diagnostics, and the OTA verification public key.
+# The live copy of policies.yaml is /etc/bluesignal/policies.yaml — seeded
+# once, never overwritten — because the release tree is replaced on every
+# upgrade and would take a customer's rules with it. The copy in the release
+# tree is only the stock fallback for a unit that has no /etc copy.
 sudo cp "$SCRIPT_DIR/config/policies.yaml" "$RELEASE_DIR/config/"
+if [ ! -f /etc/bluesignal/policies.yaml ]; then
+    sudo cp "$SCRIPT_DIR/config/policies.yaml" /etc/bluesignal/policies.yaml
+    echo "  Installed default relay policies to /etc/bluesignal/policies.yaml"
+fi
 if [ -f "$SCRIPT_DIR/config/ota_public_key.pem" ]; then
     sudo cp "$SCRIPT_DIR/config/ota_public_key.pem" "$RELEASE_DIR/config/"
 else
@@ -219,6 +227,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-ota.service
+# One-shot first-boot check (prints the provisioning hint to the journal
+# until /etc/bluesignal/.provisioned exists). It was copied but never enabled.
+sudo systemctl enable bluesignal-provision.service 2>/dev/null || true
 
 # --- Service window + provisioning ---
 echo "[7/9] Installing service window and provisioning tools..."
@@ -255,7 +266,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit config:      sudo nano /etc/bluesignal/config.yaml"
 echo "  2. Set LoRaWAN key:  app_key field (from TTN/Chirpstack)"
-echo "  3. Review policies:  sudo nano /opt/bluesignal/current/config/policies.yaml"
+echo "  3. Review policies:  sudo nano /etc/bluesignal/policies.yaml"
 echo "  4. Reboot:           sudo reboot"
 echo "  5. Run diagnostics:  sudo bash /opt/bluesignal/current/scripts/diagnostics.sh"
 echo "  6. Start service:    sudo systemctl start bluesignal-wqm"

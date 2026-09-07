@@ -6,6 +6,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from flask.typing import ResponseReturnValue
 
 from service_window.auth import login_required
+from service_window.cmd_client import send_command
 from service_window.config_editor import read_config, update_config
 from service_window.db_reader import DBReader
 
@@ -40,4 +41,17 @@ def set_appkey() -> ResponseReturnValue:
 
     update_config(current_app.config["CONFIG_PATH"], {"app_key": app_key})
     flash("AppKey updated. Restart the firmware to apply.", "success")
+    return redirect(url_for("lora.index"))
+
+
+@lora_bp.route("/rejoin", methods=["POST"])
+@login_required
+def rejoin() -> ResponseReturnValue:
+    """Forget the LoRaWAN session so the unit performs a fresh OTAA join —
+    the recovery for a device re-registered or reset on the network server."""
+    result = send_command(current_app.config["CMD_SOCK"], "lora_rejoin")
+    if result.get("ok"):
+        flash("LoRaWAN session forgotten — the unit rejoins on its next radio cycle.", "success")
+    else:
+        flash(f"Could not reach the monitoring service: {result.get('error', 'unknown')}", "error")
     return redirect(url_for("lora.index"))

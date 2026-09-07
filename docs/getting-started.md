@@ -14,10 +14,12 @@ Raspberry Pi Zero 2W with the WQM-1 HAT.
 - Raspberry Pi Zero 2W
 - WQM-1 carrier board, attached to the Pi's GPIO header
 - microSD card (16 GB or larger recommended)
-- 24 V DC power supply wired to the WQM-1 screw terminal for production
-  deployment. A USB-C 5 V / 2.5 A supply to the Pi is fine for initial
-  dev/debug (flashing, first-boot configuration) but is not the intended
-  field power source.
+- 24 V DC power supply (2 A or more) wired to the WQM-1 screw terminal.
+  It is the only supply that powers the analog rails (ADS1115, pH front-end,
+  TDS chain) and the relay coils. A USB-C 5 V / 2.5 A supply on the Pi runs
+  the Pi, LoRa and GPS only — fine for flashing and first-boot network
+  setup, but `diagnostics.sh` will report no ADS1115 and no relay can close
+  on it. **Never connect USB-C and the 24 V input at the same time.**
 - A computer with an SD card reader for flashing
 
 **Software (on your computer):**
@@ -68,7 +70,9 @@ Raspberry Pi Zero 2W with the WQM-1 HAT.
 
 1. Remove the microSD card from your computer and insert it into the
    Pi Zero 2W (with the WQM-1 HAT attached).
-2. Connect the USB-C power supply. The green LED will blink during boot.
+2. Apply power — 24 V on the screw terminal, or USB-C on the Pi for a
+   Pi-only first boot (one or the other, never both). The green LED will
+   blink during boot.
 3. Wait about 60–90 seconds for the first boot to complete.
 4. Find the Pi on your network:
    ```

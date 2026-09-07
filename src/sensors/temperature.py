@@ -46,7 +46,14 @@ class DS18B20:
         if self._sensor is None:
             return None
         try:
-            return self._sensor.get_temperature()
+            temp = float(self._sensor.get_temperature())
         except Exception as e:
             logger.warning("DS18B20 read failed: %s", e)
             return None
+        # 85.0 °C is the DS18B20's power-on scratchpad value, returned when a
+        # conversion was read before it completed (marginal supply or a bus
+        # glitch). No monitored water is at 85.000 °C; report no reading.
+        if temp == 85.0:
+            logger.warning("DS18B20 returned the 85.0 °C power-on value — ignoring")
+            return None
+        return temp

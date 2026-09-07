@@ -39,15 +39,19 @@ class TestSX1262XferGuard:
 
 
 class TestRulesTimezoneAware:
-    """Rules engine uses UTC-aware datetimes."""
+    """Rules engine uses timezone-aware datetimes."""
 
-    def test_default_clock_is_utc_aware(self, mock_hardware):
+    def test_default_clock_is_tz_aware_local(self, mock_hardware):
         from control.rules import RulesEngine
 
-        # The engine's default clock is what makes the schedule check UTC —
-        # assert it directly rather than inferring it from a window match.
+        # The default clock decides which wall time the schedule window is
+        # compared against. It is the unit's LOCAL time (an installer writes
+        # "07:00" meaning the site's morning), and it must be tz-aware so it
+        # can still be converted to UTC for the hourly adaptive baselines.
         engine = RulesEngine()
-        assert engine._clock().tzinfo is UTC
+        now = engine._clock()
+        assert now.tzinfo is not None
+        assert now.astimezone(UTC).tzinfo is UTC
 
     def test_schedule_check_uses_utc(self, mock_hardware, fixed_clock):
         from control.rules import RulesEngine

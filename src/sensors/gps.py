@@ -171,8 +171,9 @@ class GPS:
 
     def power_cycle(self) -> None:
         """
-        Pulse EXTINT to reset/wake the GPS module.
-        u-blox EXTINT: pulse low for >100 ms to toggle power save.
+        Pulse EXTINT HIGH for 200 ms to wake the receiver.
+        u-blox EXTINT: a high level forces the receiver out of power-save; in
+        continuous mode (the default) the pulse is harmless.
         """
         if GPIO is None:
             logger.info("GPS power cycle skipped — EXTINT pin not wired on this host")

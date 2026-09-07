@@ -16,6 +16,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from app.state import StateStore
@@ -34,6 +35,12 @@ LIVENESS_MIN_S = 60.0
 
 DB_ROTATE_EVERY_S = 600.0
 
+# Liveness beat for the OTA agent's self-test: touched (mtime) while every
+# worker is alive, so an update can prove the new firmware runs even on a unit
+# with no probes declared. Same name in ota.agent — keep them in step.
+LIVENESS_FILE = "alive"
+LIVENESS_TOUCH_S = 30.0
+
 
 class Supervisor:
     """Runs workers in threads and guards their liveness."""
@@ -49,6 +56,7 @@ class Supervisor:
         hw_watchdog: Any = None,
         clock: Callable[[], float] = time.monotonic,
         tick_s: float = 1.0,
+        liveness_path: Path | None = None,
     ) -> None:
         self._workers = workers
         self._state = state
@@ -63,6 +71,8 @@ class Supervisor:
         self._threads: list[threading.Thread] = []
         self._last_rotate = clock()
         self._faulted: set[str] = set()
+        self._liveness_path = Path(liveness_path) if liveness_path else None
+        self._last_liveness_touch = float("-inf")
         self.exit_reason: str | None = None
 
     @property
@@ -140,6 +150,13 @@ class Supervisor:
                 self._notifier.watchdog()
             if self._hw_watchdog:
                 self._hw_watchdog.pet()
+            if self._liveness_path and now - self._last_liveness_touch >= LIVENESS_TOUCH_S:
+                self._last_liveness_touch = now
+                try:
+                    self._liveness_path.parent.mkdir(parents=True, exist_ok=True)
+                    self._liveness_path.touch()
+                except OSError as e:
+                    logger.debug("liveness touch failed: %s", e)
 
     def run(self) -> None:
         """Block until stop() or a restart request; runs the tick loop."""

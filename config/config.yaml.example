@@ -24,6 +24,10 @@ gps_baud: 38400
 # 32-character hex string — your AppKey from TTN or ChirpStack.
 # Replace the placeholder below with your actual key.
 app_key: "00000000000000000000000000000000"
+# US915 frequency sub-band (1-8) used until the network server assigns a
+# channel mask. 2 = TTN "FSB2" (channels 8-15 + 500 kHz channel 65). Match the
+# gateway's plan on ChirpStack.
+lora_sub_band: 2
 
 # --- Cloud over WiFi (optional; coexists with LoRaWAN) ---
 # Set cloud_enabled: true and paste the device API key to report readings and
@@ -74,6 +78,9 @@ smart_breaker_interlock_relay: 0      # 0 = none, 1-4 = G5Q channel in series wi
 smart_breaker_poll_s: 60
 smart_breaker_fail_safe: "off"          # quote it: bare off/on are YAML booleans
 smart_breaker_unreachable_grace_s: 300
+# Compressor short-cycle guard: an ON request within this many seconds of the
+# last OFF (any source, fail-safe included) is refused with retryAfterS.
+smart_breaker_min_off_s: 180
 # Auth. `direct` = this unit holds Eaton ORGANISATION service-account credentials.
 # `cloud_proxy` = the BlueSignal Cloud Functions hold them (preferred; pending).
 # Credentials are provisioning-time only, never pushed remotely, never committed.

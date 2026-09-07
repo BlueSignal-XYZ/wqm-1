@@ -63,6 +63,9 @@ DOWNLOAD_DIR = "ota-download"
 # the firmware or the Service Window via sudo.
 REBOOT_FLAG = "reboot-request"
 REBOOT_POLL_S = 1
+# Touched by the firmware supervisor while every worker is alive
+# (app.supervisor.LIVENESS_FILE — same file, same state dir).
+LIVENESS_FILE = "alive"
 # A request older than this is ignored. The flag sits on persistent storage, so
 # one that outlived a power cut (or an agent that was down) must not turn into a
 # surprise reboot hours later — the operator can simply press the button again.
@@ -571,16 +574,34 @@ class OTAAgent:
         finally:
             conn.close()
 
+    def _has_fresh_liveness(self, since_iso: str) -> bool:
+        """True when the supervisor has touched its liveness file since the
+        apply — i.e. the new firmware booted and every worker is beating.
+        This is what lets a unit with no probes declared (or a probe outage
+        during the update window) still pass; a fresh reading alone would
+        roll every release back on such a unit."""
+        path = self._state_dir / LIVENESS_FILE
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return False
+        try:
+            since = datetime.strptime(since_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        except ValueError:
+            return False
+        return mtime > since.timestamp()
+
     def _self_test(self) -> tuple[bool, str | None]:
-        """Within the timeout: main service active AND one fresh reading."""
+        """Within the timeout: main service active AND (one fresh reading OR a
+        fresh supervisor liveness beat)."""
         since = self._apply_time_iso or _utc_now_iso()
         deadline = self._clock() + self._settings.ota_self_test_timeout_s
         reason = "self-test timed out"
         while True:
             if not self._service_active():
                 reason = f"{MAIN_SERVICE} not active"
-            elif not self._has_fresh_reading(since):
-                reason = "no fresh sensor reading since apply"
+            elif not (self._has_fresh_reading(since) or self._has_fresh_liveness(since)):
+                reason = "no fresh sensor reading or liveness beat since apply"
             else:
                 return True, None
             if self._clock() >= deadline:

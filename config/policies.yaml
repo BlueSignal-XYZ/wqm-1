@@ -4,8 +4,9 @@
 # This file configures safety limits and schedule windows for the
 # rules engine, plus a default set of water quality automation rules.
 #
-# Loaded by the firmware at startup from:
-#   /opt/bluesignal/config/policies.yaml
+# Loaded by the firmware at startup from the first of:
+#   /etc/bluesignal/policies.yaml           (live copy — survives upgrades)
+#   /opt/bluesignal/current/config/policies.yaml   (stock fallback)
 #
 # Rules format:
 #   sensor:      ph | tds_ppm | turbidity_ntu | orp_mv | temp_c
@@ -13,17 +14,32 @@
 #   threshold:   numeric trigger value
 #   relay:       1-4 (which relay channel to control)
 #   action:      on | off
-#   duration_s:  auto-shutoff after N seconds (0 = stay until cleared)
+#   duration_s:  auto-shutoff after N seconds (0 = stay until cleared).
+#                Enforced by a timer in the relay controller, so it fires
+#                on time whatever the sampling interval is doing.
 # ---------------------------------------------------------------
 
 # --- Safety limits ---
 limits:
   max_on_minutes_per_hour: 10    # Max cumulative relay ON time per hour
+                                 # (gates NEW on-actions; it does not cut a
+                                 # relay that is already on)
   cooldown_seconds: 120          # Min seconds between relay OFF → ON
+  # Hard ceiling on ONE continuous on-period for ANY relay from ANY source
+  # (rule, cloud command, Service Window, LoRa downlink). Enforced by the
+  # relay controller's own timer, independent of the sampling loop. 0 = none.
+  # Set it if a channel drives a dosing pump; leave 0 if a channel must be
+  # able to hold an aerator or circulation pump on for hours.
+  max_continuous_on_minutes: 0
   max_temp_c: 50.0               # Reference limit (informational)
 
 # --- Schedule window ---
-# Rules only fire within this time window. Outside = relays stay off.
+# Rules may only switch a relay ON inside this window, in the unit's LOCAL
+# time (the timezone chosen when the card was imaged). Outside the window no
+# new ON action fires; duration timers and fail-safe OFF actions still run,
+# but an ON rule with duration_s: 0 that fired inside the window is NOT
+# released by its OFF rule until the window reopens — give such rules a
+# duration_s, or widen the window.
 schedule:
   enabled: true
   start: "07:00"
