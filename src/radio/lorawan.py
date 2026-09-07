@@ -385,8 +385,8 @@ class LoRaWANMAC:
     def _pick_channel(self) -> int:
         """Random enabled 125 kHz uplink channel (frequency hopping)."""
         chans = self.enabled_channels
-        # nosec B311 — channel selection is not a security decision
-        self._last_channel = random.choice(chans)  # noqa: S311
+        # Channel selection is not a security decision — any PRNG will do.
+        self._last_channel = random.choice(chans)  # nosec B311
         return self._last_channel
 
     def _configure_tx(self, channel: int) -> None:
