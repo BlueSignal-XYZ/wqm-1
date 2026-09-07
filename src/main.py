@@ -292,7 +292,14 @@ class WQM1App:
             # will not be accepted unless this matches the JoinEUI the device
             # is registered under on the network server.
             app_eui = bytes.fromhex(self._settings.app_eui) if self._settings.app_eui else APP_EUI
-            self._lorawan = LoRaWANMAC(self._radio, self._dev_eui, app_eui, app_key)
+            self._lorawan = LoRaWANMAC(
+                self._radio,
+                self._dev_eui,
+                app_eui,
+                app_key,
+                sub_band=self._settings.lora_sub_band,
+                persist_hook=self._persist_session,
+            )
 
             # Restore session from DB (join, if needed, happens on the radio
             # worker's thread so a missing gateway can't stall boot).
@@ -306,7 +313,7 @@ class WQM1App:
                     fcnt_down=saved["fcnt_down"],
                     joined=True,
                 )
-                self._lorawan.restore_session(session)
+                self._lorawan.restore_session(session, saved.get("mac_params"))
         except Exception as e:
             logger.warning("LoRa init failed: %s", e)
 
@@ -571,7 +578,14 @@ class WQM1App:
             return {"ok": True, "configured": True, **self._smart_breaker.status()}
         return {"ok": False, "error": f"unknown action: {action}"}
 
+    # First match wins. /etc/bluesignal is the only location that survives an
+    # upgrade: setup.sh and the OTA agent install each release into its own
+    # /opt/bluesignal/releases/<version>/ tree with the STOCK policies.yaml, so
+    # a customer's rules and their `manual.override: false` edited in the
+    # release tree were silently reverted by the next update. setup.sh now
+    # seeds /etc/bluesignal/policies.yaml once and never overwrites it.
     _POLICIES_PATHS: list[str | Path] = [
+        "/etc/bluesignal/policies.yaml",
         "/opt/bluesignal/config/policies.yaml",
         Path(__file__).parent.parent / "config" / "policies.yaml",
     ]
@@ -597,7 +611,15 @@ class WQM1App:
     def _persist_session(self) -> None:
         """Save LoRaWAN session to database."""
         s = self._lorawan.session
-        self._db.save_session(s.dev_addr, s.nwk_skey, s.app_skey, s.fcnt_up, s.fcnt_down, s.joined)
+        self._db.save_session(
+            s.dev_addr,
+            s.nwk_skey,
+            s.app_skey,
+            s.fcnt_up,
+            s.fcnt_down,
+            s.joined,
+            mac_params=self._lorawan.mac_params,
+        )
 
     def _radios_snapshot(self) -> dict[str, Any] | None:
         """Current radio status for the cloud Radios card — LoRa presence + GPS

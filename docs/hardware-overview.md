@@ -7,8 +7,12 @@ Board architecture, component selection, and power chain for the WQM-1.
 - **Board dimensions:** 120 × 105 mm
 - **Mounting:** stacks on a Raspberry Pi Zero 2W via the 40-pin GPIO
   header; standoffs on four corners
-- **Connectors:** 24 V DC screw terminal, BNC/phoenix inputs for the
-  wet-side probes, U.FL for the LoRa antenna, SMA for GPS
+- **Connectors:** 24 V DC screw terminal, BNC (pH) / JST-XH (TDS, turbidity,
+  1-Wire, I²C expansion) inputs for the wet-side probes, SMA for the LoRa
+  antenna, SMA for GPS
+- **Power:** the 24 V input is the only source for the analog rails
+  (+6.5 V → +5VA → ±3.0 V) and the relay coils (VRLY). USB-C on the Pi powers
+  only the Pi, the 3.3 V rail (LoRa, GPS) and the turbidity probe's 5 V.
 
 ## BOM reference
 
@@ -19,7 +23,7 @@ Approximate cost: **~$147 per unit at 10-unit quantity.**
 
 | Block | Part | Notes |
 |-------|------|-------|
-| Analog-to-digital | **ADS1115** (single, I²C @ 0x48) | 16-bit, four channels, ±6.144 V PGA range |
+| Analog-to-digital | **ADS1115** (single, I²C @ 0x48, on +5VA) | 16-bit, four channels; firmware uses PGA ±4.096 V on AIN0/2/3 and ±6.144 V on AIN1 (turbidity, 0–4.5 V chain) |
 | pH analog front-end | **LMP91200** | Configurable-gain pH signal conditioner |
 | TDS excitation | **CD4060** + **LM324** | Hardware square-wave + rectifier/LPF for AC excitation of the TDS probe (avoids electroplating). Firmware 2.1.1 does **not** drive this oscillator (sampling-only). Q4 band is a BUILD **ESTIMATE** — see below. |
 | Turbidity | direct into ADS1115 (AIN1, LMV321 buffer) | No dedicated AFE |

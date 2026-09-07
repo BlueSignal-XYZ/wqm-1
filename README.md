@@ -135,7 +135,16 @@ Zero 2W with the WQM-1 HAT attached.
 - WQM-1 HAT (PCBA revision Fin\_3), attached to the Pi's 40-pin GPIO
   header
 - microSD card (16 GB or larger recommended)
-- USB-C power supply (5 V / 2.5 A minimum)
+- **24 V DC supply (2 A or more) wired to the HAT's screw terminal.** This is
+  the only supply that powers the whole board: the 24 V input feeds the 6.5 V
+  and +5VA analog rails (ADS1115, pH front-end, TDS chain) and the relay coils
+  (VRLY). A USB-C 5 V supply on the Pi runs only the Pi, the 3.3 V rail
+  (LoRa, GPS) and the turbidity probe's 5 V — on USB power the ADC is
+  unpowered, `diagnostics.sh` reports no ADS1115, and no relay can close.
+- A USB-C 5 V / 2.5 A supply is fine for flashing and bench work on the Pi
+  alone. **Never connect USB-C and the 24 V input at the same time** — the
+  HAT's 5 V regulator drives the Pi's 5 V pins, and two supplies fight on the
+  same rail.
 - A computer with an SD card reader for flashing
 
 **Software (on your computer):**
@@ -186,8 +195,9 @@ Zero 2W with the WQM-1 HAT attached.
 
 1. Insert the microSD card into the Pi Zero 2W (with the WQM-1 HAT
    already attached).
-2. Connect the USB-C power supply. The green activity LED will blink
-   during boot.
+2. Apply power: 24 V DC on the screw terminal (production) or, for a
+   Pi-only bench check, USB-C on the Pi — one or the other, never both.
+   The green activity LED will blink during boot.
 3. Wait **60–90 seconds** for the first boot to finish (the Pi expands
    the filesystem and applies your WiFi/SSH settings).
 4. Find the Pi on your network:
@@ -500,8 +510,8 @@ forwards everything to a network server (TTN, ChirpStack, etc.). All
 ```bash
 # Watch radio activity in real time
 journalctl -u bluesignal-wqm -f | grep -iE 'lora|sx1262|join|uplink|tx complete|fcnt'
-# On join:    "Sending JoinRequest" → "JoinAccept received" → "Joined network"
-# On uplink:  "LoRa TX complete (N bytes)" + "FCntUp=N"
+# On join:    "Sending JoinRequest" → "OTAA join successful: DevAddr=…"
+# On uplink:  "Uplink FCnt=N FPort=1 … on channel C" → "LoRa TX complete (N bytes)"
 
 # Check current join status from the DB
 sudo sqlite3 /var/lib/bluesignal/wqm1.db \
@@ -548,7 +558,7 @@ http://<pi-ip>:8080/diagnostics/       # run hardware probe
 
 ```bash
 sudo nano /etc/bluesignal/config.yaml         # main config (AppKey, intervals, fan thresholds)
-sudo nano /opt/bluesignal/current/config/policies.yaml # relay rules
+sudo nano /etc/bluesignal/policies.yaml        # relay rules + schedule (local time)
 sudo systemctl restart bluesignal-wqm          # apply changes
 ```
 
@@ -693,7 +703,7 @@ Then, on the network server:
 
 - **No activity at all for the device** (TTN: "No activity yet") means **no
   gateway ever heard it.** No credential change will fix that — it is antenna
-  or coverage. Confirm the antenna is actually attached to the U.FL connector
+  or coverage. Confirm the antenna is actually attached to the SMA connector
   (transmitting into an unterminated connector is also hard on the PA), get it
   outside the enclosure and vertical, and check the gateway map for the site.
 - **Join requests arriving but rejected** means coverage is fine and the
@@ -703,7 +713,10 @@ Then, on the network server:
   DevEUI, which the firmware derives as `0018B200` + the last 8 hex of the Pi's
   serial and cannot be overridden.
 - Confirm the frequency plan matches: the firmware is **US915**, RX2 at
-  923.3 MHz, which pairs with TTN's "United States 902–928 MHz, FSB 2".
+  923.3 MHz, and hops across one frequency sub-band until the network server
+  sends a channel mask. The default `lora_sub_band: 2` pairs with TTN's
+  "United States 902–928 MHz, FSB 2"; a ChirpStack gateway on another block
+  needs the matching value in `config.yaml`.
 
 </details>
 

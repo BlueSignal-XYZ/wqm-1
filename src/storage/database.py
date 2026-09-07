@@ -17,6 +17,7 @@ v2 changes:
 """
 
 import contextlib
+import json
 import logging
 import sqlite3
 import threading
@@ -28,7 +29,7 @@ from utils.config import get_settings
 
 logger = logging.getLogger("wqm1.db")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -71,7 +72,10 @@ CREATE TABLE IF NOT EXISTS lorawan_session (
     fcnt_up INTEGER DEFAULT 0,
     fcnt_down INTEGER DEFAULT 0,
     joined INTEGER DEFAULT 0,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    -- JSON: network-assigned MAC parameters (RxDelay, RX1DROffset, RX2 DR,
+    -- channel mask) that must survive a reboot with the session keys.
+    mac_params TEXT
 );
 
 INSERT OR IGNORE INTO lorawan_session (id) VALUES (1);
@@ -192,6 +196,20 @@ class WQM1Database:
             with conn:
                 if "sensor_status" not in cols:
                     conn.execute("ALTER TABLE readings ADD COLUMN sensor_status TEXT")
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')"
+                )
+            logger.info("Database migrated to schema v4")
+            current = 4
+
+        if current < 5:
+            # v5: LoRaWAN MAC parameters ride with the session. Additive and
+            # rollback-safe — an older build ignores the column and simply
+            # falls back to the regional defaults (RxDelay 1 s, sub-band).
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(lorawan_session)")}
+            with conn:
+                if "mac_params" not in cols:
+                    conn.execute("ALTER TABLE lorawan_session ADD COLUMN mac_params TEXT")
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
@@ -358,27 +376,49 @@ class WQM1Database:
         fcnt_up: int,
         fcnt_down: int,
         joined: bool,
+        mac_params: dict[str, Any] | None = None,
     ) -> None:
-        """Persist LoRaWAN session state."""
+        """Persist LoRaWAN session state (+ optional MAC parameters)."""
         conn = self._conn
         with conn:
             conn.execute(
                 """UPDATE lorawan_session SET
                    dev_addr=?, nwk_skey=?, app_skey=?,
                    fcnt_up=?, fcnt_down=?, joined=?,
+                   mac_params=?,
                    updated_at=CURRENT_TIMESTAMP
                    WHERE id=1""",
-                (dev_addr, nwk_skey, app_skey, fcnt_up, fcnt_down, 1 if joined else 0),
+                (
+                    dev_addr,
+                    nwk_skey,
+                    app_skey,
+                    fcnt_up,
+                    fcnt_down,
+                    1 if joined else 0,
+                    json.dumps(mac_params) if mac_params else None,
+                ),
             )
 
     def load_session(self) -> dict[str, Any] | None:
-        """Load LoRaWAN session state."""
+        """Load LoRaWAN session state. ``mac_params`` is a dict or None."""
         cur = self._conn.execute(
-            "SELECT dev_addr, nwk_skey, app_skey, fcnt_up, fcnt_down, joined"
+            "SELECT dev_addr, nwk_skey, app_skey, fcnt_up, fcnt_down, joined, mac_params"
             " FROM lorawan_session WHERE id=1"
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        session = dict(row)
+        raw = session.get("mac_params")
+        params: dict[str, Any] | None = None
+        if isinstance(raw, str) and raw:
+            try:
+                parsed = json.loads(raw)
+                params = parsed if isinstance(parsed, dict) else None
+            except ValueError:
+                logger.warning("Ignoring unparseable lorawan_session.mac_params")
+        session["mac_params"] = params
+        return session
 
     def increment_fcnt(self) -> int:
         """Increment and return uplink frame counter."""

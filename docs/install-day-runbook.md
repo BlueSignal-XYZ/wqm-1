@@ -132,7 +132,9 @@ if RS485 is fitted, and the claim secrets somewhere you can read them offline.
 ## 2. On site
 
 1. **Mount and wire first, power second.** 24 V DC to the screw terminal is the
-   production source; the USB-C supply is for debug only.
+   production source; the USB-C supply is for debug only, powers neither the
+   analog chain nor the relays, and must never be connected while the 24 V
+   supply is.
 2. **Wizard → network**, at the final mounting position with the enclosure as it
    will actually sit. This step exists because a unit that associates fine with
    the lid open can drop when it closes, and that failure is invisible until the

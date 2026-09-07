@@ -95,9 +95,13 @@ Source: `src/integrations/smart_breaker/`.
 
 ## LoRaWAN
 
-Class-A LoRaWAN 1.0.3 on the SX1262 (915 MHz US / 868 MHz EU), Cayenne LPP
-payloads, AES-128. LoRa is a real-time snapshot + downlink channel; HTTP is the
-durable one. Source: `src/radio/`.
+Class-A LoRaWAN 1.0.3 on the SX1262, **US915 only** (no EU868 build exists):
+frequency hopping across the configured sub-band (`lora_sub_band`, TTN FSB2 by
+default) or the channel mask the network assigns, RX1 on the paired 500 kHz
+downlink channel, RX2 at 923.3 MHz SF12/500k, JoinAccept and downlink MICs and
+frame counters verified, LinkADR / RXParamSetup / RXTimingSetup / DevStatus
+answered. Cayenne LPP payloads, AES-128. LoRa is a real-time snapshot +
+downlink channel; HTTP is the durable one. Source: `src/radio/`.
 
 ## Host boards
 

@@ -334,7 +334,7 @@ class TestTurbidityEdgeCases:
 
         # ADS1115.__init__ uses read_word_data (not read_i2c_block_data)
         # read_raw calls: 1) OS poll via read_i2c_block_data, 2) conversion result
-        raw = 32767  # max positive signed 16-bit → ~4.096V
+        raw = 21867  # 4.1 V on AIN1 (the turbidity channel runs at ±6.144 V)
         high = (raw >> 8) & 0xFF
         low = raw & 0xFF
 
@@ -346,7 +346,7 @@ class TestTurbidityEdgeCases:
         ]
 
         turb = TurbiditySensor(adc)
-        turb._v_clear = 4.096  # match voltage from ADC
+        turb._v_clear = 4.1  # match voltage from ADC
 
         result = turb.read()
         assert result is not None

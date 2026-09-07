@@ -223,6 +223,10 @@ class Settings:
     # release.
     app_key: str = "00000000000000000000000000000000"
     app_eui: str = "0000000000000000"
+    # US915 frequency sub-band (1-8) used until the network server assigns a
+    # channel mask. TTN's US915 plan is FSB2 (channels 8-15 + 500 kHz ch 65);
+    # ChirpStack deployments may use another block — match the gateway.
+    lora_sub_band: int = 2
 
     # Cloud sync (HTTP/WiFi transport — coexists with LoRaWAN). Enable once the
     # device has an api_key; set via the service window /provision/cloud page.
@@ -402,6 +406,7 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "gps_baud": SettingSpec(int, hot=False, min=1200, max=921600, remote=False),
     "app_key": SettingSpec(str, hot=False, max_length=32, remote=False),
     "app_eui": SettingSpec(str, hot=False, max_length=16, remote=False),
+    "lora_sub_band": SettingSpec(int, hot=False, min=1, max=8, remote=False),
     "cloud_enabled": SettingSpec(bool, hot=False, remote=False),
     "cloud_ingest_url": SettingSpec(str, hot=False, max_length=256, remote=False),
     "cloud_command_url": SettingSpec(str, hot=False, max_length=256, remote=False),

@@ -21,9 +21,16 @@ from typing import Any
 logger = logging.getLogger("wqm1.rules")
 
 
-def _utc_now() -> datetime:
-    """Default wall clock: timezone-aware UTC."""
-    return datetime.now(UTC)
+def _local_now() -> datetime:
+    """Default wall clock: timezone-aware, in the host's configured zone.
+
+    The schedule window in policies.yaml ("07:00"-"21:00") is written by an
+    installer standing at the site, so it is compared in the unit's local
+    time — the timezone set when the card was imaged. This used to compare
+    against UTC, which in Texas made a 07:00-21:00 window run 01:00-15:00
+    local. Adaptive baselines convert to UTC explicitly where they need it.
+    """
+    return datetime.now(UTC).astimezone()
 
 
 @dataclass
@@ -77,7 +84,7 @@ class RulesEngine:
         """
         self._rules: list[Rule] = []
         self._relay = relay_controller
-        self._clock = clock or _utc_now
+        self._clock = clock or _local_now
         # Track auto-shutoff timers: {relay_channel: shutoff_time}
         self._timers: dict[int, float] = {}
 

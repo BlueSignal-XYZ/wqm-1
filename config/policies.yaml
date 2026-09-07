@@ -4,8 +4,9 @@
 # This file configures safety limits and schedule windows for the
 # rules engine, plus a default set of water quality automation rules.
 #
-# Loaded by the firmware at startup from:
-#   /opt/bluesignal/config/policies.yaml
+# Loaded by the firmware at startup from the first of:
+#   /etc/bluesignal/policies.yaml           (live copy — survives upgrades)
+#   /opt/bluesignal/current/config/policies.yaml   (stock fallback)
 #
 # Rules format:
 #   sensor:      ph | tds_ppm | turbidity_ntu | orp_mv | temp_c
@@ -23,7 +24,12 @@ limits:
   max_temp_c: 50.0               # Reference limit (informational)
 
 # --- Schedule window ---
-# Rules only fire within this time window. Outside = relays stay off.
+# Rules may only switch a relay ON inside this window, in the unit's LOCAL
+# time (the timezone chosen when the card was imaged). Outside the window no
+# new ON action fires; duration timers and fail-safe OFF actions still run,
+# but an ON rule with duration_s: 0 that fired inside the window is NOT
+# released by its OFF rule until the window reopens — give such rules a
+# duration_s, or widen the window.
 schedule:
   enabled: true
   start: "07:00"
