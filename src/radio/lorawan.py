@@ -128,6 +128,16 @@ _MAX_FOPTS_LEN = 15
 LINK_CHECK_EVERY_UPLINKS = 24
 REJOIN_AFTER_UNANSWERED_LINK_CHECKS = 3
 
+# JoinAccept replay defence. The JoinAccept MIC binds the AppKey but NOT the
+# DevNonce, so a JoinAccept captured once can be replayed into any later join
+# window: its MIC still verifies, but the keys the device derives (with the
+# NEW DevNonce) no longer match the network's, and the device would persist a
+# "joined" session that can neither uplink nor be commanded. The network's
+# AppNonce/JoinNonce is fresh per join (incrementing on TTN, random on
+# ChirpStack), so an accepted AppNonce seen again is a replay. The last few
+# are kept, persisted with the session, and survive forget_session().
+RECENT_APP_NONCES_KEPT = 8
+
 
 def rx1_data_rate(uplink_dr: int, rx1_dr_offset: int) -> int:
     """US915 RX1 downlink data rate for an uplink DR and RX1DROffset (RP002)."""
@@ -250,6 +260,7 @@ class LoRaWANMAC:
         self._last_link_check: tuple[int, int] | None = None
         self._uplinks_since_downlink = 0
         self._unanswered_link_checks = 0
+        self._recent_app_nonces: list[int] = []
 
     # ------------------------------------------------------------------
     # Session / persisted state
@@ -289,6 +300,7 @@ class LoRaWANMAC:
         return {
             "sf": self._sf,
             "dev_nonce": self._dev_nonce_counter,
+            "app_nonces": list(self._recent_app_nonces),
             "rx1_dr_offset": self._rx1_dr_offset,
             "rx2_dr": self._rx2_dr,
             "rx2_frequency": self._rx2_frequency,
@@ -346,6 +358,11 @@ class LoRaWANMAC:
             nonce = params.get("dev_nonce")
             if isinstance(nonce, int) and 0 <= nonce <= 0xFFFF:
                 self._dev_nonce_counter = nonce
+            seen = params.get("app_nonces")
+            if isinstance(seen, list):
+                self._recent_app_nonces = [
+                    int(n) for n in seen if isinstance(n, int) and 0 <= n <= 0xFFFFFF
+                ][-RECENT_APP_NONCES_KEPT:]
             sf = int(params.get("sf", self._sf))
             if sf in _SF_TO_UP_DR:
                 self._sf = sf
@@ -508,6 +525,18 @@ class LoRaWANMAC:
         dev_addr = body[6:10]
         dl_settings = body[10]
         rx_delay = body[11] & 0x0F
+
+        app_nonce_int = int.from_bytes(app_nonce, "little")
+        if app_nonce_int in self._recent_app_nonces:
+            logger.error(
+                "JoinAccept rejected: AppNonce 0x%06X was already accepted — a replayed "
+                "JoinAccept would leave this device joined with keys the network does not hold",
+                app_nonce_int,
+            )
+            return False
+        self._recent_app_nonces = (self._recent_app_nonces + [app_nonce_int])[
+            -RECENT_APP_NONCES_KEPT:
+        ]
 
         # Derive session keys
         nwk_skey = _derive_key(self._app_key, 0x01, app_nonce, net_id, self._dev_nonce)

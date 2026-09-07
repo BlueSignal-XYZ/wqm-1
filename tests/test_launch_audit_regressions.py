@@ -164,6 +164,15 @@ def _join_accept(
     return bytes([0x20]) + enc[: len(plain)]
 
 
+def _join_accept_with_nonce(app_key: bytes, app_nonce: bytes) -> bytes:
+    body = app_nonce + b"\x04\x05\x06" + b"\xaa\xbb\xcc\xdd" + b"\x00\x00"
+    plain = body + _cmac(app_key, bytes([0x20]) + body)
+    cipher = AES.new(app_key, AES.MODE_ECB)
+    padded = plain.ljust(((len(plain) + 15) // 16) * 16, b"\x00")
+    enc = b"".join(cipher.decrypt(padded[i : i + 16]) for i in range(0, len(padded), 16))
+    return bytes([0x20]) + enc[: len(plain)]
+
+
 def _downlink(
     dev_addr: bytes,
     nwk_skey: bytes,
@@ -288,6 +297,37 @@ class TestJoinAcceptVerification:
         assert mac.mac_params["rx1_delay_s"] == 5.0
         assert mac.mac_params["rx1_dr_offset"] == 1
         assert mac.enabled_channels == list(range(8))
+
+    def test_replayed_join_accept_is_rejected(self, mock_hardware):
+        """The JoinAccept MIC does not bind DevNonce, so a captured JoinAccept
+        replayed into a later join window verifies — and would leave the
+        device 'joined' with keys the network never derived."""
+        from radio.lorawan import LoRaWANMAC
+
+        accept = _join_accept(APP_KEY)  # AppNonce 0x030201, captured once
+        radio = MagicMock()
+        radio.send.return_value = True
+        radio.receive.return_value = accept
+        mac = LoRaWANMAC(radio, bytes(8), bytes(8), APP_KEY)
+        with patch("radio.lorawan.time"):
+            assert mac.join() is True
+            keys_first = (mac.session.nwk_skey, mac.session.app_skey)
+            mac.forget_session()  # e.g. the LinkCheck rejoin path
+            assert mac.join() is False, "same AppNonce again must be treated as a replay"
+        assert mac.session.joined is False
+        assert mac.mac_params["app_nonces"] == [0x030201]
+        # A restart keeps the memory of accepted nonces.
+        mac2 = LoRaWANMAC(MagicMock(), bytes(8), bytes(8), APP_KEY)
+        mac2.restore_mac_params(mac.mac_params)
+        with patch("radio.lorawan.time"):
+            mac2._radio.send.return_value = True
+            mac2._radio.receive.return_value = accept
+            assert mac2.join() is False
+        # A fresh AppNonce from the network is accepted as before.
+        radio.receive.return_value = _join_accept_with_nonce(APP_KEY, b"\x09\x08\x07")
+        with patch("radio.lorawan.time"):
+            assert mac.join() is True
+        assert (mac.session.nwk_skey, mac.session.app_skey) != keys_first
 
     def test_mac_params_round_trip_through_restore(self, mock_hardware):
         from radio.lorawan import LoRaWANMAC, LoRaWANSession
