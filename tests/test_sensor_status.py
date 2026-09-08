@@ -202,6 +202,53 @@ class TestStatusReachesTheCloudPayload:
         sensors = self._client().reading_to_json(row)["sensors"]
         assert sensors["tds"] == {"value": 238.0}
 
+    def test_a_healthy_unit_payload_is_byte_identical_with_or_without_the_column(self):
+        """Backward compatibility, stated as bytes rather than as a feeling.
+
+        A clean cycle stores NULL in `sensor_status` (workers.py), and a 2.1.1
+        unit never had the column at all. Both must serialise to exactly the
+        document a 2.1.1 unit sends, so an old ingest sees nothing new until
+        something is actually wrong.
+        """
+        base = {
+            "timestamp": "2026-08-21T18:00:00Z",
+            "ph": 7.42,
+            "tds_ppm": 238.0,
+            "turbidity_ntu": 3.8,
+            "temp_c": 24.1,
+            "relay_state": 0,
+        }
+        client = self._client()
+        legacy = json.dumps(client.reading_to_json(dict(base)), sort_keys=True)
+        with_null = json.dumps(client.reading_to_json({**base, "sensor_status": None}), sort_keys=True)
+        with_empty = json.dumps(client.reading_to_json({**base, "sensor_status": "{}"}), sort_keys=True)
+        assert legacy == with_null == with_empty
+        assert '"status"' not in legacy
+
+    def test_a_floating_tds_input_reaches_the_cloud_as_a_fault_and_never_as_a_number(self, adc):
+        """Driver → status column → payload, end to end.
+
+        The floating input is what a disconnected or dry probe produces. The
+        chain must carry the reason out and must not carry any number.
+        """
+        from sensors.tds import TDSSensor
+
+        adc.read_voltage = MagicMock(return_value=0.0)
+        result = TDSSensor(adc).read_detailed(temp_c=25.0)
+        assert result.value is None and result.status == NO_CONDUCTION
+
+        # What workers.py stores for that cycle, then what the client sends.
+        row = {
+            "timestamp": "2026-08-21T18:00:00Z",
+            "ph": 6.9,
+            "tds_ppm": result.value,
+            "sensor_status": json.dumps({"tds": result.status}),
+        }
+        payload = self._client().reading_to_json(row)
+        assert payload["sensors"]["tds"] == {"value": None, "status": NO_CONDUCTION}
+        assert not isinstance(payload["sensors"]["tds"]["value"], (int, float))
+        assert payload["sensors"]["ph"] == {"value": 6.9}
+
     @pytest.mark.parametrize("raw", ["not json", "[]", "", None, 42, json.dumps({"tds": 7})])
     def test_a_bad_status_column_never_costs_us_the_reading(self, raw):
         """The values in the row are still worth syncing.

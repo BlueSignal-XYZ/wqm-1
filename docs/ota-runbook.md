@@ -275,6 +275,20 @@ safe": those are different claims, and only the first one has evidence.
    the version the device is on. With no `MIN_FROM_VERSION` file it defaults to
    2.0.0.
 
+### 10.2a What 2.2.0 changes on the wire — the next release after v2.1.1
+
+2.2.0 is the first bundle to carry the per-channel fault status
+(`sensors.<ch>.{value: null, status}`; reference: `docs/cloud-payload.md`).
+Nothing about the OTA mechanism changes, but the *acceptance* of this release
+has one more observable: within one sample interval of a unit reporting
+`firmwareVersion` 2.2.0, a unit with a probe out of the water should show
+`devices/{id}/channelStatus/<ch> = no_conduction` in the cloud and a
+"check the probe" note on its tile, instead of a missing tile. A healthy
+unit's readings are byte-identical to 2.1.1's, so a unit with every probe
+wet proves nothing either way — pick a bench unit with one BNC unplugged for
+the canary. If the tile is still missing after the update, the payload is not
+the suspect; look at the cloud ingest first.
+
 ### 10.3 Acceptance is about the CHANGE, not the mechanism
 
 "The OTA succeeded" is not the test. `otaStatus: success` only says the bundle
