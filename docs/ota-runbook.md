@@ -275,7 +275,18 @@ safe": those are different claims, and only the first one has evidence.
    the version the device is on. With no `MIN_FROM_VERSION` file it defaults to
    2.0.0.
 
-### 10.2a What 2.2.0 changes on the wire — the next release after v2.1.1
+### 10.2a What 2.2.0 changes on the wire — cut 2026-09-07, not yet on any unit
+
+Status 2026-09-08: `v2.2.0` is tagged at `796d700` (master) and release run
+34143862778 went green end to end — the manifest is signed, the GitHub
+Release exists, and the `ota-publish-payload` artifact (id 10026906709,
+expires 2026-12-06) is what `POST /v2/firmware/releases` takes. The cloud
+side is no longer gated on `OTA_PUBLIC_KEY`: the functions code carries the
+public PEM as a default and the deploy writes it. What has **not** happened
+is any device receiving it. Remaining, in order: upload the tarball to the
+bucket path the manifest names (§2), publish the release with an admin token
+(§2), confirm `otaLastCheckAt` on the canary (§10.2 item 2), bench-soak with
+one corrupted bundle (§10.2 item 1), then target one canary.
 
 2.2.0 is the first bundle to carry the per-channel fault status
 (`sensors.<ch>.{value: null, status}`; reference: `docs/cloud-payload.md`).

@@ -6,8 +6,11 @@ endpoint, and the rules a consumer may rely on. Source of truth is
 cloud side (`marketplace/functions/readings.js`) and the firmware agree on the
 contract in writing, not by reading each other's code.
 
-Ships in **2.2.0**, the first release after v2.1.1. Units still on 2.1.1 send
-the same document *without* any `status` entries — see §4.
+Ships in **2.2.0** — cut as tag `v2.2.0` on 2026-09-07 (release run
+34143862778: manifest signed, GitHub Release created). **Cut is not fleet:**
+as of 2026-09-08 no unit has received it over OTA; see the runbook §10.2a for
+what still has to happen. Units on 2.1.1 send the same document *without*
+any `status` entries — see §4.
 
 ## 1. Shape
 
