@@ -275,6 +275,31 @@ safe": those are different claims, and only the first one has evidence.
    the version the device is on. With no `MIN_FROM_VERSION` file it defaults to
    2.0.0.
 
+### 10.2a What 2.2.0 changes on the wire — cut 2026-09-07, not yet on any unit
+
+Status 2026-09-08: `v2.2.0` is tagged at `796d700` (master) and release run
+34143862778 went green end to end — the manifest is signed, the GitHub
+Release exists, and the `ota-publish-payload` artifact (id 10026906709,
+expires 2026-12-06) is what `POST /v2/firmware/releases` takes. The cloud
+side is no longer gated on `OTA_PUBLIC_KEY`: the functions code carries the
+public PEM as a default and the deploy writes it. What has **not** happened
+is any device receiving it. Remaining, in order: upload the tarball to the
+bucket path the manifest names (§2), publish the release with an admin token
+(§2), confirm `otaLastCheckAt` on the canary (§10.2 item 2), bench-soak with
+one corrupted bundle (§10.2 item 1), then target one canary.
+
+2.2.0 is the first bundle to carry the per-channel fault status
+(`sensors.<ch>.{value: null, status}`; reference: `docs/cloud-payload.md`).
+Nothing about the OTA mechanism changes, but the *acceptance* of this release
+has one more observable: within one sample interval of a unit reporting
+`firmwareVersion` 2.2.0, a unit with a probe out of the water should show
+`devices/{id}/channelStatus/<ch> = no_conduction` in the cloud and a
+"check the probe" note on its tile, instead of a missing tile. A healthy
+unit's readings are byte-identical to 2.1.1's, so a unit with every probe
+wet proves nothing either way — pick a bench unit with one BNC unplugged for
+the canary. If the tile is still missing after the update, the payload is not
+the suspect; look at the cloud ingest first.
+
 ### 10.3 Acceptance is about the CHANGE, not the mechanism
 
 "The OTA succeeded" is not the test. `otaStatus: success` only says the bundle

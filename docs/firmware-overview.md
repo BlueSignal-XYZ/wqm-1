@@ -63,6 +63,7 @@ uptime, buffer depth, disk/memory, CPU temperature, link quality, error
 counters, firmware/config versions, and per-sensor health.
 
 Source: `src/storage/database.py`, `src/cloud/client.py`, `src/utils/health.py`.
+Payload contract, including the per-channel fault `status`: [docs/cloud-payload.md](cloud-payload.md).
 
 ## Remote management
 
