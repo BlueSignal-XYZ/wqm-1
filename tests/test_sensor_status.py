@@ -219,9 +219,13 @@ class TestStatusReachesTheCloudPayload:
             "relay_state": 0,
         }
         client = self._client()
-        legacy = json.dumps(client.reading_to_json(dict(base)), sort_keys=True)
-        with_null = json.dumps(client.reading_to_json({**base, "sensor_status": None}), sort_keys=True)
-        with_empty = json.dumps(client.reading_to_json({**base, "sensor_status": "{}"}), sort_keys=True)
+
+        def dump(row):
+            return json.dumps(client.reading_to_json(row), sort_keys=True)
+
+        legacy = dump(dict(base))
+        with_null = dump({**base, "sensor_status": None})
+        with_empty = dump({**base, "sensor_status": "{}"})
         assert legacy == with_null == with_empty
         assert '"status"' not in legacy
 
