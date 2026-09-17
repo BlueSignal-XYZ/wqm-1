@@ -39,6 +39,13 @@ ADC_CH_TURBIDITY = 1  # AIN1 = VIN1, LMV321 turbidity buffer, 0-4.5 V
 ADC_CH_PH = 2  # AIN2 = PH_INP, LMP91200 pH AFE via R12
 ADC_CH_ORP = 3  # AIN3 = PH_INN / spare (no ORP hardware on Fin_3)
 
+# Flow-meter pulse input (2.3.0). BCM 26 is free on the 40-pin header on
+# Fin_3 (6, 7 and 26 are the unused lines; 26 is the one nearest the edge
+# for a harness). Most hall meters are 5 V open-collector: the harness needs
+# a pull-up to 3.3 V and NOTHING driving the pin above 3.3 V — see
+# docs/hardware-overview.md. A dedicated header is a board revision.
+FLOW_PULSE_GPIO_DEFAULT = 26
+
 # ADS1115 full scale at the PGA the driver configures (±4.096 V).
 ADC_FULL_SCALE_V = 4.096
 
@@ -302,6 +309,19 @@ class Settings:
     rs485_orp_addr: int = 2
     rs485_multi_enabled: bool = False  # 5-in-1: its pH/TDS/temp supersede analog
     rs485_multi_addr: int = 3
+    # Bus speed for every RS485 device. The Honde probes and the TUF-2000M
+    # both default to 9600; a meter re-jumpered to 19200 needs the whole bus
+    # moved (one adapter, one speed).
+    rs485_baud: int = 9600
+
+    # Flow metering (2.3.0) — the WQM-1 as a CT clamp for water. Exactly one
+    # of the two may be fitted; the pulse meter wins if both are declared.
+    # Off by default: a meter that is not there must not publish a zero.
+    flow_pulse_enabled: bool = False  # inline pulse meter on flow_pulse_gpio
+    flow_pulse_gpio: int = FLOW_PULSE_GPIO_DEFAULT
+    rs485_flow_enabled: bool = False  # clamp-on ultrasonic meter over Modbus
+    rs485_flow_addr: int = 4
+    rs485_flow_model: str = "tuf2000m"  # sensors/flow.py FLOW_METER_MODELS
 
     # Smarter sensing (v2.1): adaptive sampling + sensor-health monitoring.
     adaptive_sampling_enabled: bool = False
@@ -443,6 +463,12 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "rs485_orp_addr": SettingSpec(int, hot=False, min=1, max=247),
     "rs485_multi_enabled": SettingSpec(bool, hot=False),
     "rs485_multi_addr": SettingSpec(int, hot=False, min=1, max=247),
+    "rs485_baud": SettingSpec(int, hot=False, min=1200, max=115200),
+    "flow_pulse_enabled": SettingSpec(bool, hot=False),
+    "flow_pulse_gpio": SettingSpec(int, hot=False, min=0, max=27, remote=False),
+    "rs485_flow_enabled": SettingSpec(bool, hot=False),
+    "rs485_flow_addr": SettingSpec(int, hot=False, min=1, max=247),
+    "rs485_flow_model": SettingSpec(str, hot=False, max_length=32),
     # Smarter sensing (hot — safe to tune live)
     "adaptive_sampling_enabled": SettingSpec(bool, hot=True),
     "sensor_read_fast_s": SettingSpec(int, hot=True, min=5, max=600),

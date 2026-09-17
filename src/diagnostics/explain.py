@@ -23,6 +23,8 @@ SENSOR_SUBJECTS: tuple[str, ...] = (
     "chlorine",
     "conductivity",
     "salinity",
+    # Flow meter (2.3.0) — pulse or clamp-on ultrasonic; one subject either way.
+    "flow",
 )
 
 # System subsystems (used by the Service Window system-health view).
@@ -64,6 +66,7 @@ _DISPLAY_NAMES: dict[str, str] = {
     "chlorine": "chlorine sensor",
     "conductivity": "conductivity (EC) probe",
     "salinity": "salinity probe",
+    "flow": "flow meter",
     "cloud": "cloud connection",
     "lora": "LoRa radio",
     "gps": "GPS receiver",

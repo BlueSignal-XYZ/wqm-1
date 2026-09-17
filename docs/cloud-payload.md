@@ -70,8 +70,31 @@ from DB columns by `_SENSOR_MAP`: `ph`, `tds`, `turbidity`, `orp`,
 - If a value and a stale status both exist for a channel, **the value wins**
   and the status is dropped. A number is the better answer.
 
-Only the analog channels (`ph`, `tds`, `turbidity`) currently produce a
-status; the RS485 probes and temperature report a value or nothing.
+The analog channels (`ph`, `tds`, `turbidity`) and the flow meter
+(`flow_total_gal`, `flow_rate_gpm` — 2.3.0) produce a status; the Honde RS485
+probes and temperature report a value or nothing.
+
+### Flow meter channels (2.3.0)
+
+| Channel | What it is | Role |
+|---|---|---|
+| `flow_total_gal` | the meter's lifetime totalizer, gallons | **the evidence** — the cloud accrues the positive differences between samples (marketplace `docs/security/flow-metering.md`) |
+| `flow_rate_gpm` | instantaneous rate, gal/min | display only; never used as evidence |
+
+Both come from one driver — an inline pulse meter on the GPIO harness or a
+clamp-on ultrasonic meter over RS485 (`src/sensors/flow.py`) — and the cloud
+does not know which. A unit with no meter sends neither key. A first sample
+after boot sends the total and NOT the rate (no interval yet) rather than a
+`0.0` nobody measured.
+
+**A counter reset is not a status.** When the lifetime count is lost (a
+re-imaged card, a swapped meter) the register restarts low. The cloud detects
+that from the register itself — the new value is lower than its mirror — and
+records `flowCounterResetAt` on the device. There is deliberately no
+`counter_reset` code, because in this contract a status **displaces** the
+value, and on the cycle a reset happens the value is exactly what must travel.
+Statuses a flow channel can carry: `read_failed` (bus silent — both channels)
+and `out_of_range` (an implausible rate; the total still counts).
 
 ## 3. Status vocabulary
 

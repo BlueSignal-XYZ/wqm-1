@@ -29,9 +29,36 @@ Approximate cost: **~$147 per unit at 10-unit quantity.**
 | Turbidity | direct into ADS1115 (AIN1, LMV321 buffer) | No dedicated AFE |
 | ORP | **not on the board** — optional RS485 digital probe | On rev Fin_3 the BNC front end is pH only and AIN3 is spare (`PH_INN`). See `config/pinmap.yaml`. Earlier revisions of this table showed analog ORP sharing the pH BNC; there is no such circuit. |
 | Temperature | **DS18B20** (1-Wire on GPIO 4) | Digital, no ADC channel consumed |
+| Flow meter (2.3.0) | inline pulse meter on **GPIO 26** (harness, see below), or a clamp-on ultrasonic meter on the RS485 bus | The WQM-1 as a CT clamp for water: the meter's lifetime totalizer is the evidence a QC settlement accrues from. No ADC channel; all four ADS1115 inputs are taken, so a 4–20 mA meter is a board revision |
 | Relays | **4× G5Q-14** optoisolated | Dosing pumps, aerators, valves |
 | Radio | **SX1262** (SPI) | LoRa / LoRaWAN, up to +22 dBm |
 | GPS | **u-blox** module on UART0 | NMEA output on `/dev/serial0` |
+
+## Flow-meter pulse harness (2.3.0) — install-day note, not a board feature
+
+Fin_3 has no flow-meter header. BCM **6, 7 and 26** are the unused lines on
+the Pi's 40-pin header; the firmware defaults to **26** (`flow_pulse_gpio`).
+Most inline hall-effect meters (YF-S201 class) are **5 V open-collector**
+sensors with a 5 V supply pin:
+
+- Supply the meter from the Pi's 5 V pin.
+- **Pull the signal line up to 3.3 V** (10 kΩ to the Pi's 3.3 V pin), and
+  never to 5 V — the GPIO is not 5 V tolerant. An open-collector output only
+  ever pulls the line low, so a 3.3 V pull-up is all the level shifting it
+  needs. A meter with a push-pull 5 V output needs a divider or a level
+  shifter instead; read the datasheet before wiring.
+- Keep the signal run short and away from the pump leads; the firmware
+  debounces at 500 µs in the kernel, which still passes 2 kHz.
+
+The lifetime pulse count is persisted in the SQLite `meta` table on every
+sample, so a reboot never restarts the totalizer. Losing the card does — and
+the cloud records that as a counter reset rather than pretending otherwise.
+A dedicated, protected header is on the list for the next board revision.
+
+The clamp-on ultrasonic alternative (TUF-2000M class) needs no harness: it
+joins the RS485 bus at its own address (`rs485_flow_addr`) and keeps its own
+totalizer. Its register map is transcribed from the manual and **has not yet
+been verified against a live meter**; the first bench read is the check.
 
 ## Power chain
 

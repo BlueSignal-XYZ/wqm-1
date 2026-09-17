@@ -1,9 +1,11 @@
 """
 Minimal Modbus-RTU master for RS485 sensors (via USB adapter).
 
-Speaks just enough Modbus for the Honde Tech probe family: function codes
-03 (read holding registers), 06 (write single register) and 16 (write
-multiple registers), CRC-16, and the CDAB float word order the probes use.
+Speaks just enough Modbus for the Honde Tech probe family and the clamp-on
+flow meters: function codes 03 (read holding registers), 04 (read input
+registers), 06 (write single register) and 16 (write multiple registers),
+CRC-16, the CDAB float word order the Honde probes use and the plain ABCD
+order the TUF-2000M family uses.
 Built on the existing pyserial dependency — no new packages.
 
 All bus access goes through :class:`ModbusBus`, which serializes
@@ -22,6 +24,7 @@ from typing import Any
 logger = logging.getLogger("wqm1.modbus")
 
 FC_READ_HOLDING = 0x03
+FC_READ_INPUT = 0x04
 FC_WRITE_SINGLE = 0x06
 FC_WRITE_MULTIPLE = 0x10
 
@@ -87,6 +90,12 @@ def build_read(address: int, start: int, count: int) -> bytes:
     return append_crc(struct.pack(">BBHH", address, FC_READ_HOLDING, start, count))
 
 
+def build_read_input(address: int, start: int, count: int) -> bytes:
+    """FC04 read-input-registers request (flow meters that expose read-only
+    process values as input registers)."""
+    return append_crc(struct.pack(">BBHH", address, FC_READ_INPUT, start, count))
+
+
 def build_write_single(address: int, register: int, value: int) -> bytes:
     """FC06 write-single-register request."""
     return append_crc(struct.pack(">BBHH", address, FC_WRITE_SINGLE, register, value & 0xFFFF))
@@ -116,6 +125,19 @@ def encode_float_cdab(value: float) -> tuple[int, int]:
     """Encode a float into two registers in CDAB word order."""
     ab, cd = struct.unpack(">HH", struct.pack(">f", value))
     return (cd, ab)
+
+
+def decode_float_abcd(regs: Iterable[int]) -> float:
+    """Decode two registers in plain big-endian (ABCD, high word first) order
+    into a float — the order the TUF-2000M family uses."""
+    ab, cd = tuple(regs)
+    return struct.unpack(">f", struct.pack(">HH", ab, cd))[0]
+
+
+def decode_int32_abcd(regs: Iterable[int]) -> int:
+    """Decode two registers (high word first) into a signed 32-bit integer."""
+    ab, cd = tuple(regs)
+    return struct.unpack(">i", struct.pack(">HH", ab, cd))[0]
 
 
 def to_int16(reg: int) -> int:
@@ -215,7 +237,13 @@ class ModbusBus:
 
     def read_registers(self, address: int, start: int, count: int) -> list[int]:
         """FC03: read ``count`` holding registers, returned as unsigned ints."""
-        request = build_read(address, start, count)
+        return self._read_regs(build_read(address, start, count), count)
+
+    def read_input_registers(self, address: int, start: int, count: int) -> list[int]:
+        """FC04: read ``count`` input registers, returned as unsigned ints."""
+        return self._read_regs(build_read_input(address, start, count), count)
+
+    def _read_regs(self, request: bytes, count: int) -> list[int]:
         response = self._transact(request, response_len=5 + 2 * count)
         byte_count = response[2]
         if byte_count != 2 * count:

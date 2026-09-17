@@ -36,7 +36,17 @@ FIELD_TO_SENSOR: dict[str, str] = {
     "chlorine_mgl": "chlorine",
     "conductivity_uscm": "conductivity",
     "salinity_ppt": "salinity",
+    # The flow RATE is a sensor for monitoring purposes (spikes, recovery).
+    # The totalizer is deliberately not: a register that only ever climbs
+    # would read as a permanent "spike" and never as "recovered".
+    "flow_rate_gpm": "flow",
 }
+
+# Sensors a flatline is NORMAL for. An idle AWG reports a zero rate for hours
+# (tank full, night cycle, maintenance); flagging that as a stuck probe would
+# suspend nothing useful and page the installer for a full tank. The cloud
+# exempts the same channels (NON_FLATLINE_CHANNELS in sensorChannels.js).
+NO_FLATLINE: frozenset[str] = frozenset({"flow"})
 
 # Per-sensor noise floor: population stddev below this over a full flatline
 # window means the reading is suspiciously flat (real water always wanders).
@@ -52,6 +62,9 @@ NOISE_FLOOR: dict[str, float] = {
     "chlorine": 0.005,
     "conductivity": 0.5,
     "salinity": 0.005,
+    # Required by _check_stuck's lookup even though NO_FLATLINE skips the
+    # flat verdict for it; "no_data" (the meter went silent) still applies.
+    "flow": 0.001,
 }
 
 # Spike events are rate-limited to one per sensor per this many seconds; a
@@ -333,7 +346,7 @@ class SensorMonitor:
             kind, stddev = "no_data", None
         else:
             stddev = statistics.pstdev(values) if len(values) >= 2 else 0.0
-            if stddev >= floor:
+            if stddev >= floor or sensor in NO_FLATLINE:
                 return []
             kind = "flat"
         self._stuck[sensor] = kind

@@ -129,6 +129,28 @@ if RS485 is fitted, and the claim secrets somewhere you can read them offline.
 
 ---
 
+### 1.8 Flow meter bucket test (2.3.0, AWG sites)
+
+The acceptance criterion for a fitted flow meter — and for firmware 2.3.0 on a
+canary — is **a 5-gallon bucket test reading within ±5 % on `flow_total_gal`,
+with the total non-decreasing across every sample for 24 h including one
+reboot.** Not `otaStatus: success`; the number.
+
+1. Declare the meter (`flow_pulse_enabled: true` on the Sensors step, or the
+   RS485 page for a clamp-on meter). Restart the service.
+2. Note `flow_total_gal` on the Cloud device page (or the Service Window
+   readings table).
+3. Run exactly 5.0 gal through the meter into a marked bucket.
+4. Read the total again. Pulse meter: the K-factor is
+   `pulses ÷ gallons` — set it with `CalibrationManager.calibrate_flow(5.0, pulses)`
+   (the Service Window calibration page exposes it) and re-run once; the
+   second reading must land within ±5 %. Clamp-on meter: there is no K-factor
+   to set — a miss means the register map or the unit/multiplier registers
+   (`src/sensors/flow.py FLOW_METER_MODELS`), not the plumbing.
+5. Reboot the unit. The total must come back where it was — a total that
+   restarts from zero is a persistence fault (`meta.flow_pulse_count`), and the
+   cloud will have recorded a counter reset on the device.
+
 ## 2. On site
 
 1. **Mount and wire first, power second.** 24 V DC to the screw terminal is the

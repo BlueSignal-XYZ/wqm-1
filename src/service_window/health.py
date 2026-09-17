@@ -17,6 +17,7 @@ from typing import Any
 
 from diagnostics.explain import explain
 from sensing.monitor import FIELD_TO_SENSOR as _FIELD_TO_SENSOR
+from sensing.monitor import NO_FLATLINE as _NO_FLATLINE
 from sensing.monitor import NOISE_FLOOR as _NOISE_FLOOR
 
 # A reading is "recent" within 3x the default sample cadence.
@@ -41,6 +42,8 @@ def _sensor_enabled(sensor: str, orp_enabled: bool, config: dict[str, Any] | Non
         return bool(cfg.get("rs485_chlorine_enabled"))
     if sensor in ("conductivity", "salinity"):
         return bool(cfg.get("rs485_multi_enabled"))
+    if sensor == "flow":
+        return bool(cfg.get("flow_pulse_enabled")) or bool(cfg.get("rs485_flow_enabled"))
     # The core four are no longer assumed fitted. Treating them as always
     # present is what made a disconnected electrode look like a working one on
     # this very page: it reported "pH probe is reading normally" for a channel
@@ -80,7 +83,11 @@ def sensor_cards(
         present = [float(v) for v in values if v is not None]
         if not present:
             cards[sensor] = explain(sensor, "stuck_no_data", {"minutes": _RECENT_S // 60})
-        elif len(present) >= 10 and statistics.pstdev(present) < _NOISE_FLOOR[sensor]:
+        elif (
+            sensor not in _NO_FLATLINE
+            and len(present) >= 10
+            and statistics.pstdev(present) < _NOISE_FLOOR[sensor]
+        ):
             cards[sensor] = explain(sensor, "stuck", {"minutes": len(present)})
         else:
             cards[sensor] = explain(sensor, "ok")

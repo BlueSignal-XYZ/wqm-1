@@ -29,7 +29,7 @@ from utils.config import get_settings
 
 logger = logging.getLogger("wqm1.db")
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS readings (
     chlorine_mgl REAL,
     conductivity_uscm REAL,
     salinity_ppt REAL,
+    -- Flow meter (v6): lifetime totalizer + rate. NULL when no meter is fitted.
+    flow_total_gal REAL,
+    flow_rate_gpm REAL,
     lat REAL,
     lon REAL,
     alt_m REAL,
@@ -88,7 +91,8 @@ CREATE TABLE IF NOT EXISTS meta (
 
 _READING_COLS = (
     "id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c,"
-    " chlorine_mgl, conductivity_uscm, salinity_ppt, lat, lon, alt_m,"
+    " chlorine_mgl, conductivity_uscm, salinity_ppt,"
+    " flow_total_gal, flow_rate_gpm, lat, lon, alt_m,"
     # sensor_status rides along so the cloud sync can forward a channel's
     # REASON for having no number. Omit it here and the fault never leaves the
     # device — which is the whole failure being fixed.
@@ -216,10 +220,42 @@ class WQM1Database:
                 if "mac_params" not in cols:
                     conn.execute("ALTER TABLE lorawan_session ADD COLUMN mac_params TEXT")
                 conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')"
+                )
+            logger.info("Database migrated to schema v5")
+            current = 5
+
+        if current < 6:
+            # v6 (flow metering): the meter's lifetime totalizer and rate.
+            # NULL for every reading that predates a meter — additive and
+            # rollback-safe, an older build ignores the columns.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+            with conn:
+                for column in ("flow_total_gal", "flow_rate_gpm"):
+                    if column not in cols:
+                        conn.execute(f"ALTER TABLE readings ADD COLUMN {column} REAL")
+                conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
                 )
             logger.info("Database migrated to schema v%d", SCHEMA_VERSION)
+
+    # -- meta (small persisted counters) -------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        """Read one `meta` value, or None. Used for the flow meter's lifetime
+        pulse count, which must survive a reboot (the meter is the register,
+        the Pi is only the display)."""
+        cur = self._conn.execute("SELECT value FROM meta WHERE key=?", (key,))
+        row = cur.fetchone()
+        return None if row is None else row[0]
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Write one `meta` value (upsert)."""
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, str(value))
+            )
 
     def insert_reading(self, data: dict[str, Any]) -> int:
         """
@@ -238,9 +274,10 @@ class WQM1Database:
                 """INSERT INTO readings
                    (timestamp, ph, tds_ppm, turbidity_ntu, orp_mv, temp_c,
                     chlorine_mgl, conductivity_uscm, salinity_ppt,
+                    flow_total_gal, flow_rate_gpm,
                     lat, lon, alt_m, battery_v, relay_state, sensor_status,
                     synced, sync_state)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
                 (
                     ts,
                     data.get("ph"),
@@ -251,6 +288,8 @@ class WQM1Database:
                     data.get("chlorine_mgl"),
                     data.get("conductivity_uscm"),
                     data.get("salinity_ppt"),
+                    data.get("flow_total_gal"),
+                    data.get("flow_rate_gpm"),
                     data.get("lat"),
                     data.get("lon"),
                     data.get("alt_m"),

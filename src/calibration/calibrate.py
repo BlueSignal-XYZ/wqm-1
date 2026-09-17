@@ -40,6 +40,13 @@ class CalibrationData:
     # ORP
     orp_offset_mv: float = 0.0
 
+    # Flow meter K-factor, pulses per gallon (2.3.0). The default is the
+    # YF-S201 datasheet figure (450 pulses/L = 1703.4 pulses/gal); every real
+    # meter differs by a few percent, and the bucket test sets the real one.
+    # Not in CALIBRATABLE_SENSORS: a K-factor is set once at install, it does
+    # not drift, and "overdue" would only nag.
+    flow_k_ppg: float = 1703.4
+
     # Platform-applied offsets (from commissioning step 6)
     platform_offsets: dict[str, float] = field(default_factory=dict)
 
@@ -156,6 +163,25 @@ class CalibrationManager:
         self._save()
         logger.info("ORP calibrated: offset=%.1f mV", offset)
         return offset
+
+    def calibrate_flow(self, known_gal: float, pulses: int) -> float:
+        """
+        Bucket test: ``pulses`` counted while exactly ``known_gal`` gallons
+        passed the meter → K-factor in pulses per gallon.
+
+        The acceptance criterion for a fitted meter (docs/install-day-runbook)
+        is a 5-gallon bucket reading within ±5 % on the totalizer afterwards.
+        """
+        if known_gal <= 0 or pulses <= 0:
+            raise ValueError("bucket test needs a positive volume and a positive pulse count")
+        k = float(pulses) / float(known_gal)
+        self._data.flow_k_ppg = round(k, 2)
+        self._stamp("flow")
+        self._save()
+        logger.info(
+            "Flow meter calibrated: K=%.2f pulses/gal (%d pulses / %.2f gal)", k, pulses, known_gal
+        )
+        return k
 
     def apply_platform_offsets(self, offsets: dict[str, Any]) -> None:
         """

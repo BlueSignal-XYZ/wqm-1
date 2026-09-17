@@ -26,6 +26,10 @@ SENSOR_RANGES: dict[str, float] = {
     "turbidity_ntu": 4000.0,  # 0 to 4000 NTU
     "temp_c": 60.0,  # -10 to 50 C
     "orp_mv": 4000.0,  # -2000 to +2000 mV
+    # The flow RATE drives adaptive cadence (production starting or stopping
+    # is worth a faster look). The totalizer never does: it changes every
+    # cycle by construction and would pin the sampler at its fast interval.
+    "flow_rate_gpm": 500.0,  # 0 to 500 gpm
 }
 
 # Reading-dict field -> canonical sensor name (matches sensing.monitor and
@@ -36,6 +40,7 @@ FIELD_TO_SENSOR: dict[str, str] = {
     "turbidity_ntu": "turbidity",
     "temp_c": "temperature",
     "orp_mv": "orp",
+    "flow_rate_gpm": "flow",
 }
 
 

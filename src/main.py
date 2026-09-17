@@ -144,6 +144,7 @@ class WQM1App:
         self._modbus_bus: Any = None
         self._chlorine: Any = None
         self._multi: Any = None
+        self._flow: Any = None
         self._db: Any = None
         self._cloud: Any = None
         self._health: Any = None
@@ -224,11 +225,25 @@ class WQM1App:
         # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
         # supersede their analog equivalents inside SamplingWorker.step().
         s = self._settings
-        if s.rs485_chlorine_enabled or s.rs485_orp_enabled or s.rs485_multi_enabled:
+        if (
+            s.rs485_chlorine_enabled
+            or s.rs485_orp_enabled
+            or s.rs485_multi_enabled
+            or s.rs485_flow_enabled
+        ):
             from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
             from sensors.modbus import ModbusBus
 
-            self._modbus_bus = ModbusBus(s.rs485_port)
+            self._modbus_bus = ModbusBus(s.rs485_port, baudrate=s.rs485_baud)
+            if s.rs485_flow_enabled and not s.flow_pulse_enabled:
+                from sensors.flow import ModbusFlowMeter
+
+                self._flow = ModbusFlowMeter(
+                    self._modbus_bus, s.rs485_flow_addr, model=s.rs485_flow_model
+                )
+                logger.info(
+                    "Flow meter: %s over RS485 addr %d", s.rs485_flow_model, s.rs485_flow_addr
+                )
             if s.rs485_chlorine_enabled:
                 self._chlorine = HondeChlorineSensor(self._modbus_bus, s.rs485_chlorine_addr)
             if s.rs485_orp_enabled:
@@ -237,11 +252,13 @@ class WQM1App:
             if s.rs485_multi_enabled:
                 self._multi = HondeMultiSensor(self._modbus_bus, s.rs485_multi_addr)
             logger.info(
-                "RS485 bus on %s (chlorine=%s orp=%s multi=%s)",
+                "RS485 bus on %s @ %d (chlorine=%s orp=%s multi=%s flow=%s)",
                 s.rs485_port,
+                s.rs485_baud,
                 s.rs485_chlorine_enabled,
                 s.rs485_orp_enabled,
                 s.rs485_multi_enabled,
+                s.rs485_flow_enabled,
             )
 
         # Apply calibration to the analog sensors (digital probes hold their
@@ -266,6 +283,30 @@ class WQM1App:
         # LoRa-only / offline sites never mark rows synced; cap the buffer
         # by dropping the oldest pending rows instead of growing for ever.
         self._db.rotate_pending = not self._settings.cloud_enabled
+
+        # --- Flow meter, pulse type (direct-header boards only; needs the DB
+        # for its lifetime count, which is why it is built after it) ---
+        if direct and self._settings.flow_pulse_enabled:
+            try:
+                from sensors.flow import PulseFlowMeter
+
+                db = self._db
+                saved = db.get_meta("flow_pulse_count")
+                self._flow = PulseFlowMeter(
+                    gpio=self._settings.flow_pulse_gpio,
+                    k_ppg=cal.flow_k_ppg,
+                    initial_count=int(saved) if saved else 0,
+                    persist=lambda n: db.set_meta("flow_pulse_count", str(n)),
+                )
+                if self._settings.rs485_flow_enabled:
+                    logger.warning(
+                        "Both flow meters declared — the pulse meter on GPIO %d is used, "
+                        "the RS485 meter is ignored",
+                        self._settings.flow_pulse_gpio,
+                    )
+            except Exception as e:
+                logger.error("Flow pulse meter init failed: %s", e)
+                self._flow = None
 
         # --- Health reporter ---
         self._health = HealthReporter(FW_VERSION)
@@ -444,6 +485,7 @@ class WQM1App:
                     "orp": self._orp,
                     "chlorine": self._chlorine,
                     "multi485": self._multi,
+                    "flow": self._flow,
                 },
                 db=self._db,
                 rules=self._rules,
@@ -879,6 +921,7 @@ class WQM1App:
             (self._relays, "all_off"),
             (self._radio, "close"),
             (self._gps, "close"),
+            (self._flow, "close"),
             (self._modbus_bus, "close"),
             (self._adc, "close"),
             (self._db, "close"),

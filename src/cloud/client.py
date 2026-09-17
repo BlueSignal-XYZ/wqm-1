@@ -45,6 +45,9 @@ _SENSOR_MAP = {
     "chlorine_mgl": "chlorine",
     "conductivity_uscm": "conductivity",
     "salinity_ppt": "salinity",
+    # Flow meter (2.3.0) — same name on both sides on purpose.
+    "flow_total_gal": "flow_total_gal",
+    "flow_rate_gpm": "flow_rate_gpm",
 }
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
