@@ -130,6 +130,11 @@ class RulesEngine:
         "chlorine": "chlorine_mgl",
         "conductivity": "conductivity_uscm",
         "salinity": "salinity_ppt",
+        # The flow RATE is a rule input (close a solenoid on over-rate, or
+        # on run-dry: rate below a floor while the AWG is commanded on). The
+        # totalizer is not — a threshold on a lifetime register fires once
+        # and never clears.
+        "flow": "flow_rate_gpm",
     }
     # Reading column -> canonical name, for water-profile lookups (the cloud
     # baseline engine keys its params canonically: "tds", not "tds_ppm").
@@ -146,6 +151,7 @@ class RulesEngine:
         "orp_mv": 5.0,
         "chlorine_mgl": 0.05,
         "conductivity_uscm": 10.0,
+        "flow_rate_gpm": 0.05,
     }
 
     def set_suspended_sensors(self, sensors: set[str]) -> None:

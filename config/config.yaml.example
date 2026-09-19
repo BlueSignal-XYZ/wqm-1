@@ -94,6 +94,18 @@ smart_breaker_client_id: ""
 smart_breaker_client_secret: ""
 smart_breaker_subscription_key: ""
 
+# --- Flow metering (2.3.0) — the WQM-1 as a CT clamp for water ---
+# Exactly one meter type per unit. Off by default: a meter that is not there
+# must not publish a zero. The lifetime totalizer (flow_total_gal) is what the
+# cloud settles from; a bucket test sets the K-factor (calibration.yaml
+# flow_k_ppg). See docs/hardware-overview.md for the pulse harness.
+flow_pulse_enabled: false    # inline hall-effect pulse meter on the GPIO harness
+flow_pulse_gpio: 26          # BCM; 26 is free on Fin_3 (also 6 and 7)
+rs485_flow_enabled: false    # clamp-on ultrasonic meter on the shared RS485 bus
+rs485_flow_addr: 4
+rs485_flow_model: "tuf2000m" # src/sensors/flow.py FLOW_METER_MODELS
+rs485_baud: 9600             # one speed for every device on the bus
+
 # --- Service window (local web UI) ---
 service_window:
   enabled: true

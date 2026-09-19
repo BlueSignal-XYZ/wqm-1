@@ -215,6 +215,9 @@ FITTABLE_PROBES = (
     ("turbidity_enabled", "Turbidity"),
     ("temperature_enabled", "Temperature"),
     ("orp_enabled", "ORP (analog)"),
+    # Flow meter, pulse type, on the GPIO harness (2.3.0). The RS485 clamp-on
+    # meter is declared on the RS485 page like the other bus devices.
+    ("flow_pulse_enabled", "Flow meter (pulse, GPIO harness)"),
 )
 
 

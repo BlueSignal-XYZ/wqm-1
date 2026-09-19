@@ -36,6 +36,7 @@ PROBE_TYPES: dict[str, dict[str, str]] = {
     "chlorine": {"label": "Residual chlorine", "prefix": "rs485_chlorine"},
     "orp": {"label": "Digital ORP", "prefix": "rs485_orp"},
     "multi": {"label": "5-in-1 (pH/EC/TDS/salinity/temp)", "prefix": "rs485_multi"},
+    "flow": {"label": "Flow meter (clamp-on ultrasonic)", "prefix": "rs485_flow"},
 }
 
 SCAN_ADDRESSES = range(1, 17)
@@ -52,12 +53,14 @@ def _make_bus(config: dict[str, Any]):
 
 
 def _make_probe(probe_type: str, bus: Any, address: int) -> Any:
+    from sensors.flow import ModbusFlowMeter
     from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
 
     cls = {
         "chlorine": HondeChlorineSensor,
         "orp": HondeOrpSensor,
         "multi": HondeMultiSensor,
+        "flow": ModbusFlowMeter,
     }[probe_type]
     return cls(bus, address)
 

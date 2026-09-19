@@ -43,6 +43,14 @@ Source: `src/app/` (supervisor, state, workers), `src/main.py`.
   5-in-1 (pH/EC/TDS/salinity/temperature) over a shared Modbus-RTU bus through
   a USB adapter. When the 5-in-1 is present its pH/TDS/temperature supersede the
   analog equivalents; the digital ORP supersedes analog ORP.
+- **Flow meter (`src/sensors/flow.py`, 2.3.0):** the WQM-1 as a CT clamp for
+  water. An inline pulse meter on GPIO 26 (lgpio edge alerts, kernel debounce,
+  lifetime count persisted in SQLite) or a clamp-on ultrasonic meter over
+  RS485 (TUF-2000M register map, FC03/FC04, ABCD decode). Both publish
+  `flow_total_gal` (the totalizer — the evidence) and `flow_rate_gpm` (display
+  only). The flow RATE is a relay-rule input and drives adaptive cadence; the
+  totalizer is neither. A frozen totalizer is never a "stuck" probe — an idle
+  AWG is idle. Contract: [docs/cloud-payload.md](cloud-payload.md).
 - **Smarter sensing (`src/sensing/`):** stuck/flatline detection, robust
   z-score spike flags, and calibration-drift tracking. A probe that stops
   producing data is reported as a fault (never fake data) and its relay

@@ -121,6 +121,11 @@ _SENSOR_FIELDS = (
     "chlorine_mgl",
     "conductivity_uscm",
     "salinity_ppt",
+    # Flow meter (2.3.0): the lifetime totalizer and the rate. A row carrying
+    # only the totalizer is a reading — an idle AWG's frozen register is a
+    # measurement of zero production, and the cloud accrues from it.
+    "flow_total_gal",
+    "flow_rate_gpm",
 )
 
 
@@ -260,6 +265,28 @@ class SamplingWorker(Worker):
         orp = self._safe_read("ORP", orp_s.read) if orp_s else None
         chlorine = self._safe_read("Chlorine", chlorine_s.read) if chlorine_s else None
 
+        # Flow meter: one driver, two channels, each with its own status
+        # (sensors/flow.py). An unfitted meter is simply absent from the
+        # sensors dict, so a unit with no meter stores NULL in both columns
+        # and sends neither key — never a zero nobody measured.
+        flow_total: float | None = None
+        flow_rate: float | None = None
+        flow_s = self._sensors.get("flow")
+        if flow_s:
+            flow_raw = self._safe_read("Flow", flow_s.read_detailed)
+            if isinstance(flow_raw, dict):
+                for key, result in flow_raw.items():
+                    if result is None:
+                        continue
+                    if result.ok:
+                        if key == "flow_total_gal":
+                            flow_total = result.value
+                        elif key == "flow_rate_gpm":
+                            flow_rate = result.value
+                    else:
+                        channel_status[key] = result.status
+                        logger.warning("Flow %s: %s (%s)", key, result.status, result.detail)
+
         gps = self._state.gps()
         reading = {
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -271,6 +298,8 @@ class SamplingWorker(Worker):
             "chlorine_mgl": chlorine,
             "conductivity_uscm": multi.get("conductivity_uscm"),
             "salinity_ppt": multi.get("salinity_ppt"),
+            "flow_total_gal": flow_total,
+            "flow_rate_gpm": flow_rate,
             "lat": gps.lat,
             "lon": gps.lon,
             "alt_m": gps.alt_m,

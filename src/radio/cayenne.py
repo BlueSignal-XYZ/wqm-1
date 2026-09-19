@@ -27,6 +27,14 @@ CH_GPS = 6
 CH_CHLORINE = 10
 CH_CONDUCTIVITY = 11
 CH_SALINITY = 12
+# Flow meter (2.3.0). The rate rides as gpm x100. The totalizer rides in
+# KILOGALLONS x100: LPP analog caps at 327.67, so gallons would wrap within
+# days of production, and a wrap looks to the cloud exactly like a counter
+# reset. In kgal the channel has 327,670 gal of headroom at 10-gal steps —
+# coarse, but LoRa is the backup path; HTTP carries the full register.
+CH_FLOW_RATE = 13
+CH_FLOW_TOTAL = 14
+_GAL_PER_KGAL = 1000.0
 
 # Analog-input LPP packs value*100 into a signed 16-bit int, capping at
 # 327.67. EC spans 0-10,000 µS/cm, so it rides the channel in mS/cm.
@@ -110,6 +118,22 @@ def encode(data: dict[str, Any]) -> bytes:
         buf.append(LPP_ANALOG_INPUT)
         buf += struct.pack(">h", val)
 
+    # CH13: Flow rate (analog input, 0.01 gpm resolution)
+    flow_rate = data.get("flow_rate_gpm")
+    if flow_rate is not None:
+        val = max(-32768, min(32767, int(round(flow_rate * 100))))
+        buf.append(CH_FLOW_RATE)
+        buf.append(LPP_ANALOG_INPUT)
+        buf += struct.pack(">h", val)
+
+    # CH14: Flow totalizer (analog input, kilogallons at 0.01 = 10-gal steps)
+    flow_total = data.get("flow_total_gal")
+    if flow_total is not None:
+        val = max(-32768, min(32767, int(round(flow_total / _GAL_PER_KGAL * 100))))
+        buf.append(CH_FLOW_TOTAL)
+        buf.append(LPP_ANALOG_INPUT)
+        buf += struct.pack(">h", val)
+
     # CH6: GPS (lat/lon in 0.0001°, alt in 0.01 m)
     lat = data.get("lat")
     lon = data.get("lon")
@@ -146,6 +170,8 @@ def decode(payload: bytes) -> dict[str, Any]:
             val = struct.unpack(">h", payload[i : i + 2])[0] / 100.0
             if channel == CH_CONDUCTIVITY:
                 val *= _US_PER_MS  # channel carries mS/cm; reading key is µS/cm
+            elif channel == CH_FLOW_TOTAL:
+                val *= _GAL_PER_KGAL  # channel carries kgal; reading key is gal
             result[_CHANNEL_TO_KEY.get(channel, f"ch{channel}")] = val
             i += 2
 
@@ -173,6 +199,8 @@ _CHANNEL_TO_KEY = {
     CH_CHLORINE: "chlorine_mgl",
     CH_CONDUCTIVITY: "conductivity_uscm",
     CH_SALINITY: "salinity_ppt",
+    CH_FLOW_RATE: "flow_rate_gpm",
+    CH_FLOW_TOTAL: "flow_total_gal",
 }
 
 

@@ -21,14 +21,27 @@ class DBReader:
         conn.execute("PRAGMA query_only = ON")
         return conn
 
+    # Columns added by later schema versions. The Service Window reads the
+    # buffer while the main service — the one that runs migrations — may be
+    # restarting after an OTA, so a SELECT must not name a column an older
+    # buffer lacks: it would throw and take the home page down on exactly
+    # the unit that just updated. Ask the table what it has.
+    _OPTIONAL_COLS = ("flow_total_gal", "flow_rate_gpm")
+
+    def _optional_cols(self, conn: sqlite3.Connection) -> str:
+        have = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+        present = [c for c in self._OPTIONAL_COLS if c in have]
+        return "".join(f", {c}" for c in present)
+
     def get_latest_reading(self) -> dict[str, Any] | None:
         """Get the most recent sensor reading."""
         conn = self._connect()
         try:
+            extra = self._optional_cols(conn)
             cur = conn.execute(
-                """SELECT id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv,
-                          temp_c, lat, lon, alt_m, battery_v, relay_state, synced
-                   FROM readings ORDER BY id DESC LIMIT 1"""
+                f"""SELECT id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv,
+                          temp_c, lat, lon, alt_m, battery_v, relay_state, synced{extra}
+                   FROM readings ORDER BY id DESC LIMIT 1"""  # nosec B608 — constant column names
             )
             row = cur.fetchone()
             return dict(row) if row else None
@@ -39,10 +52,11 @@ class DBReader:
         """Get recent readings, newest first."""
         conn = self._connect()
         try:
+            extra = self._optional_cols(conn)
             cur = conn.execute(
-                """SELECT id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv,
-                          temp_c, lat, lon, alt_m, battery_v, relay_state
-                   FROM readings ORDER BY id DESC LIMIT ?""",
+                f"""SELECT id, timestamp, ph, tds_ppm, turbidity_ntu, orp_mv,
+                          temp_c, lat, lon, alt_m, battery_v, relay_state{extra}
+                   FROM readings ORDER BY id DESC LIMIT ?""",  # nosec B608 — constant column names
                 (limit,),
             )
             return [dict(row) for row in cur.fetchall()]
