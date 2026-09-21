@@ -80,7 +80,12 @@ def sim_dev_eui(index: int) -> str:
     return f"FEFFFF00{index:08X}"
 
 
-def sim_identity(index: int, ap_passphrase: str = "simulated") -> dict[str, Any]:
+# A virtual unit raises no access point, so this is a placeholder for the
+# identity file's shape — nothing accepts it as a credential anywhere.
+_SIM_AP_PASSPHRASE = "simulated"  # nosec B105
+
+
+def sim_identity(index: int, ap_passphrase: str = _SIM_AP_PASSPHRASE) -> dict[str, Any]:
     """The identity file a virtual unit boots from — same shape the factory
     script writes to a real card, on the reserved serial."""
     return {
