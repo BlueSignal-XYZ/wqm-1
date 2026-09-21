@@ -26,7 +26,7 @@ class DBReader:
     # restarting after an OTA, so a SELECT must not name a column an older
     # buffer lacks: it would throw and take the home page down on exactly
     # the unit that just updated. Ask the table what it has.
-    _OPTIONAL_COLS = ("flow_total_gal", "flow_rate_gpm")
+    _OPTIONAL_COLS = ("flow_total_gal", "flow_rate_gpm", "clock_source")
 
     def _optional_cols(self, conn: sqlite3.Connection) -> str:
         have = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
@@ -68,6 +68,23 @@ class DBReader:
         conn = self._connect()
         try:
             cur = conn.execute("SELECT COUNT(*) FROM readings")
+            return int(cur.fetchone()[0])
+        finally:
+            conn.close()
+
+    def get_pending_count(self) -> int:
+        """Rows still waiting to upload — the buffer DEPTH, which is the
+        number an installer at a dark site needs. ``get_reading_count`` is the
+        total ever stored and says nothing about what has left the unit
+        (commissioning plan, PR 5). Pre-v2 buffers have no ``sync_state``;
+        their legacy ``synced`` flag is read instead."""
+        conn = self._connect()
+        try:
+            have = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+            if "sync_state" in have:
+                cur = conn.execute("SELECT COUNT(*) FROM readings WHERE sync_state = 'pending'")
+            else:
+                cur = conn.execute("SELECT COUNT(*) FROM readings WHERE synced = 0")
             return int(cur.fetchone()[0])
         finally:
             conn.close()

@@ -159,3 +159,65 @@ class TestNoFixSaysWhy:
             g = self._gps([])
             assert g.get_fix(timeout_s=0.05) is None
         assert "no bytes on the UART" in caplog.text
+
+
+def _nmea(body: str) -> str:
+    chk = 0
+    for c in body:
+        chk ^= ord(c)
+    return f"${body}*{chk:02X}"
+
+
+RMC_VALID = _nmea("GPRMC,140102.00,A,3025.2000,N,09756.4000,W,0.0,0.0,210926,,,A")
+RMC_VOID = _nmea("GPRMC,140102.00,V,,,,,,,210926,,,N")
+GGA_FIX = _nmea("GPGGA,140102.00,3025.2000,N,09756.4000,W,1,08,0.9,251.0,M,-23.0,M,,")
+
+
+class TestRMCDate:
+    """The date comes from RMC; GGA has only a time-of-day (PR 5)."""
+
+    def test_parse_rmc_returns_an_aware_utc_datetime(self, mock_hardware):
+        from datetime import UTC, datetime
+
+        from sensors.gps import _parse_rmc
+
+        assert _parse_rmc(RMC_VALID) == datetime(2026, 9, 21, 14, 1, 2, tzinfo=UTC)
+
+    def test_void_rmc_is_not_a_time(self, mock_hardware):
+        from sensors.gps import _parse_rmc
+
+        assert _parse_rmc(RMC_VOID) is None
+
+    def test_gga_alone_carries_no_timestamp(self, mock_hardware):
+        """The old graft — GGA time-of-day onto the system date — is gone."""
+        from sensors.gps import _parse_gga
+
+        fix = _parse_gga(GGA_FIX)
+        assert fix is not None
+        assert fix.timestamp is None
+
+    def test_fix_takes_its_date_from_the_rmc_in_the_same_burst(self, mock_hardware):
+        from datetime import UTC, datetime
+
+        from sensors.gps import GPS
+
+        lines = [f"{RMC_VALID}\r\n".encode(), f"{GGA_FIX}\r\n".encode(), b""]
+        mock_hardware["serial"].readline.side_effect = lines
+        mock_hardware["serial"].is_open = True
+        g = GPS()
+        fix = g.get_fix(timeout_s=1.0)
+        assert fix is not None
+        assert fix.timestamp == datetime(2026, 9, 21, 14, 1, 2, tzinfo=UTC)
+        assert g.last_time == fix.timestamp
+
+    def test_gga_first_then_rmc_still_attaches_the_date(self, mock_hardware):
+        from datetime import UTC, datetime
+
+        from sensors.gps import GPS
+
+        lines = [f"{GGA_FIX}\r\n".encode(), f"{RMC_VALID}\r\n".encode(), b""]
+        mock_hardware["serial"].readline.side_effect = lines
+        mock_hardware["serial"].is_open = True
+        fix = GPS().get_fix(timeout_s=1.0)
+        assert fix is not None
+        assert fix.timestamp == datetime(2026, 9, 21, 14, 1, 2, tzinfo=UTC)

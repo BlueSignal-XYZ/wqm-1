@@ -312,3 +312,28 @@ mild warning. It works on the first boot after imaging and fails on every
 restart after, which is the worst possible shape for a fault. The same check now
 covers `/dev/i2c-1` and `/dev/spidev0.0` — a read-only I²C node fails an ADS1115
 conversion exactly like a missing chip, and presents as a sensor fault.
+
+**T13 — a buffer that is draining is not a buffer that will clear.** The unit
+uploads 50 rows per sync (every 300 s by default) and stores one row every 60 s.
+A link that is up only 10 % of the time therefore drains at exactly the rate it
+fills — 50 rows per 300 s against one row per 60 s — and a backlog never clears;
+at `sensor_read_fast_s` it grows. The status page and the finish screen now show
+**Waiting to upload** (rows pending, not rows stored — `get_reading_count` was
+the total ever written and said nothing about what had left the unit). Read that
+number on every visit to a marginal-signal site; if it is not falling between
+visits, the link is not good enough and the answer is the LTE option or a better
+antenna position, not patience. At the default cadence 100,000 rows is ~69 days,
+so a dark site is safe for two months; it is the *partially* connected site that
+silently falls behind.
+
+**T14 — the unit raises its own Wi-Fi when it cannot find yours.** Since the AP
+fallback shipped, a unit that cannot associate with any known network within 45 s
+of NetworkManager starting raises `WQM1-<last four of the serial>` (WPA2, the
+per-unit passphrase from the bench print-out or the enclosure label) with the
+Service Window at `http://192.168.4.1:8080`. That is how you reach a unit whose
+flashed SSID does not exist at this site, and how service reaches it next year.
+Joining the site network from that page turns the AP off for the join; a failed
+join brings it straight back — reconnect and try again. Declare on the same page
+what the unit IS (Wi-Fi / LTE / no network; LoRa and GPS fitted or not): the
+finish screen grades only what you declare, and "no network here" is a valid
+answer, not a failure.

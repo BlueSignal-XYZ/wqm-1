@@ -221,6 +221,15 @@ class Settings:
     # board the default should need no override. If reads come back garbled,
     # diagnostics.sh sweeps the common rates and names the one that works.
     gps_baud: int = 38400
+    # Variant declaration (commissioning plan, PR 5). The Service Window's
+    # network step records what this unit IS so the go/no-go screen grades
+    # only the hardware and links it has: a Wi-Fi-only unit is not amber on
+    # LoRa forever, a unit with no GPS fitted is not amber on GPS forever,
+    # and a declared no-link site buffers at "ok" instead of "degraded".
+    #   backhaul: "wifi" (default) | "lte" (option-SKU HAT) | "none" (dark site)
+    gps_enabled: bool = True
+    lora_enabled: bool = True
+    backhaul: str = "wifi"
 
     # LoRaWAN OTAA credentials. Both are issued by the cloud when the device is
     # claimed and must match what is registered on the network server — a unit
@@ -269,6 +278,20 @@ class Settings:
     log_max_bytes: int = 10 * 1024 * 1024
     log_backup_count: int = 5
     db_max_rows: int = 100_000
+    # Unix socket the Service Window sends commands over. A setting (not a
+    # class constant) so N virtual units can run on one host without sharing
+    # a socket; the service_window `cmd_sock` key must name the same path.
+    cmd_sock: str = "/var/run/bluesignal/cmd.sock"
+
+    # Virtual unit (sensors/sim). When true the firmware builds synthetic
+    # sensor drivers — bounded random walks with scripted faults — instead of
+    # touching I2C, 1-Wire, the GPS UART or the radio, and runs on any Linux
+    # host. Never remotely settable: the cloud must not be able to turn a
+    # field unit into a simulation. `simulate_faults` is a comma-separated
+    # list of `channel:kind[@cycle]` (see sensors/sim.parse_faults).
+    simulate_enabled: bool = False
+    simulate_seed: int = 0
+    simulate_faults: str = ""
 
     # Host board. "auto" sniffs /proc/device-tree/model; explicit ids pin it
     # (rpi-zero-2w, arduino-uno-q, arduino-ventuno-q, generic-linux). On
@@ -388,6 +411,10 @@ class Settings:
 
 SMART_BREAKER_VENDORS = ("none", "relay_only", "ableedge")
 SMART_BREAKER_FAIL_SAFE_MODES = ("off", "last", "on")
+# How this unit reaches the cloud, declared by the installer at the network
+# step: the site's Wi-Fi, the option-SKU LTE HAT, or nothing (a dark site
+# that buffers locally). Never inferred from what happens to be connected.
+BACKHAULS = ("wifi", "lte", "none")
 SMART_BREAKER_AUTH_MODES = ("direct", "cloud_proxy")
 
 
@@ -427,6 +454,11 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "max_retries": SettingSpec(int, hot=True, min=1, max=10),
     # GPS / radio / credentials — restart-required, never remote
     "gps_baud": SettingSpec(int, hot=False, min=1200, max=921600, remote=False),
+    # Variant declaration — written by the installer at the unit, never by
+    # remote config: what a unit is fitted with is a fact from the bench.
+    "gps_enabled": SettingSpec(bool, hot=False, remote=False),
+    "lora_enabled": SettingSpec(bool, hot=False, remote=False),
+    "backhaul": SettingSpec(str, hot=False, max_length=8, remote=False, choices=BACKHAULS),
     "app_key": SettingSpec(str, hot=False, max_length=32, remote=False),
     "app_eui": SettingSpec(str, hot=False, max_length=16, remote=False),
     "lora_sub_band": SettingSpec(int, hot=False, min=1, max=8, remote=False),
@@ -447,6 +479,12 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "log_max_bytes": SettingSpec(int, hot=False, min=1024, max=1024**3, remote=False),
     "log_backup_count": SettingSpec(int, hot=False, min=0, max=50, remote=False),
     "db_max_rows": SettingSpec(int, hot=True, min=1000, max=10_000_000),
+    "cmd_sock": SettingSpec(str, hot=False, max_length=256, remote=False),
+    # Virtual unit — restart-required, never remote (a real unit must not be
+    # switchable into simulation from the cloud)
+    "simulate_enabled": SettingSpec(bool, hot=False, remote=False),
+    "simulate_seed": SettingSpec(int, hot=False, min=0, max=2**31 - 1, remote=False),
+    "simulate_faults": SettingSpec(str, hot=False, max_length=512, remote=False),
     # Sensors
     "board": SettingSpec(str, hot=False, max_length=32, remote=False),
     "orp_enabled": SettingSpec(bool, hot=False),

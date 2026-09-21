@@ -41,6 +41,9 @@ SYSTEM_SUBJECTS: tuple[str, ...] = (
     # The optional AWG load-control path through the site's Eaton AbleEdge
     # smart breaker. Only shown when a vendor is bound.
     "smart_breaker",
+    # The optional LTE HAT (an option SKU, never base BOM). Only shown when
+    # the unit's declared backhaul is "lte".
+    "lte",
 )
 
 SENSOR_STATES: tuple[str, ...] = (
@@ -73,6 +76,7 @@ _DISPLAY_NAMES: dict[str, str] = {
     "storage": "local storage",
     "rs485": "RS485 sensor bus",
     "smart_breaker": "AWG smart breaker",
+    "lte": "LTE modem",
 }
 
 # state -> status. Anything unknown maps to "attention" (safe middle ground).
@@ -88,6 +92,10 @@ _STATE_STATUS: dict[str, str] = {
     "down": "fault",
     "stale": "fault",
     "disabled": "disabled",
+    # A correct unit at a site with no route out: readings are stored and
+    # will upload when a link exists. That is the design working, not a
+    # fault (commissioning plan, PR 5).
+    "buffering": "ok",
 }
 
 # Generic sensor copy per state: (message, likelyCause, action).
@@ -187,6 +195,23 @@ _SYSTEM_COPY: dict[tuple[str, str], tuple[str, str | None, str | None]] = {
         "Cloud sync is down. Readings are being saved on the device.",
         "No internet connection, or the cloud service is unreachable.",
         "Check the site's internet connection. Data uploads automatically once it's back.",
+    ),
+    # Variant-aware verdicts (commissioning plan, PR 5). A unit graded against
+    # hardware it does not have, or a link the site was declared not to have,
+    # is amber forever — and a go/no-go screen with a permanent amber card is
+    # one an installer learns to ignore.
+    ("cloud", "buffering"): (
+        "No link at this site — buffering locally, {queued} readings queued.",
+        None,
+        None,
+    ),
+    ("lora", "disabled"): ("LoRa is not fitted on this unit.", None, None),
+    ("gps", "disabled"): ("GPS is not fitted on this unit.", None, None),
+    ("lte", "ok"): ("LTE modem is carrying readings to the cloud.", None, None),
+    ("lte", "degraded"): (
+        "LTE modem is declared but nothing has reached the cloud recently.",
+        "No cellular coverage at the mounting spot, or the SIM is not active.",
+        "Check the modem's signal light and that the SIM has service.",
     ),
     ("lora", "ok"): ("LoRa radio is transmitting normally.", None, None),
     ("lora", "degraded"): (
@@ -304,6 +329,7 @@ _CONTEXT_DEFAULTS: dict[str, Any] = {
     "circuit": "The AWG circuit",
     "position": "in an unknown state",
     "fail_safe": "as configured",
+    "queued": "some",
 }
 
 

@@ -14,6 +14,18 @@ keeps monitoring either way.</p>
     {{ health_card(name|capitalize, card) }}
     {% endfor %}
 </div>
+
+<div class="id-block">
+    <div class="id-label">Readings waiting to upload</div>
+    <div class="id-row">
+        <code class="id-value">{{ pending }} of {{ reading_count }} stored</code>
+    </div>
+    {% if backhaul == 'none' %}
+    <p class="skip-note" style="margin-top: 6px">No network at this site was recorded.
+    The unit keeps every reading locally and uploads them all when a link exists — at
+    the default cadence the buffer holds roughly two months.</p>
+    {% endif %}
+</div>
 <form method="post">
     <div class="setup-actions">
         <button type="submit" class="btn btn-primary btn-lg">Finish setup</button>
