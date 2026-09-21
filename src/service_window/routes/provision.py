@@ -31,22 +31,38 @@ _DEFAULT_COMMAND_URL = "https://us-central1-waterquality-trading.cloudfunctions.
 
 
 def _get_identity() -> dict[str, str]:
-    """Generate device identity info."""
+    """Device identity info — the id in force plus, when the label is the
+    identity, the Pi-derived id it would otherwise have carried, so both names
+    are visible on the page and in the downloadable report."""
     try:
-        from utils.identity import get_ble_name, get_dev_eui, get_device_id
+        from utils.identity import (
+            ap_name,
+            get_ble_name,
+            get_dev_eui,
+            get_device_id,
+            hardware_identity,
+        )
 
         device_id = get_device_id()
         dev_eui = get_dev_eui().hex().upper()
         ble_name = get_ble_name(device_id)
+        hardware = hardware_identity()
+        ap_ssid = ap_name(device_id)
     except Exception as e:
         logging.getLogger("wqm1.provision").debug("Identity generation failed: %s", e)
         device_id = "BS-WQM1-unknown"
         dev_eui = "0000000000000000"
         ble_name = "BlueSignal-0000"
+        hardware = {"identitySource": "derived"}
+        ap_ssid = "WQM1-0000"
     return {
         "device_id": device_id,
         "dev_eui": dev_eui,
         "ble_name": ble_name,
+        "ap_ssid": ap_ssid,
+        "identity_source": hardware.get("identitySource", "derived"),
+        "pi_serial": hardware.get("piSerial", ""),
+        "derived_id": hardware.get("derivedId", ""),
     }
 
 

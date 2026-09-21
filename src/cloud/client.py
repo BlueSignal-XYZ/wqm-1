@@ -177,6 +177,11 @@ class CloudClient:
         }
         if backfill:
             metadata["backfill"] = True
+        # Which clock stamped the timestamp ('ntp' | 'gps' | 'unsynced'). Only
+        # on rows that recorded it (schema v7+); an older row says nothing
+        # rather than claiming a confidence it never measured.
+        if row.get("clock_source"):
+            metadata["clockSource"] = row["clock_source"]
         lat, lon = row.get("lat"), row.get("lon")
         if lat is not None and lon is not None:
             metadata["gps"] = {"latitude": lat, "longitude": lon, "altitude": row.get("alt_m")}

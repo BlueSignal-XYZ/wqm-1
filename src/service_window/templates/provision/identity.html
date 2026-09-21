@@ -7,6 +7,20 @@
     <table>
         <tr><th>Device ID</th><td>{{ identity.device_id }}</td></tr>
         <tr><th>DevEUI</th><td>{{ identity.dev_eui }}</td></tr>
+        <tr><th>Identity source</th><td>
+            {% if identity.identity_source == "provisioned" %}
+            Printed label (bluesignal-identity.json on the boot partition)
+            {% else %}
+            Derived from this Raspberry Pi's serial
+            {% endif %}
+        </td></tr>
+        {% if identity.pi_serial %}
+        <tr><th>Pi serial</th><td>{{ identity.pi_serial }}</td></tr>
+        {% endif %}
+        {% if identity.identity_source == "provisioned" and identity.derived_id %}
+        <tr><th>Pi-derived ID</th><td>{{ identity.derived_id }}</td></tr>
+        {% endif %}
+        <tr><th>Setup Wi-Fi name</th><td>{{ identity.ap_ssid }}</td></tr>
         <tr><th>BLE Name</th><td>{{ identity.ble_name }}</td></tr>
     </table>
 

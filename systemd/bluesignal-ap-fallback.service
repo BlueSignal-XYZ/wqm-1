@@ -1,0 +1,19 @@
+[Unit]
+Description=BlueSignal WQM-1 setup access point (raised only when no Wi-Fi network associates)
+# After NetworkManager has had its chance; the script itself waits a further
+# grace period before deciding the unit is stranded.
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-ap-fallback.py
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+RemainAfterExit=yes
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -383,10 +383,14 @@ class TestPlumbing:
         conn.close()
 
         db = WQM1Database(path=str(path))
-        assert SCHEMA_VERSION == 6
+        # v7 (clock confidence) followed v6; a v5 buffer must land on the
+        # CURRENT version, having applied both — the v6 block writes '6'
+        # literally so that a v5 device cannot record itself as v7 and skip
+        # the v7 column (the v3 trap, again).
+        assert SCHEMA_VERSION == 7
         cols = {r[1] for r in db._conn.execute("PRAGMA table_info(readings)")}
-        assert {"flow_total_gal", "flow_rate_gpm"} <= cols
-        assert db.get_meta("schema_version") == "6"
+        assert {"flow_total_gal", "flow_rate_gpm", "clock_source"} <= cols
+        assert db.get_meta("schema_version") == "7"
         # The old row survives with NULL flow — never a zero.
         assert db.get_latest()["flow_total_gal"] is None
         # Lifetime pulse count round-trips through meta.

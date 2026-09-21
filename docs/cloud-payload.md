@@ -47,6 +47,7 @@ any `status` entries — see §4.
 | `metadata.signalStrength` | integer or `null` | From the health reporter; best-effort. |
 | `metadata.relayState` | integer | Relay bitmask; 0 when no relays. |
 | `metadata.backfill` | boolean, optional | `true` on rows older than ~23 h so the server's 30-day window accepts post-outage history. Absent otherwise. |
+| `metadata.clockSource` | string, optional | Which clock stamped `timestamp`: `ntp` (systemd-timesyncd synchronised), `gps` (system clock agrees with, or was set from, a GPS RMC date+time), `unsynced` (neither — the reading is real, its interval to its neighbours is not evidence). Present on rows from firmware ≥ 2.4 (schema v7); absent on older rows. |
 | `metadata.gps` | object, optional | Only when the row carries a fix. |
 | `metadata.radios` | object, optional | LoRa presence and the GPS snapshot, for the Cloud Radios card. Only emitted when something is present. |
 

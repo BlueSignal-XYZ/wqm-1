@@ -45,17 +45,24 @@ _SETTING_ALIASES = {
 }
 
 
-def create_app(config: dict | None = None) -> Flask:
+def create_app(config: dict | None = None, config_path: str | None = None) -> Flask:
     """Create and configure the Flask app.
 
     `config` may use either the canonical lowercase setting names or their
     Flask-style uppercase equivalents. Any key this factory does not recognise
     (e.g. ``TESTING``) is passed through to ``app.config`` untouched.
+
+    `config_path` names the firmware config whose ``service_window:`` block
+    is read (default /etc/bluesignal/config.yaml); when given it is also the
+    default CONFIG_PATH, so one argument points a whole Service Window at a
+    virtual unit's files.
     """
     app = Flask(__name__)
 
     # Load service window config from YAML or environment
-    sw_config = _load_sw_config()
+    sw_config = _load_sw_config(config_path)
+    if config_path:
+        sw_config.setdefault("config_path", config_path)
     passthrough: dict = {}
     for key, value in (config or {}).items():
         canonical = _SETTING_ALIASES.get(key)
@@ -163,14 +170,15 @@ def create_app(config: dict | None = None) -> Flask:
     return app
 
 
-def _load_sw_config() -> dict:
-    """Load service_window section from /etc/bluesignal/config.yaml."""
+def _load_sw_config(config_path: str | None = None) -> dict:
+    """Load the service_window section from the firmware config (default
+    /etc/bluesignal/config.yaml)."""
     try:
         from pathlib import Path
 
         import yaml
 
-        path = Path("/etc/bluesignal/config.yaml")
+        path = Path(config_path or "/etc/bluesignal/config.yaml")
         if path.exists():
             with path.open() as f:
                 raw = yaml.safe_load(f) or {}

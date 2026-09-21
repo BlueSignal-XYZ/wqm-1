@@ -100,27 +100,59 @@ def system_cards(
     lora_session: dict[str, Any] | None,
     reading_count: int,
     now: datetime | None = None,
+    pending: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Cloud / LoRa / GPS / storage cards."""
+    """Cloud / LoRa / GPS / storage cards — graded against what THIS variant
+    has (commissioning plan, PR 5).
+
+    ``config`` carries the installer's declaration from the network step:
+    ``backhaul`` (wifi | lte | none), ``lora_enabled``, ``gps_enabled``. A
+    card for hardware the unit does not have, or a link the site was declared
+    not to have, reads ``disabled`` (rendered as n/a) rather than amber — a
+    go/no-go screen with a permanent amber card is one an installer learns
+    to ignore. Keys absent from an older config keep the old behaviour.
+    ``pending`` is the buffer depth (rows not yet uploaded), shown on the
+    buffering card so a dark site says how much it is holding.
+    """
     now = now or datetime.now(UTC)
     cards: dict[str, dict[str, Any]] = {}
+    backhaul = str(config.get("backhaul") or "wifi")
 
     # Cloud: configured + recent rows actually syncing (synced flag on latest).
     cloud_enabled = bool(config.get("cloud_enabled")) and bool(config.get("api_key"))
+    recent_synced = any(r.get("synced") for r in readings[:20])
     if not cloud_enabled:
         cards["cloud"] = explain("cloud", "down")
+    elif recent_synced:
+        cards["cloud"] = explain("cloud", "ok")
+    elif backhaul == "none":
+        # A correct unit at a site with no route out. Readings are stored and
+        # upload when a link exists; that is the design working.
+        queued = pending if pending is not None else reading_count
+        cards["cloud"] = explain("cloud", "buffering", {"queued": queued})
     else:
-        recent_synced = any(r.get("synced") for r in readings[:20])
-        cards["cloud"] = explain("cloud", "ok" if recent_synced else "degraded")
+        cards["cloud"] = explain("cloud", "degraded")
 
-    # LoRa: joined session.
-    lora_joined = bool(lora_session and lora_session.get("joined"))
-    cards["lora"] = explain("lora", "ok" if lora_joined else "degraded")
+    # LTE: only when the option-SKU HAT is declared. There is no modem
+    # telemetry to read, so the verdict is whether readings are reaching the
+    # cloud through it.
+    if backhaul == "lte":
+        cards["lte"] = explain("lte", "ok" if (cloud_enabled and recent_synced) else "degraded")
 
-    # GPS: latest reading carries a fix.
+    # LoRa: joined session — unless the unit was declared not to have LoRa.
+    if config.get("lora_enabled", True):
+        lora_joined = bool(lora_session and lora_session.get("joined"))
+        cards["lora"] = explain("lora", "ok" if lora_joined else "degraded")
+    else:
+        cards["lora"] = explain("lora", "disabled")
+
+    # GPS: latest reading carries a fix — unless no GPS is fitted.
     latest = readings[0] if readings else None
-    has_fix = bool(latest and latest.get("lat") is not None and latest.get("lon") is not None)
-    cards["gps"] = explain("gps", "ok" if has_fix else "degraded")
+    if config.get("gps_enabled", True):
+        has_fix = bool(latest and latest.get("lat") is not None and latest.get("lon") is not None)
+        cards["gps"] = explain("gps", "ok" if has_fix else "degraded")
+    else:
+        cards["gps"] = explain("gps", "disabled")
 
     # Storage: readings are landing at all. Parse ONCE and keep the result —
     # the previous double-parse both wasted work and, if the second parse ever

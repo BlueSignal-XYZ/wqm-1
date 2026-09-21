@@ -8,6 +8,7 @@
     <span>Firmware v{{ fw_version }}</span>
     <span>Host: {{ hostname }}</span>
     <span>Readings: {{ reading_count }}</span>
+    <span>Waiting to upload: {{ pending }}</span>
     <span>LoRa: {{ 'Joined' if lora_joined else 'Not joined' }} (fcnt={{ lora_fcnt }})</span>
 </div>
 

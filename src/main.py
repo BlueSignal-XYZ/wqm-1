@@ -16,6 +16,7 @@ import atexit
 import contextlib
 import json
 import logging
+import os
 import signal
 import socket
 import sys
@@ -55,6 +56,7 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
+from utils.clock import ClockDiscipline
 from utils.config import FIRMWARE_VERSION, get_config_manager, hot_keys, restart_keys
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
@@ -117,11 +119,16 @@ def _setup_logging() -> None:
 class WQM1App:
     """Firmware wiring: builds hardware + workers, runs the supervisor."""
 
-    def __init__(self) -> None:
-        self._config = get_config_manager()
+    def __init__(self, config_path: str | None = None) -> None:
+        # An explicit path lets N virtual units run on one host, each with its
+        # own config; a real unit passes nothing and gets /etc/bluesignal.
+        self._config = get_config_manager(config_path) if config_path else get_config_manager()
         self._settings_provider = lambda: self._config.settings
         self._state = StateStore()
         self._supervisor: Supervisor | None = None
+        # Clock confidence: NTP when timesyncd has it, GPS RMC when it does
+        # not, and 'unsynced' stamped on every reading otherwise.
+        self._clock = ClockDiscipline()
 
         # Device identity
         self._device_id = get_device_id()
@@ -182,6 +189,24 @@ class WQM1App:
                 self._board.name,
             )
 
+        # --- Virtual unit: synthetic drivers, no hardware at all ---
+        # `simulate_enabled` is never remotely settable (config schema), so a
+        # field unit cannot be switched into this branch from the cloud. The
+        # drivers present the hardware drivers' surface; everything below the
+        # sensors (DB, cloud client, workers, command socket) is the real code.
+        self._sim = None
+        if self._settings.simulate_enabled:
+            from sensors.sim import build_simulated_sensors
+
+            self._sim = build_simulated_sensors(self._settings)
+            direct = False
+            logger.warning(
+                "SIMULATED UNIT (simulate_enabled=true) — synthetic sensors, no hardware. "
+                "Device %s must carry a SIM-WQM1- serial; faults=%r",
+                self._device_id,
+                self._settings.simulate_faults,
+            )
+
         # --- GPIO outputs (direct-header boards only) ---
         if direct:
             self._relays = RelayController()
@@ -195,6 +220,12 @@ class WQM1App:
 
         # --- ADC + sensors (direct-header boards only) ---
         self._cal = CalibrationManager()
+        if self._sim is not None:
+            self._temp = self._sim.temperature
+            self._ph = self._sim.ph
+            self._tds = self._sim.tds
+            self._turbidity = self._sim.turbidity
+            self._flow = self._sim.flow
         if direct:
             self._adc = ADS1115()
             # Only build a sensor for a probe that is declared FITTED. An
@@ -225,7 +256,7 @@ class WQM1App:
         # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
         # supersede their analog equivalents inside SamplingWorker.step().
         s = self._settings
-        if (
+        if self._sim is None and (
             s.rs485_chlorine_enabled
             or s.rs485_orp_enabled
             or s.rs485_multi_enabled
@@ -324,15 +355,24 @@ class WQM1App:
             logger.info("Sensing modules not present — fixed-cadence sampling")
 
         # --- GPS ---
-        try:
-            self._gps = GPS(baud=self._settings.gps_baud)
-        except Exception as e:
-            logger.warning("GPS init failed: %s", e)
+        if self._sim is not None:
+            self._gps = self._sim.gps
+        elif not self._settings.gps_enabled:
+            # Declared not fitted at the network step: no UART opened, no
+            # power-cycles of a receiver that is not there, no amber card.
+            logger.info("GPS not fitted (gps_enabled: false) — skipping")
+        else:
+            try:
+                self._gps = GPS(baud=self._settings.gps_baud)
+            except Exception as e:
+                logger.warning("GPS init failed: %s", e)
 
         # --- LoRa + LoRaWAN (direct-header boards only: SX1262 is SPI) ---
         try:
             if not direct:
                 raise RuntimeError("no direct SPI on this board")
+            if not self._settings.lora_enabled:
+                raise RuntimeError("LoRa not fitted (lora_enabled: false)")
             self._radio = SX1262()
             self._radio.init()
             app_key = bytes.fromhex(self._settings.app_key)
@@ -474,8 +514,16 @@ class WQM1App:
         logger.info("All subsystems initialised")
 
     def _build_workers(self) -> list[Worker]:
+        sampler_cls: Any = SamplingWorker
+        sampler_args: tuple[Any, ...] = ()
+        if self._sim is not None:
+            from sensors.sim.unit import SimSamplingWorker
+
+            sampler_cls = SimSamplingWorker
+            sampler_args = (self._sim,)
         workers: list[Worker] = [
-            SamplingWorker(
+            sampler_cls(
+                *sampler_args,
                 self._settings_provider,
                 sensors={
                     "temperature": self._temp,
@@ -495,10 +543,19 @@ class WQM1App:
                 state=self._state,
                 monitor=self._monitor,
                 adaptive=self._adaptive,
+                clock_source=self._clock.source,
             )
         ]
         if self._gps is not None:
-            workers.append(GpsWorker(self._settings_provider, self._gps, self._leds, self._state))
+            workers.append(
+                GpsWorker(
+                    self._settings_provider,
+                    self._gps,
+                    self._leds,
+                    self._state,
+                    on_time=self._clock.observe_gps,
+                )
+            )
         if self._lorawan is not None:
             workers.append(
                 _JoiningRadioWorker(
@@ -547,11 +604,13 @@ class WQM1App:
 
     # -- service-window command socket ---------------------------------------
 
-    _CMD_SOCK_PATH = "/var/run/bluesignal/cmd.sock"
+    @property
+    def _cmd_sock_path(self) -> str:
+        return str(self._settings.cmd_sock)
 
     def _start_cmd_listener(self) -> None:
         """Start Unix domain socket listener for service window commands."""
-        sock_path = Path(self._CMD_SOCK_PATH)
+        sock_path = Path(self._cmd_sock_path)
         try:
             sock_path.parent.mkdir(parents=True, exist_ok=True)
             if sock_path.exists():
@@ -910,7 +969,7 @@ class WQM1App:
         if self._cmd_sock:
             with contextlib.suppress(Exception):
                 self._cmd_sock.close()
-            sock_path = Path(self._CMD_SOCK_PATH)
+            sock_path = Path(self._cmd_sock_path)
             if sock_path.exists():
                 with contextlib.suppress(Exception):
                     sock_path.unlink()
@@ -966,9 +1025,25 @@ class _JoiningRadioWorker(RadioWorker):
         super().step()
 
 
+def _config_path_from_argv(argv: list[str]) -> str | None:
+    """``--config PATH`` (or ``BLUESIGNAL_CONFIG``) — used by the fleet
+    simulator; a real unit runs with neither and reads /etc/bluesignal."""
+    for i, arg in enumerate(argv):
+        if arg == "--config" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--config="):
+            return arg.split("=", 1)[1]
+    return os.environ.get("BLUESIGNAL_CONFIG") or None
+
+
 def main() -> None:
+    config_path = _config_path_from_argv(sys.argv[1:])
+    if config_path:
+        # Settings are read once at construction; logging needs them, so the
+        # manager must be primed with the path BEFORE _setup_logging runs.
+        get_config_manager(config_path)
     _setup_logging()
-    app = WQM1App()
+    app = WQM1App(config_path)
     try:
         app.start()
         app.run()
