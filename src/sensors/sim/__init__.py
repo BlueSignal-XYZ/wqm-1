@@ -55,6 +55,9 @@ FAULT_CHANNELS = frozenset(
 #   jump — clock only: the unit's clock leaps forward one day
 #   lost — gps only: no fix from the cycle on
 #   down — cloud only: the ingest endpoint stops answering
+#   spike — turbidity only: a fixed high reading (SPIKE_NTU) for SPIKE_CYCLES
+#       cycles from the cycle on, then the walk resumes where it left off.
+#       Drives the irrigation hold in the emulator (docs/irrigation-hold.md).
 FAULT_KINDS = frozenset(
     {
         NO_CONDUCTION,
@@ -66,8 +69,18 @@ FAULT_KINDS = frozenset(
         "jump",
         "lost",
         "down",
+        "spike",
     }
 )
+# Which channels each channel-specific kind is allowed on. A kind not listed
+# here is accepted on every channel, as before.
+_KIND_CHANNELS: dict[str, frozenset[str]] = {"spike": frozenset({"turbidity"})}
+
+# The turbidity spike: well above any hold threshold an irrigator would set,
+# inside the analog chain's range (TURB_NTU_MAX), and long enough to trip a
+# hold with the default two-sample trip count.
+SPIKE_NTU = 120.0
+SPIKE_CYCLES = 10
 
 
 @dataclass(frozen=True)
@@ -100,6 +113,11 @@ def parse_faults(spec: str) -> list[Fault]:
             raise ValueError(f"fault {raw!r}: unknown channel {channel!r}")
         if kind not in FAULT_KINDS:
             raise ValueError(f"fault {raw!r}: unknown kind {kind!r}")
+        allowed = _KIND_CHANNELS.get(kind)
+        if allowed is not None and channel not in allowed:
+            raise ValueError(
+                f"fault {raw!r}: {kind!r} applies to {', '.join(sorted(allowed))} only"
+            )
         faults.append(Fault(channel, kind, at))
     return faults
 
@@ -147,12 +165,22 @@ class _SimChannel:
         self._faults = [f for f in faults if f.channel == self.channel]
 
     def _active_fault(self) -> Fault | None:
+        # A spike is bounded in time and handled by _spiking(); every other
+        # kind lasts from its cycle on.
         for f in self._faults:
-            if self._cycle.n >= f.at_cycle:
+            if f.kind != "spike" and self._cycle.n >= f.at_cycle:
                 return f
         return None
 
+    def _spiking(self) -> bool:
+        return any(
+            f.kind == "spike" and f.at_cycle <= self._cycle.n < f.at_cycle + SPIKE_CYCLES
+            for f in self._faults
+        )
+
     def read_detailed(self, **_: Any) -> SensorResult:
+        if self._spiking():
+            return SensorResult(SPIKE_NTU, OK, "simulated spike")
         fault = self._active_fault()
         if fault is not None and fault.kind in (
             NO_CONDUCTION,
@@ -258,6 +286,38 @@ class SimFlowMeter:
 
     def close(self) -> None:
         return None
+
+
+class SimRelays:
+    """Relay-controller parity for a virtual unit (control/relay.py surface):
+    ``set(ch, state, unbounded=False)``, ``get``, ``get_state_bitmask``,
+    ``all_off``, ``arm_auto_off``. In memory only — there is no coil — so the
+    irrigation hold can be driven and reported in the emulator."""
+
+    def __init__(self) -> None:
+        self._state = 0
+        self.writes: list[tuple[int, bool]] = []
+
+    def set(self, channel: int, state: bool, unbounded: bool = False) -> None:
+        if not 1 <= channel <= 4:
+            raise ValueError(f"Relay channel must be 1-4, got {channel}")
+        if state:
+            self._state |= 1 << (channel - 1)
+        else:
+            self._state &= ~(1 << (channel - 1))
+        self.writes.append((channel, state))
+
+    def get(self, channel: int) -> bool:
+        return bool(self._state & (1 << (channel - 1)))
+
+    def get_state_bitmask(self) -> int:
+        return self._state
+
+    def all_off(self) -> None:
+        self._state = 0
+
+    def arm_auto_off(self, channel: int, duration_s: float) -> float:
+        return 0.0
 
 
 class SimGPS:

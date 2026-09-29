@@ -31,6 +31,12 @@ Examples
       --ingest-url    http://localhost:5001/waterquality-trading/us-central1/ingestReading \\
       --keys /tmp/fleet-keys.json --faults "tds:no_conduction@400,flow:reset@20000"
 
+  # Drive the irrigation hold: relay 3 holds when turbidity >= 8 NTU; the
+  # scripted spike (120 NTU for 10 cycles from cycle 30) trips it, and the
+  # release delay passes on the compressed clock.
+  python3 scripts/simulate-fleet.py --count 1 --cycles 120 --faults "turbidity:spike@30" \
+      --hold-relay 3 --hold-turbidity-ntu 8 --hold-release-min 10 --cloud-api-base … --ingest-url …
+
   python3 scripts/simulate-fleet.py --count 10 --tier full --commission --workdir /tmp/fleet \\
       --cloud-api-base http://localhost:5001/... --ingest-url http://localhost:5001/... --keys …
 """
@@ -87,6 +93,11 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--run-s", type=int, default=60, help="full tier: seconds to leave units running"
     )
+    p.add_argument(
+        "--hold-relay", type=int, default=0, help="irrigation hold relay 1-4 (0 = hold off)"
+    )
+    p.add_argument("--hold-turbidity-ntu", type=float, default=8.0)
+    p.add_argument("--hold-release-min", type=int, default=10)
     p.add_argument("--json", action="store_true", help="print a machine-readable summary")
     return p.parse_args(argv)
 
@@ -100,8 +111,24 @@ def _keys(path: str | None) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items()}
 
 
-def _settings(interval_s: int, faults: str, seed: int) -> Settings:
+def _hold_values(args: argparse.Namespace) -> dict[str, Any]:
+    """The irrigation-hold settings a run enables (empty when --hold-relay 0)."""
+    if not args.hold_relay:
+        return {}
+    return {
+        "irrigation_hold_enabled": True,
+        "irrigation_hold_relay": args.hold_relay,
+        "irrigation_hold_turbidity_ntu": args.hold_turbidity_ntu,
+        "irrigation_hold_release_min": args.hold_release_min,
+    }
+
+
+def _settings(
+    interval_s: int, faults: str, seed: int, hold: dict[str, Any] | None = None
+) -> Settings:
     s = Settings()
+    for key, value in (hold or {}).items():
+        setattr(s, key, value)
     s.simulate_enabled = True
     s.simulate_faults = faults
     s.simulate_seed = seed
@@ -121,7 +148,7 @@ def run_lite(args: argparse.Namespace, workdir: Path, keys: dict[str, str]) -> d
     units: list[VirtualUnit] = []
     for i in range(1, args.count + 1):
         serial = sim_serial(i)
-        s = _settings(args.interval_s, args.faults, args.seed + i)
+        s = _settings(args.interval_s, args.faults, args.seed + i, _hold_values(args))
         units.append(
             VirtualUnit(
                 i,
@@ -151,6 +178,7 @@ def run_lite(args: argparse.Namespace, workdir: Path, keys: dict[str, str]) -> d
                 "uploaded": u.uploaded,
                 "pending": u.pending(),
                 "clock_jumps": u.clock.jumped_at,
+                "irrigation_hold": u.hold.payload(),
             }
             for u in units
         ],
@@ -186,6 +214,7 @@ def _unit_files(
         "max_retries": 1,
         "retry_delays": [0],
         "flow_pulse_enabled": True,
+        **_hold_values(args),
         "cloud_enabled": True,
         "api_key": key,
         "cloud_api_base": args.cloud_api_base,

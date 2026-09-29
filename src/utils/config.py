@@ -405,6 +405,23 @@ class Settings:
     smart_breaker_client_secret: str = ""
     smart_breaker_subscription_key: str = ""
 
+    # Irrigation hold (control/irrigation_hold.py). One relay's COM + NC wired
+    # by the irrigator into an irrigation controller's rain-sensor (SEN) loop:
+    # de-energised = contact closed = the controller runs its schedule; a
+    # tripped condition energises the coil, opens the contact, and the
+    # controller holds every zone. Every threshold of 0 is off. Edited from
+    # the cloud (remote, hot); see docs/irrigation-hold.md.
+    irrigation_hold_enabled: bool = False
+    irrigation_hold_relay: int = 0  # 0 = none; must not be the interlock relay
+    irrigation_hold_turbidity_ntu: float = 0.0  # hold when turbidity >= this
+    irrigation_hold_tds_ppm: float = 0.0  # hold when TDS >= this
+    irrigation_hold_ph_min: float = 0.0  # hold when pH < this
+    irrigation_hold_ph_max: float = 0.0  # hold when pH > this
+    irrigation_hold_flow_gpm_max: float = 0.0  # hold when flow rate >= this
+    irrigation_hold_trip_samples: int = 2  # consecutive tripping samples to hold
+    irrigation_hold_release_min: int = 10  # minutes every condition stays clear
+    irrigation_hold_on_fault: str = "release"  # release | hold
+
     # Automation rules
     rules: list[dict[str, Any]] = field(default_factory=list)
 
@@ -416,6 +433,7 @@ SMART_BREAKER_FAIL_SAFE_MODES = ("off", "last", "on")
 # that buffers locally). Never inferred from what happens to be connected.
 BACKHAULS = ("wifi", "lte", "none")
 SMART_BREAKER_AUTH_MODES = ("direct", "cloud_proxy")
+IRRIGATION_HOLD_ON_FAULT_MODES = ("release", "hold")
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +570,25 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "smart_breaker_client_id": SettingSpec(str, hot=False, max_length=128, remote=False),
     "smart_breaker_client_secret": SettingSpec(str, hot=False, max_length=256, remote=False),
     "smart_breaker_subscription_key": SettingSpec(str, hot=False, max_length=128, remote=False),
+    # Irrigation hold — all remote and hot: the cloud device page is the
+    # editor, and the engine re-reads its settings every sampling cycle.
+    # Mirrored key-for-key in the cloud's CONFIG_SCHEMA
+    # (functions/v2/deviceTelemetry.js). The relay may not equal the
+    # interlock relay; the engine refuses to arm on a conflict rather than
+    # this validator, because the interlock is a local-only key the cloud
+    # cannot see.
+    "irrigation_hold_enabled": SettingSpec(bool, hot=True),
+    "irrigation_hold_relay": SettingSpec(int, hot=True, min=0, max=4),
+    "irrigation_hold_turbidity_ntu": SettingSpec(float, hot=True, min=0.0, max=4000.0),
+    "irrigation_hold_tds_ppm": SettingSpec(float, hot=True, min=0.0, max=20000.0),
+    "irrigation_hold_ph_min": SettingSpec(float, hot=True, min=0.0, max=14.0),
+    "irrigation_hold_ph_max": SettingSpec(float, hot=True, min=0.0, max=14.0),
+    "irrigation_hold_flow_gpm_max": SettingSpec(float, hot=True, min=0.0, max=1000.0),
+    "irrigation_hold_trip_samples": SettingSpec(int, hot=True, min=1, max=10),
+    "irrigation_hold_release_min": SettingSpec(int, hot=True, min=0, max=1440),
+    "irrigation_hold_on_fault": SettingSpec(
+        str, hot=True, max_length=8, choices=IRRIGATION_HOLD_ON_FAULT_MODES
+    ),
 }
 
 _SETTINGS_FIELDS = {f.name for f in fields(Settings)}

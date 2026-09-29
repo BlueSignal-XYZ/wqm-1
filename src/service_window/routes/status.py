@@ -5,6 +5,7 @@ import time
 
 from flask import Blueprint, current_app, render_template
 
+from control.irrigation_hold import status_line
 from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
@@ -41,6 +42,11 @@ def index() -> str:
         if card is not None:
             sys_cards["smart_breaker"] = card
     overall = worst_status({**s_cards, **sys_cards})
+    # The hold's settings live in the remote overlay this process cannot
+    # read, so ask the firmware every time. No answer = no row, never a guess.
+    irrigation_hold = status_line(
+        send_command(current_app.config["CMD_SOCK"], "irrigation_hold_status")
+    )
 
     lora_joined = bool(session and session.get("joined"))
     lora_fcnt = session.get("fcnt_up", 0) if session else 0
@@ -58,4 +64,5 @@ def index() -> str:
         fw_version=read_firmware_version(),
         hostname=platform.node(),
         uptime_s=int(time.monotonic() - _START_TIME),
+        irrigation_hold=irrigation_hold,
     )

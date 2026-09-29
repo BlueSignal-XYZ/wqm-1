@@ -33,7 +33,8 @@ from urllib.parse import urlparse
 
 from app.state import StateStore
 from app.workers import SamplingWorker
-from sensors.sim import Fault, SimulatedSensors, build_simulated_sensors, parse_faults
+from control.irrigation_hold import IrrigationHold
+from sensors.sim import Fault, SimRelays, SimulatedSensors, build_simulated_sensors, parse_faults
 from utils.identity import SIM_SERIAL_PREFIX, is_simulated_serial
 
 logger = logging.getLogger("wqm1.sim.unit")
@@ -187,13 +188,24 @@ class VirtualUnit:
             int(getattr(settings, "sensor_read_s", 60)),
             fault_list,
         )
+        # The irrigation hold runs on the compressed clock, so its release
+        # delay passes in simulated minutes; its relay is in memory. With the
+        # hold disabled (the default) nothing is ever written to the relays
+        # and relayState stays 0, exactly as before.
+        self.relays = SimRelays()
+        self.hold = IrrigationHold(
+            self.relays,
+            clock=lambda: self.clock.now().timestamp(),
+            wall_clock=self.clock.now,
+        )
         self.sampler = SimSamplingWorker(
             self.sim,
             lambda: settings,
             sensors=self.sim.as_worker_dict(),
             db=self.db,
             rules=None,
-            relays=None,
+            relays=self.relays,
+            irrigation_hold=self.hold,
             leds=None,
             health=self.health,
             state=self.state,
@@ -210,6 +222,7 @@ class VirtualUnit:
             max_retries=1,
             retry_delays=(0,),
             health_provider=self.health.get_report,
+            irrigation_hold_provider=self.hold.payload,
         )
         # No sleeping between retries in a simulation.
         self.cloud._sleep = lambda *_: None

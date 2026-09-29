@@ -134,7 +134,9 @@ class SamplingWorker(Worker):
 
     Optional collaborators (wired when the sensing package is enabled):
     ``monitor`` (SensorMonitor: flatline/spike/drift events + rule
-    suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence).
+    suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence),
+    ``irrigation_hold`` (IrrigationHold: evaluated once per cycle, right
+    after the rules).
     """
 
     name = "sampling"
@@ -155,9 +157,11 @@ class SamplingWorker(Worker):
         clock: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] | None = None,
         clock_source: Callable[[], str] | None = None,
+        irrigation_hold: Any = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
+        self.irrigation_hold = irrigation_hold
         self._sensors = sensors  # {"temperature": DS18B20, "ph": ..., "tds": ..., ...}
         # Which clock the timestamp below can be trusted to — 'ntp', 'gps' or
         # 'unsynced' (utils.clock.ClockDiscipline.source). Without a provider
@@ -323,7 +327,16 @@ class SamplingWorker(Worker):
         # Sensor-health monitoring first: a stuck sensor's rules are suspended
         # BEFORE this cycle's rule evaluation, so a flatlined probe can't keep
         # (or start) actuating a relay on frozen data.
-        suspended: set[str] = set()
+        #
+        # `suspended` is None when there is no information this cycle — no
+        # monitor, or a monitor that threw — and a SET (possibly empty) when the
+        # monitor ran. An empty set is a real answer and must be forwarded: it
+        # is how a probe that recovers after a no-data suspension gets its rules
+        # (and the irrigation hold's condition) back. This used to forward only
+        # a non-empty set, so a sensor suspended after flatline_window_min of
+        # no data stayed suspended until the service restarted. A monitor error
+        # still forwards nothing, so an exception can never look like recovery.
+        suspended: set[str] | None = None
         if self.monitor is not None:
             try:
                 for event in self.monitor.observe(reading):
@@ -335,11 +348,24 @@ class SamplingWorker(Worker):
 
         if self._rules:
             try:
-                if suspended and hasattr(self._rules, "set_suspended_sensors"):
+                if suspended is not None and hasattr(self._rules, "set_suspended_sensors"):
                     self._rules.set_suspended_sensors(suspended)
                 self._rules.evaluate(reading)
             except Exception as e:  # noqa: BLE001
                 logger.error("Rules evaluation error: %s", e)
+
+        if self.irrigation_hold is not None:
+            try:
+                # Hot: the engine snapshots its settings each cycle (a no-op
+                # when nothing changed). No monitor at all means nothing is
+                # suspended; a monitor that threw passes None, which the engine
+                # reads as "reuse the last known set".
+                self.irrigation_hold.configure(self._settings())
+                self.irrigation_hold.evaluate(
+                    reading, suspended if self.monitor is not None else set()
+                )
+            except Exception as e:  # noqa: BLE001 — the hold must not stop sampling
+                logger.error("Irrigation hold evaluation error: %s", e)
 
         if self.adaptive is not None:
             try:

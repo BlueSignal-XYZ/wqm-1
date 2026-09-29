@@ -42,6 +42,7 @@ from app.workers import (
     Worker,
 )
 from calibration.calibrate import CalibrationManager
+from control.irrigation_hold import IrrigationHold
 from control.led import StatusLEDs
 from control.relay import RelayController
 from control.rules import RulesEngine
@@ -119,6 +120,10 @@ def _setup_logging() -> None:
 class WQM1App:
     """Firmware wiring: builds hardware + workers, runs the supervisor."""
 
+    # Class-level default so a partially built app (tests build one with
+    # __new__ to exercise _handle_cmd) still answers relay_set.
+    _hold: Any = None
+
     def __init__(self, config_path: str | None = None) -> None:
         # An explicit path lets N virtual units run on one host, each with its
         # own config; a real unit passes nothing and gets /etc/bluesignal.
@@ -157,6 +162,7 @@ class WQM1App:
         self._health: Any = None
         self._cal: Any = None
         self._rules: Any = None
+        self._hold: Any = None
         self._monitor: Any = None
         self._adaptive: Any = None
         self._smart_breaker: Any = None
@@ -452,13 +458,29 @@ class WQM1App:
                 retry_delays=self._settings.retry_delays,
                 radios_provider=self._radios_snapshot,
                 health_provider=self._health.get_report,
+                irrigation_hold_provider=self._irrigation_hold_payload,
             )
             logger.info("Cloud HTTP transport enabled (ingest=%s)", self._settings.cloud_ingest_url)
         else:
             self._cloud = None
 
+        # --- Irrigation hold ---
+        # Its own engine, not a Rule: rules cannot arrive from the cloud, and
+        # every rules-engine guard would cut an energised hold short. Built
+        # before the rules engine so rules on its channel are set aside (with a
+        # WARNING) at load. A virtual unit has no relay controller; it gets an
+        # in-memory one so the hold can be driven in the emulator.
+        hold_relays = self._relays
+        if hold_relays is None and self._sim is not None:
+            from sensors.sim import SimRelays
+
+            hold_relays = SimRelays()
+        self._hold = IrrigationHold(hold_relays)
+        self._hold.configure(self._settings)
+
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
+        self._rules.set_reserved_channels_provider(self._hold.reserved_channels)
         self._load_policies()
         # The hard on-time ceiling lives in the relay controller so it binds
         # every source — rules, cloud, Service Window, LoRa downlink alike.
@@ -544,6 +566,7 @@ class WQM1App:
                 monitor=self._monitor,
                 adaptive=self._adaptive,
                 clock_source=self._clock.source,
+                irrigation_hold=self._hold,
             )
         ]
         if self._gps is not None:
@@ -656,6 +679,12 @@ class WQM1App:
                 return {"ok": False, "error": "channel must be 1-4"}
             if not isinstance(state, bool):
                 return {"ok": False, "error": "state must be boolean"}
+            if self._hold is not None and self._hold.owns(channel):
+                # A manual OFF would silently release a hold; a manual ON would
+                # leave a coil the hold then thinks it controls. Cloud commands
+                # and the Service Window both arrive here; LoRa FPort 100 is
+                # refused in RulesEngine.process_downlink_command.
+                return {"ok": False, "error": f"irrigation hold owns relay {channel}"}
             duration = cmd.get("duration_s")
             if duration is not None and (
                 isinstance(duration, bool) or not isinstance(duration, int | float) or duration < 0
@@ -686,7 +715,12 @@ class WQM1App:
             return request_host_reboot(self._relays, REBOOT_REQUEST_FLAG)
         if action == "config_reload":
             self._config.reload()
+            self._reconfigure_hold()
             return {"ok": True, "configVersion": self._config.remote_version}
+        if action == "irrigation_hold_status":
+            if self._hold is None:
+                return {"ok": False, "error": "irrigation hold not initialised"}
+            return {"ok": True, **self._hold.status()}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
         if action in ("awg_set", "circuit_set"):
@@ -839,6 +873,7 @@ class WQM1App:
                 self._state.request_restart()
             elif cmd_type == "config_reload":
                 self._config.reload()
+                self._reconfigure_hold()
                 self._cloud.ack_command(cmd_id, "done")
             elif cmd_type == "ota_check":
                 self._nudge_ota_agent()
@@ -892,6 +927,7 @@ class WQM1App:
             needs_restart = restart_keys(values)
             if applied_hot:
                 logger.info("Hot-applied: %s", ", ".join(sorted(applied_hot)))
+                self._reconfigure_hold()
             if needs_restart:
                 logger.info(
                     "Restart-required keys applied (%s) — requesting graceful restart",
@@ -907,6 +943,19 @@ class WQM1App:
                     "details": {"version": version, "errors": errors[:5]},
                 }
             )
+
+    def _reconfigure_hold(self) -> None:
+        """Re-snapshot the irrigation hold's (hot) settings after a reload, so
+        a disable or a relay change takes effect now rather than next sample."""
+        if self._hold is not None:
+            try:
+                self._hold.configure(self._settings)
+            except Exception as e:  # noqa: BLE001 — a reload must not fail on this
+                logger.error("Irrigation hold reconfigure failed: %s", e)
+
+    def _irrigation_hold_payload(self) -> dict[str, Any] | None:
+        """metadata.irrigationHold at upload time; None omits the key."""
+        return self._hold.payload() if self._hold is not None else None
 
     def _apply_water_profile(self, profile: dict, persist: bool = True) -> None:
         """Install the learned baseline into the rules engine and (by default)

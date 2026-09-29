@@ -46,6 +46,7 @@ any `status` entries — see §4.
 | `metadata.firmware` | string | `VERSION` at build time. |
 | `metadata.signalStrength` | integer or `null` | From the health reporter; best-effort. |
 | `metadata.relayState` | integer | Relay bitmask; 0 when no relays. |
+| `metadata.irrigationHold` | object, optional | The irrigation hold's state (§6). **Absent** when `irrigation_hold_enabled` is false, so a unit that does not use the feature sends a byte-identical payload. |
 | `metadata.backfill` | boolean, optional | `true` on rows older than ~23 h so the server's 30-day window accepts post-outage history. Absent otherwise. |
 | `metadata.clockSource` | string, optional | Which clock stamped `timestamp`: `ntp` (systemd-timesyncd synchronised), `gps` (system clock agrees with, or was set from, a GPS RMC date+time), `unsynced` (neither — the reading is real, its interval to its neighbours is not evidence). Present on rows from firmware ≥ 2.4 (schema v7); absent on older rows. |
 | `metadata.gps` | object, optional | Only when the row carries a fix. |
@@ -154,3 +155,37 @@ round.
   and the per-row sync contract.
 - Cloud side: `marketplace/functions/v2/latestMetrics.test.js`,
   `functions/v2/sensorInventory.test.js`.
+
+## 6. `metadata.irrigationHold`
+
+Present only while `irrigation_hold_enabled` is true
+(`src/control/irrigation_hold.py`; wiring and settings in
+`docs/irrigation-hold.md`). It sits beside `relayState`.
+
+```json
+"irrigationHold": {
+  "enabled": true,
+  "relay": 3,
+  "active": true,
+  "since": "2026-09-29T12:04:00Z",
+  "reasons": [{ "sensor": "turbidity_ntu", "value": 14.2, "threshold": 8.0 }],
+  "fault": null,
+  "error": null
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `enabled` | boolean | Always `true` when the key is present. |
+| `relay` | integer 0–4 | The configured channel; 0 = none chosen (the hold then does nothing). |
+| `active` | boolean | `true` while the coil is energised — contact **open**, controller holding. Reports what the relay was driven to, not what the conditions asked for: a failed relay write reads `false` until the retry succeeds. |
+| `since` | ISO-8601 UTC or `null` | When the current hold engaged; `null` when not holding. |
+| `reasons` | array | The conditions that tripped, `{sensor, value, threshold}`, `sensor` a reading column (`turbidity_ntu`, `tds_ppm`, `ph`, `flow_rate_gpm`). Kept through the release delay so a hold that is waiting to release still says why it engaged. Empty when not holding. |
+| `fault` | `null`, `"released"`, `"held"` | A probe a condition depends on is faulted (no value, or suspended by the sensor monitor). `released`: the default policy let go. `held`: `irrigation_hold_on_fault: hold` is keeping the controller paused. |
+| `error` | `null` or `"relay_conflict"` | `relay_conflict`: the chosen relay is the smart-breaker interlock relay, so the hold is not armed and drives nothing. |
+
+**Timing:** the object is read when the upload runs, not when the sample was
+taken. A buffered row sent after an outage carries the hold's state at the
+moment of the sync; the row's own `relayState` is the per-sample record of
+the coil.
+
