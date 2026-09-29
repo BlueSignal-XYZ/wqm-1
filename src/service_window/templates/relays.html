@@ -4,17 +4,21 @@
 <h1>Relay Manual Control</h1>
 
 <p>Manual relay override. The firmware automation rules will resume control on the next evaluation cycle.</p>
+{% if hold %}
+<p>Relay {{ hold.relay }} is the irrigation hold: its contact sits in the irrigation controller's rain-sensor loop, and the hold switches it from the water conditions set on the cloud device page. Manual control of relay {{ hold.relay }} is off while the hold is enabled.</p>
+{% endif %}
 
 <div class="grid">
     {% for ch in range(1, 5) %}
+    {% set is_hold = hold and hold.relay == ch %}
     <div class="card">
-        <div class="card-label">Relay {{ ch }}</div>
+        <div class="card-label">Relay {{ ch }}{% if is_hold %} · Irrigation hold{% endif %}</div>
         <div class="card-value">
-            <span id="relay-{{ ch }}-status">--</span>
+            <span id="relay-{{ ch }}-status">{% if is_hold %}{{ hold.line }}{% else %}--{% endif %}</span>
         </div>
         <div class="relay-controls">
-            <button class="btn btn-on" onclick="setRelay({{ ch }}, true)">ON</button>
-            <button class="btn btn-off" onclick="setRelay({{ ch }}, false)">OFF</button>
+            <button class="btn btn-on" onclick="setRelay({{ ch }}, true)"{% if is_hold %} disabled title="Irrigation hold owns this relay"{% endif %}>ON</button>
+            <button class="btn btn-off" onclick="setRelay({{ ch }}, false)"{% if is_hold %} disabled title="Irrigation hold owns this relay"{% endif %}>OFF</button>
         </div>
     </div>
     {% endfor %}
@@ -23,6 +27,9 @@
 <noscript>
 <h2>Manual Controls (no JavaScript)</h2>
 {% for ch in range(1, 5) %}
+{% if hold and hold.relay == ch %}
+<p>Relay {{ ch }} · Irrigation hold ({{ hold.line }}) — manual control off.</p>
+{% else %}
 <form method="post" action="{{ url_for('relays.set_relay') }}" style="display:inline">
     <input type="hidden" name="channel" value="{{ ch }}">
     <input type="hidden" name="state" value="on">
@@ -34,6 +41,7 @@
     <button type="submit" class="btn">Relay {{ ch }} OFF</button>
 </form>
 <br>
+{% endif %}
 {% endfor %}
 </noscript>
 {% endblock %}

@@ -278,10 +278,26 @@ class TestLoRaCredentials:
 class TestDoneStep:
     def test_finish_marks_setup_completed(self, factory_client):
         client, app = factory_client
+        # A real walk sets the PIN first; finishing on the factory PIN is
+        # refused (see the next test), so this one sets it the way the
+        # wizard does before finishing.
+        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post("/setup/done", data={}, follow_redirects=False)
         assert resp.status_code == 302
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["service_window"]["setup_completed"] is True
+
+    def test_cannot_finish_on_the_factory_pin(self, factory_client):
+        """Commissioning plan test #2: the PIN step refused 1234 on its own
+        page, but nothing stopped Finish with the shipped PIN still in
+        place. A finished unit on PIN 1234 is one anyone on the site network
+        can drive."""
+        client, app = factory_client
+        resp = client.post("/setup/done", data={}, follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/setup/pin")
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert not (saved.get("service_window") or {}).get("setup_completed")
 
     def test_go_no_go_page_renders_checklist(self, factory_client):
         client, _ = factory_client
@@ -289,6 +305,143 @@ class TestDoneStep:
         assert resp.status_code == 200
         for subject in [b"Ph", b"Cloud", b"Lora", b"Gps", b"Storage"]:
             assert subject in resp.data
+        assert b"Readings waiting to upload" in resp.data
+
+
+class TestNetworkStepDeclaresTheVariant:
+    """PR 4/5: the network step records what the unit IS, and can join."""
+
+    def test_declare_writes_backhaul_and_fitted_radios(self, factory_client):
+        client, app = factory_client
+        resp = client.post(
+            "/setup/network",
+            data={"action": "declare", "backhaul": "none", "gps_enabled": "on"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/setup/cloud")
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert saved["backhaul"] == "none"
+        assert saved["gps_enabled"] is True
+        # Unticked is a real declaration of "not fitted".
+        assert saved["lora_enabled"] is False
+
+    def test_declare_rejects_an_unknown_backhaul(self, factory_client):
+        client, app = factory_client
+        client.post("/setup/network", data={"action": "declare", "backhaul": "carrier-pigeon"})
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert "backhaul" not in saved
+
+    def test_wrong_password_reraises_the_ap_and_says_so(self, factory_client, monkeypatch):
+        """Commissioning plan test #4: an installer locked out by a typo is
+        worse than no feature."""
+        from utils import netctl
+
+        calls = {}
+
+        def fake_join(ssid, password, ap_ssid=None, ap_passphrase=None, **_):
+            calls["args"] = (ssid, password, ap_ssid, ap_passphrase)
+            return {
+                "ok": False,
+                "connected": False,
+                "ap_restored": True,
+                "error": "Secrets were required",
+            }
+
+        monkeypatch.setattr(netctl, "join_network", fake_join)
+        monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "river-cedar-42"))
+        client, _ = factory_client
+        resp = client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "wrong"},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert calls["args"] == ("PondHouse", "wrong", "WQM1-0001", "river-cedar-42")
+        assert b"WQM1-0001 is back" in resp.data
+
+    def test_page_warns_before_a_join_when_served_over_the_ap(self, factory_client, monkeypatch):
+        from utils import netctl, netinfo
+
+        monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": True)
+        monkeypatch.setattr(
+            netctl,
+            "scan_networks",
+            lambda iface="wlan0": [{"ssid": "PondHouse", "signal": 72, "secured": True}],
+        )
+        monkeypatch.setattr(
+            netinfo,
+            "wifi_status",
+            lambda: {"state": "down", "ssid": None, "rssi_dbm": None, "ip": "192.168.4.1"},
+        )
+        client, _ = factory_client
+        resp = client.get("/setup/network")
+        assert resp.status_code == 200
+        assert b"turns that setup network off" in resp.data
+        assert b"PondHouse" in resp.data
+        assert b"No network here" in resp.data
+
+
+class TestWizardWalkedInOrder:
+    """Commissioning plan test #1: a factory-fresh unit walks
+    welcome→pin→identity→network→cloud→sensors→done IN ORDER and ends with
+    every config key written and setup_completed true. Every step used to
+    be tested alone against a fresh client; nothing had ever driven the
+    whole wizard on one unit."""
+
+    def test_factory_unit_walks_to_done_with_every_key_written(self, factory_client, monkeypatch):
+        import utils.netinfo as netinfo
+
+        monkeypatch.setattr(netinfo, "current_ssid", lambda: "PondHouse")
+        monkeypatch.setattr(netinfo, "local_ip", lambda: "192.168.1.224")
+        monkeypatch.setattr("utils.health.read_wifi_rssi_dbm", lambda: -52)
+        monkeypatch.setattr(
+            netinfo, "verify_device_key", lambda *a, **k: {"state": "verified", "detail": ""}
+        )
+        client, app = factory_client
+        cfg = lambda: yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())  # noqa: E731
+
+        assert client.get("/setup/").status_code == 200
+        # The wizard cannot be finished from here: still the factory PIN.
+        r = client.post("/setup/done", data={}, follow_redirects=False)
+        assert r.headers["Location"].endswith("/setup/pin")
+
+        r = client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
+        assert r.headers["Location"].endswith("/setup/identity")
+        assert client.get("/setup/identity").status_code == 200
+
+        assert client.get("/setup/network").status_code == 200
+        r = client.post(
+            "/setup/network",
+            data={"action": "declare", "backhaul": "wifi", "gps_enabled": "on"},
+        )
+        assert r.headers["Location"].endswith("/setup/cloud")
+
+        r = client.post(
+            "/setup/cloud",
+            data={"api_key": "k" * 40, "app_key": "B" * 32, "app_eui": "70B3D57ED0000001"},
+        )
+        assert r.status_code == 302
+
+        r = client.post("/setup/sensors", data={"ph_enabled": "on", "temperature_enabled": "on"})
+        assert r.status_code == 302
+
+        assert client.get("/setup/done").status_code == 200
+        r = client.post("/setup/done", data={}, follow_redirects=False)
+        assert r.status_code == 302
+
+        saved = cfg()
+        assert saved["service_window"]["pin"] == "8642"
+        assert saved["service_window"]["setup_completed"] is True
+        assert saved["backhaul"] == "wifi"
+        assert saved["gps_enabled"] is True
+        assert saved["lora_enabled"] is False
+        assert saved["api_key"] == "k" * 40
+        assert saved["cloud_enabled"] is True
+        assert saved["app_key"].lower() == "b" * 32
+        assert saved["ph_enabled"] is True and saved["temperature_enabled"] is True
+        # Unticked probes are written false, not left absent.
+        assert saved["tds_enabled"] is False and saved["turbidity_enabled"] is False
 
 
 class TestStatusHealthPage:
@@ -407,3 +560,72 @@ class TestHealthModule:
         cards = system_cards(self._readings(ph=7.0), {}, None, 20)
         assert cards["cloud"]["status"] == "fault"
         assert worst_status(cards) == "fault"
+
+    # -- variant-aware verdicts (commissioning plan test #3) ----------------
+
+    def test_wifi_only_unit_is_not_amber_on_lora(self, mock_hardware):
+        from service_window.health import system_cards, worst_status
+
+        cards = system_cards(
+            self._readings(ph=7.0),
+            {"cloud_enabled": True, "api_key": "k", "lora_enabled": False},
+            None,  # never joined — there is no radio to join with
+            20,
+        )
+        assert cards["lora"]["status"] == "disabled"
+        assert "not fitted" in cards["lora"]["message"]
+        assert worst_status(cards) == "ok"
+
+    def test_no_gps_unit_is_not_amber_on_gps(self, mock_hardware):
+        from service_window.health import system_cards, worst_status
+
+        rows = self._readings(ph=7.0)
+        for r in rows:
+            r["lat"] = r["lon"] = None
+        cards = system_cards(
+            rows, {"cloud_enabled": True, "api_key": "k", "gps_enabled": False}, {"joined": 1}, 20
+        )
+        assert cards["gps"]["status"] == "disabled"
+        assert worst_status(cards) == "ok"
+
+    def test_declared_no_link_site_buffers_at_ok_and_states_the_queue(self, mock_hardware):
+        from service_window.health import system_cards, worst_status
+
+        rows = self._readings(ph=7.0)
+        for r in rows:
+            r["synced"] = 0
+        cards = system_cards(
+            rows,
+            {"cloud_enabled": True, "api_key": "k", "backhaul": "none", "lora_enabled": False},
+            None,
+            reading_count=20,
+            pending=17,
+        )
+        assert cards["cloud"]["status"] == "ok"
+        assert "17 readings queued" in cards["cloud"]["message"]
+        assert worst_status(cards) == "ok"
+
+    def test_wifi_site_that_is_not_syncing_is_still_degraded(self, mock_hardware):
+        """The buffering verdict is for a DECLARED dark site only. A Wi-Fi
+        site that is not uploading is a problem and must say so."""
+        from service_window.health import system_cards
+
+        rows = self._readings(ph=7.0)
+        for r in rows:
+            r["synced"] = 0
+        cards = system_cards(rows, {"cloud_enabled": True, "api_key": "k"}, None, 20, pending=17)
+        assert cards["cloud"]["status"] == "attention"
+
+    def test_lte_variant_gets_its_own_card(self, mock_hardware):
+        from service_window.health import system_cards
+
+        cards = system_cards(
+            self._readings(ph=7.0),
+            {"cloud_enabled": True, "api_key": "k", "backhaul": "lte"},
+            None,
+            20,
+        )
+        assert cards["lte"]["status"] == "ok"
+        assert "lte" not in system_cards(
+            self._readings(ph=7.0), {"cloud_enabled": True, "api_key": "k"}, None, 20
+        )

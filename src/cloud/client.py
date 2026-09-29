@@ -109,6 +109,7 @@ class CloudClient:
         retry_delays: list[int] | tuple[int, ...] = (5, 15, 30),
         radios_provider: Callable[[], dict[str, Any] | None] | None = None,
         health_provider: Callable[[], dict[str, Any]] | None = None,
+        irrigation_hold_provider: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         self._device_id = device_id
         self._ingest_url = ingest_url
@@ -127,6 +128,12 @@ class CloudClient:
         # per-reading metadata (HealthReporter get_report). Battery level was
         # removed 2026-08-20 — see utils/health.py for why.
         self._health_provider = health_provider
+        # Optional callable returning metadata.irrigationHold, or None when the
+        # hold is disabled (the key is then omitted entirely, so a unit that
+        # does not use the feature sends a byte-identical payload). It is read
+        # at UPLOAD time: the value is the hold's state when the sync runs, not
+        # when the buffered sample was taken. See docs/cloud-payload.md.
+        self._irrigation_hold_provider = irrigation_hold_provider
         self._sleep = time.sleep  # patchable in tests
         self._now_ms: Callable[[], int] = lambda: int(time.time() * 1000)  # patchable
 
@@ -175,8 +182,21 @@ class CloudClient:
             "signalStrength": signal_strength,
             "relayState": row.get("relay_state", 0),
         }
+        if self._irrigation_hold_provider is not None:
+            try:
+                hold = self._irrigation_hold_provider()
+            except Exception as e:  # noqa: BLE001 — best-effort metadata
+                logger.debug("irrigation_hold_provider failed: %s", e)
+                hold = None
+            if hold is not None:
+                metadata["irrigationHold"] = hold
         if backfill:
             metadata["backfill"] = True
+        # Which clock stamped the timestamp ('ntp' | 'gps' | 'unsynced'). Only
+        # on rows that recorded it (schema v7+); an older row says nothing
+        # rather than claiming a confidence it never measured.
+        if row.get("clock_source"):
+            metadata["clockSource"] = row["clock_source"]
         lat, lon = row.get("lat"), row.get("lon")
         if lat is not None and lon is not None:
             metadata["gps"] = {"latitude": lat, "longitude": lon, "altitude": row.get("alt_m")}

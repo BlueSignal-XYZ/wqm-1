@@ -47,11 +47,18 @@ if [ "$IS_RPI" = "1" ]; then
         GPIOD_PKG="libgpiod2"
     fi
 
+    # fake-hwclock + systemd-timesyncd: a Pi has no RTC. fake-hwclock restores
+    # the last known time at boot (so the clock starts plausible rather than
+    # at the epoch) and timesyncd disciplines it the moment a link exists.
+    # GPS RMC is the fallback for a dark site (src/utils/clock.py).
     sudo apt-get install -y -qq \
         python3-pip python3-venv python3-dev \
         i2c-tools python3-smbus \
         swig liblgpio-dev \
+        fake-hwclock systemd-timesyncd \
         "$GPIOD_PKG"
+    sudo systemctl enable --now fake-hwclock 2>/dev/null || true
+    sudo systemctl enable --now systemd-timesyncd 2>/dev/null || true
 
     # Ensure the i2c-dev module loads on boot. On Trixie, i2c_bcm2835 auto-loads
     # but i2c-dev does not, so /dev/i2c-1 never appears.
@@ -223,10 +230,29 @@ sudo cp "$SCRIPT_DIR/systemd/bluesignal-ota.service" /etc/systemd/system/
 if [ -f "$SCRIPT_DIR/systemd/bluesignal-provision.service" ]; then
     sudo cp "$SCRIPT_DIR/systemd/bluesignal-provision.service" /etc/systemd/system/
 fi
+# Setup access point (root, oneshot after NetworkManager): if no known Wi-Fi
+# network associates within the grace period, raise the unit's own WPA2 AP so
+# an installer with a phone can reach the Service Window with no site network
+# — commissioning plan, PR 4. Never concurrent with a station link.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# First-boot card consumer (root, oneshot before the firmware): moves the
+# bench-written bluesignal-cloud.json off the FAT boot partition into
+# /etc/bluesignal/config.yaml and deletes it — commissioning plan, PR 3/5.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-card.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-ota.service
+sudo systemctl enable bluesignal-ap-fallback.service
+sudo systemctl enable bluesignal-card.service
+
+# The firmware runs unprivileged but must be able to set the system clock
+# from GPS on a dark site (src/utils/clock.py). One command, no arguments
+# beyond the timestamp, for the service user only.
+echo "$INSTALL_USER ALL=(root) NOPASSWD: /usr/bin/date -u -s *" \
+    | sudo tee /etc/sudoers.d/bluesignal-clock > /dev/null
+sudo chmod 440 /etc/sudoers.d/bluesignal-clock
+sudo visudo -cf /etc/sudoers.d/bluesignal-clock > /dev/null || sudo rm -f /etc/sudoers.d/bluesignal-clock
 # One-shot first-boot check (prints the provisioning hint to the journal
 # until /etc/bluesignal/.provisioned exists). It was copied but never enabled.
 sudo systemctl enable bluesignal-provision.service 2>/dev/null || true

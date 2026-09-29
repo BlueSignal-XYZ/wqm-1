@@ -101,21 +101,91 @@ def identity() -> str:
     )
 
 
-@setup_bp.route("/network")
+_BACKHAULS = ("wifi", "lte", "none")
+_SSID_RE = re.compile(r"^[^\x00-\x1f]{1,32}$")
+
+
+@setup_bp.route("/network", methods=["GET", "POST"])
 @login_required
-def network() -> str:
+def network() -> ResponseReturnValue:
     """
-    Link check at the mounting location, before the cloud key is asked for.
+    Link check at the mounting location, before the cloud key is asked for —
+    and, since PR 4 of the commissioning plan, the place the installer can
+    JOIN a network and DECLARE what this unit is.
 
     Two things go wrong here and both are invisible until the next day: the
     unit associates at a signal level that won't survive the enclosure being
     closed, and the site's network has no route out. Both are cheap to see now
     and expensive to diagnose from a desk later.
+
+    Three POST actions:
+
+    * ``join`` — connect to a scanned SSID. The page is usually being served
+      over the unit's own setup AP, which goes DOWN the moment the join
+      starts; the template says so before the button, and ``netctl`` brings
+      the AP straight back if the join fails, so a typo never locks the
+      installer out.
+    * ``declare`` — record the variant: backhaul (wifi | lte | none), whether
+      LoRa and GPS are fitted. "No network here" is a first-class outcome:
+      the unit buffers locally and the done screen grades it correct.
+    * ``rescan`` — refresh the network list.
     """
     from diagnostics.explain import explain
+    from utils.netctl import ap_active, ap_credentials, join_network, scan_networks
     from utils.netinfo import wifi_status
 
-    config = read_config(current_app.config["CONFIG_PATH"])
+    config_path = current_app.config["CONFIG_PATH"]
+
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        if action == "join":
+            ssid = request.form.get("ssid", "").strip()
+            password = request.form.get("password", "")
+            if not _SSID_RE.match(ssid):
+                flash("Pick a network from the list.", "error")
+                return redirect(url_for("setup.network"))
+            ap_ssid, ap_pass = ap_credentials()
+            result = join_network(ssid, password or None, ap_ssid=ap_ssid, ap_passphrase=ap_pass)
+            if result.get("connected"):
+                flash(
+                    f"Joined {ssid}. Reconnect your phone to the site network to continue.",
+                    "success",
+                )
+            elif result.get("ap_restored"):
+                flash(
+                    f"Could not join {ssid} ({result.get('error') or 'no reason given'}). "
+                    f"The setup network {ap_ssid} is back — reconnect and try again.",
+                    "error",
+                )
+            else:
+                flash(f"Could not join {ssid}: {result.get('error') or 'unknown error'}.", "error")
+            return redirect(url_for("setup.network"))
+        if action == "declare":
+            backhaul = request.form.get("backhaul", "wifi")
+            if backhaul not in _BACKHAULS:
+                flash("Choose how this unit reaches the cloud.", "error")
+                return redirect(url_for("setup.network"))
+            # Unticked means NOT fitted — a real declaration, the same rule the
+            # sensors step applies to probes.
+            update_config(
+                config_path,
+                {
+                    "backhaul": backhaul,
+                    "lora_enabled": request.form.get("lora_enabled") == "on",
+                    "gps_enabled": request.form.get("gps_enabled") == "on",
+                },
+            )
+            if backhaul == "none":
+                flash(
+                    "Recorded: no network at this site. The unit buffers readings locally "
+                    "and uploads when a link exists.",
+                    "info",
+                )
+            return redirect(url_for("setup.cloud"))
+        # "rescan" and anything else: fall through to a fresh render.
+        return redirect(url_for("setup.network"))
+
+    config = read_config(config_path)
     wifi = wifi_status()
     cards = {
         "wifi": explain(
@@ -124,13 +194,19 @@ def network() -> str:
             {"ssid": wifi["ssid"], "rssi": wifi["rssi_dbm"]},
         )
     }
+    on_ap = ap_active()
+    networks = scan_networks() if (on_ap or not wifi.get("ssid")) else []
     return render_template(
         "setup/network.html",
         steps=STEPS,
         step="network",
         wifi=wifi,
         cards=cards,
+        on_ap=on_ap,
+        networks=networks,
+        backhaul=str(config.get("backhaul") or "wifi"),
         lora_enabled=bool(config.get("lora_enabled", True)),
+        gps_enabled=bool(config.get("gps_enabled", True)),
     )
 
 
@@ -277,16 +353,25 @@ def done() -> ResponseReturnValue:
     try:
         readings = db.get_readings(limit=30)
         count = db.get_reading_count()
+        pending = db.get_pending_count()
         session = db.get_lorawan_session()
     except Exception:
-        readings, count, session = [], 0, None
+        readings, count, pending, session = [], 0, 0, None
 
     s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
-    sys_cards = system_cards(readings, config, session, count)
+    sys_cards = system_cards(readings, config, session, count, pending=pending)
     checklist = {**s_cards, **sys_cards}
     overall = worst_status(checklist)
 
     if request.method == "POST":
+        # The wizard cannot finish on the factory PIN. The PIN step refuses
+        # 1234 on its own page, but nothing stopped a unit reaching Finish
+        # with the shipped PIN still in place (test #2 of the commissioning
+        # plan) — and a finished unit with PIN 1234 is a unit anyone on the
+        # site network can drive.
+        if current_app.config.get("PIN") == _FACTORY_PIN:
+            flash("Set your own PIN before finishing — the factory PIN is not allowed.", "error")
+            return redirect(url_for("setup.pin"))
         update_config_section(
             current_app.config["CONFIG_PATH"], "service_window", {"setup_completed": True}
         )
@@ -308,4 +393,7 @@ def done() -> ResponseReturnValue:
         step="done",
         checklist=checklist,
         overall=overall,
+        pending=pending,
+        reading_count=count,
+        backhaul=str(config.get("backhaul") or "wifi"),
     )

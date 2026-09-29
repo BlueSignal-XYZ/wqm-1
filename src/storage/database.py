@@ -29,7 +29,7 @@ from utils.config import get_settings
 
 logger = logging.getLogger("wqm1.db")
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -59,7 +59,10 @@ CREATE TABLE IF NOT EXISTS readings (
     sync_attempts INTEGER NOT NULL DEFAULT 0,
     -- JSON map of channel -> status for channels that produced no number
     -- this cycle (see src/sensors/status.py). NULL on a healthy cycle.
-    sensor_status TEXT
+    sensor_status TEXT,
+    -- Which clock stamped `timestamp` (v7): 'ntp' | 'gps' | 'unsynced'.
+    -- Time is settlement evidence; a timestamp wears its true confidence.
+    clock_source TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_readings_synced ON readings(synced);
@@ -96,7 +99,7 @@ _READING_COLS = (
     # sensor_status rides along so the cloud sync can forward a channel's
     # REASON for having no number. Omit it here and the fault never leaves the
     # device — which is the whole failure being fixed.
-    " battery_v, relay_state, sensor_status"
+    " battery_v, relay_state, sensor_status, clock_source"
 )
 
 
@@ -234,6 +237,23 @@ class WQM1Database:
                 for column in ("flow_total_gal", "flow_rate_gpm"):
                     if column not in cols:
                         conn.execute(f"ALTER TABLE readings ADD COLUMN {column} REAL")
+                # '6', not SCHEMA_VERSION — the v3 trap again: this block wrote
+                # SCHEMA_VERSION while it was the newest migration, and the
+                # moment v7 existed a v5 device would have recorded itself as
+                # v7 here and skipped v7 entirely.
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '6')"
+                )
+            logger.info("Database migrated to schema v6")
+            current = 6
+
+        if current < 7:
+            # v7 (clock confidence): which clock stamped each reading. NULL
+            # for every reading that predates it — additive and rollback-safe.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+            with conn:
+                if "clock_source" not in cols:
+                    conn.execute("ALTER TABLE readings ADD COLUMN clock_source TEXT")
                 conn.execute(
                     "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (str(SCHEMA_VERSION),),
@@ -276,8 +296,8 @@ class WQM1Database:
                     chlorine_mgl, conductivity_uscm, salinity_ppt,
                     flow_total_gal, flow_rate_gpm,
                     lat, lon, alt_m, battery_v, relay_state, sensor_status,
-                    synced, sync_state)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
+                    clock_source, synced, sync_state)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')""",
                 (
                     ts,
                     data.get("ph"),
@@ -296,6 +316,7 @@ class WQM1Database:
                     data.get("battery_v"),
                     data.get("relay_state", 0),
                     data.get("sensor_status"),
+                    data.get("clock_source"),
                 ),
             )
             return cur.lastrowid or 0

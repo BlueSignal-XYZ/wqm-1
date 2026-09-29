@@ -1,4 +1,13 @@
-"""Relay manual control page."""
+"""Relay manual control page.
+
+The irrigation hold's channel (control/irrigation_hold.py) is labelled and
+its manual buttons are disabled while the hold is enabled: a manual OFF would
+silently release a hold. The firmware refuses the command either way; the
+page just does not offer it. There is no edit UI for the hold here — the
+cloud device page is its editor, and this process cannot read the remote
+config overlay the settings arrive in, so it asks the firmware
+(``irrigation_hold_status``) instead.
+"""
 
 from flask import (
     Blueprint,
@@ -12,16 +21,29 @@ from flask import (
 )
 from flask.typing import ResponseReturnValue
 
+from control.irrigation_hold import status_line
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
 
 relays_bp = Blueprint("relays", __name__, url_prefix="/relays")
 
 
+def _hold_status() -> dict | None:
+    """The live hold snapshot, or None when the firmware cannot be asked or
+    the hold is off (the page then shows four ordinary relays)."""
+    result = send_command(current_app.config["CMD_SOCK"], "irrigation_hold_status")
+    if not result.get("ok") or not result.get("enabled"):
+        return None
+    relay = result.get("relay")
+    if not isinstance(relay, int) or not 1 <= relay <= 4 or result.get("error"):
+        return None
+    return {**result, "line": status_line(result)}
+
+
 @relays_bp.route("/")
 @login_required
 def index() -> str:
-    return render_template("relays.html")
+    return render_template("relays.html", hold=_hold_status())
 
 
 @relays_bp.route("/set", methods=["POST"])

@@ -12,6 +12,13 @@ or has nothing to sample. ``max_on_s`` (policies.yaml
 ``limits.max_continuous_on_minutes``) is a hard ceiling on ANY on-period from
 ANY source: with it set, no coil can stay energised longer than that without a
 fresh request.
+
+The one exemption is ``set(ch, True, unbounded=True)``, used only by the
+irrigation hold (control/irrigation_hold.py): a hold opens a normally-closed
+contact in an irrigation controller's rain-sensor loop for as long as a water
+condition lasts, and a ceiling that dropped it after N minutes would let the
+controller resume watering through the condition. Dropping that coil is the
+hold's release, never a fail-safe it needs protecting from.
 """
 
 import atexit
@@ -55,7 +62,7 @@ class RelayController:
         if not 1 <= channel <= 4:
             raise ValueError(f"Relay channel must be 1-4, got {channel}")
 
-    def set(self, channel: int, state: bool) -> None:
+    def set(self, channel: int, state: bool, unbounded: bool = False) -> None:
         """
         Set a relay on or off.
 
@@ -66,6 +73,8 @@ class RelayController:
         Args:
             channel: 1-4
             state: True = energised (NO closed), False = de-energised
+            unbounded: skip the ``max_on_s`` ceiling for this on-period. The
+                irrigation hold's channel only — see the module docstring.
         """
         self._check_channel(channel)
         pin = self._pins[channel - 1]
@@ -76,7 +85,7 @@ class RelayController:
             else:
                 self._state &= ~(1 << (channel - 1))
             self._cancel_timer(channel)
-            if state and self.max_on_s > 0:
+            if state and self.max_on_s > 0 and not unbounded:
                 self._arm(channel, self.max_on_s, "maximum continuous on-time")
         logger.debug("Relay %d %s (GPIO %d)", channel, "ON" if state else "OFF", pin)
 

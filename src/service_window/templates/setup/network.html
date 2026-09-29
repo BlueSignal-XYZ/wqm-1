@@ -2,7 +2,7 @@
 {% from "_health.html" import health_card %}
 {% block title %}Setup — Network{% endblock %}
 {% block content %}
-<h1 class="setup-h1">Network check</h1>
+<h1 class="setup-h1">Network</h1>
 <p class="lead">Check the link <b>where the unit will actually live</b> — lid closed,
 in its final spot. A signal that works on the bench can fail behind a panel.</p>
 
@@ -31,25 +31,71 @@ in its final spot. A signal that works on the bench can fail behind a panel.</p>
     {% endfor %}
 </div>
 
+{% if on_ap or not wifi.ssid %}
+<h2>Join the site's Wi-Fi</h2>
+{% if on_ap %}
+<p class="skip-note"><b>Read this first.</b> Your phone is connected to this unit's own
+setup network. Joining a site network <b>turns that setup network off</b> — your phone
+will drop it for about 30 seconds. If the join works, reconnect your phone to the site
+network and open this page again. If it fails (wrong password, out of range), the setup
+network comes straight back on its own — reconnect and try again.</p>
+{% endif %}
+<form method="post" id="join-form">
+    <input type="hidden" name="action" value="join">
+    <label for="ssid">Network</label>
+    {% if networks %}
+    <select id="ssid" name="ssid" required>
+        {% for n in networks %}
+        <option value="{{ n.ssid }}">{{ n.ssid }} — {{ n.signal }}%{{ ' (open)' if not n.secured }}</option>
+        {% endfor %}
+    </select>
+    {% else %}
+    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" required>
+    <p class="skip-note">No networks were found on the last scan.</p>
+    {% endif %}
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="off" placeholder="Leave blank for an open network">
+    <div class="setup-actions">
+        <button type="submit" class="btn btn-primary">Join network</button>
+        <button type="submit" class="btn btn-secondary" form="rescan-form">Rescan</button>
+    </div>
+</form>
+<form method="post" id="rescan-form"><input type="hidden" name="action" value="rescan"></form>
+{% endif %}
+
+<h2>What this unit is</h2>
+<p class="skip-note">The finish screen grades only what you declare here. An unticked
+box is a real declaration of "not fitted" — a unit is never marked amber for a radio it
+does not have.</p>
+<form method="post">
+    <input type="hidden" name="action" value="declare">
+    <fieldset>
+        <legend>How does this unit reach the cloud?</legend>
+        <label><input type="radio" name="backhaul" value="wifi" {{ 'checked' if backhaul == 'wifi' }}> The site's Wi-Fi</label>
+        <label><input type="radio" name="backhaul" value="lte" {{ 'checked' if backhaul == 'lte' }}> Its own LTE modem (option HAT with a SIM)</label>
+        <label><input type="radio" name="backhaul" value="none" {{ 'checked' if backhaul == 'none' }}> No network here — buffer locally and upload when a link exists</label>
+    </fieldset>
+    <fieldset>
+        <legend>Fitted radios</legend>
+        <label><input type="checkbox" name="lora_enabled" {{ 'checked' if lora_enabled }}> LoRa radio (long-range backup to a gateway)</label>
+        <label><input type="checkbox" name="gps_enabled" {{ 'checked' if gps_enabled }}> GPS receiver</label>
+    </fieldset>
+    <div class="setup-actions">
+        <button type="submit" class="btn btn-primary btn-lg">Save and continue</button>
+        <a class="btn btn-secondary" href="{{ url_for('setup.network') }}">Re-check</a>
+    </div>
+</form>
+
 <div class="howto">
     <div class="howto-title">Why this matters</div>
     <p class="skip-note" style="margin-top: 0">
-        WiFi is how this unit uploads readings and receives updates.
+        The network is how this unit uploads readings and receives updates.
         {% if lora_enabled %}LoRa runs alongside it as a long-range backup, but it is
-        far slower and carries less — WiFi is the path you want working.{% endif %}
+        far slower and carries less — the network is the path you want working.{% endif %}
         Either way, <b>control decisions are made on this unit</b>, so a dropped
-        network never stops monitoring, logging, or fail-safe behaviour.
+        network never stops monitoring, logging, or fail-safe behaviour. A site with no
+        network at all is a valid outcome: readings wait on the unit and upload when a
+        link exists.
     </p>
-</div>
-
-{% if not wifi.ssid %}
-<p class="skip-note">Changing networks isn&rsquo;t done from this page — the page is
-served over the very connection it would be changing. Re-flash with the network set
-in Raspberry Pi Imager, or connect a keyboard and run <code>sudo nmtui</code>.</p>
-{% endif %}
-
-<div class="setup-actions">
-    <a class="btn btn-primary btn-lg" href="{{ url_for('setup.cloud') }}">Continue</a>
-    <a class="btn btn-secondary" href="{{ url_for('setup.network') }}">Re-check</a>
 </div>
 {% endblock %}

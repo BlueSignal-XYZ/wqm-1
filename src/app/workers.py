@@ -134,7 +134,9 @@ class SamplingWorker(Worker):
 
     Optional collaborators (wired when the sensing package is enabled):
     ``monitor`` (SensorMonitor: flatline/spike/drift events + rule
-    suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence).
+    suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence),
+    ``irrigation_hold`` (IrrigationHold: evaluated once per cycle, right
+    after the rules).
     """
 
     name = "sampling"
@@ -153,10 +155,18 @@ class SamplingWorker(Worker):
         monitor: Any = None,
         adaptive: Any = None,
         clock: Callable[[], float] = time.monotonic,
+        now_utc: Callable[[], datetime] | None = None,
+        clock_source: Callable[[], str] | None = None,
+        irrigation_hold: Any = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
+        self.irrigation_hold = irrigation_hold
         self._sensors = sensors  # {"temperature": DS18B20, "ph": ..., "tds": ..., ...}
+        # Which clock the timestamp below can be trusted to — 'ntp', 'gps' or
+        # 'unsynced' (utils.clock.ClockDiscipline.source). Without a provider
+        # nothing has vouched for the clock, and the reading says so.
+        self._clock_source: Callable[[], str] = clock_source or (lambda: "unsynced")
         self._db = db
         self._rules = rules
         self._relays = relays
@@ -167,6 +177,10 @@ class SamplingWorker(Worker):
         self.adaptive = adaptive
         self._no_sensor_cycles = 0
         self._empty_cycles = 0
+        # The wall clock a reading is stamped with. Injectable so a virtual
+        # unit (sensors/sim) can compress a month into minutes and script a
+        # clock jump; a real unit never passes one.
+        self._now_utc: Callable[[], datetime] = now_utc or (lambda: datetime.now(UTC))
 
     def interval_s(self) -> float:
         if self.adaptive is not None:
@@ -289,7 +303,7 @@ class SamplingWorker(Worker):
 
         gps = self._state.gps()
         reading = {
-            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "timestamp": self._now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "ph": ph,
             "tds_ppm": tds,
             "turbidity_ntu": turb,
@@ -307,12 +321,22 @@ class SamplingWorker(Worker):
             # Only non-ok channels appear, so a healthy cycle stores nothing
             # extra. None rather than "{}" keeps the column NULL for those.
             "sensor_status": json.dumps(channel_status) if channel_status else None,
+            "clock_source": self._clock_source(),
         }
 
         # Sensor-health monitoring first: a stuck sensor's rules are suspended
         # BEFORE this cycle's rule evaluation, so a flatlined probe can't keep
         # (or start) actuating a relay on frozen data.
-        suspended: set[str] = set()
+        #
+        # `suspended` is None when there is no information this cycle — no
+        # monitor, or a monitor that threw — and a SET (possibly empty) when the
+        # monitor ran. An empty set is a real answer and must be forwarded: it
+        # is how a probe that recovers after a no-data suspension gets its rules
+        # (and the irrigation hold's condition) back. This used to forward only
+        # a non-empty set, so a sensor suspended after flatline_window_min of
+        # no data stayed suspended until the service restarted. A monitor error
+        # still forwards nothing, so an exception can never look like recovery.
+        suspended: set[str] | None = None
         if self.monitor is not None:
             try:
                 for event in self.monitor.observe(reading):
@@ -324,11 +348,24 @@ class SamplingWorker(Worker):
 
         if self._rules:
             try:
-                if suspended and hasattr(self._rules, "set_suspended_sensors"):
+                if suspended is not None and hasattr(self._rules, "set_suspended_sensors"):
                     self._rules.set_suspended_sensors(suspended)
                 self._rules.evaluate(reading)
             except Exception as e:  # noqa: BLE001
                 logger.error("Rules evaluation error: %s", e)
+
+        if self.irrigation_hold is not None:
+            try:
+                # Hot: the engine snapshots its settings each cycle (a no-op
+                # when nothing changed). No monitor at all means nothing is
+                # suspended; a monitor that threw passes None, which the engine
+                # reads as "reuse the last known set".
+                self.irrigation_hold.configure(self._settings())
+                self.irrigation_hold.evaluate(
+                    reading, suspended if self.monitor is not None else set()
+                )
+            except Exception as e:  # noqa: BLE001 — the hold must not stop sampling
+                logger.error("Irrigation hold evaluation error: %s", e)
 
         if self.adaptive is not None:
             try:
@@ -392,12 +429,16 @@ class GpsWorker(Worker):
         leds: Any,
         state: StateStore,
         clock: Callable[[], float] = time.monotonic,
+        on_time: Callable[[datetime | None], Any] | None = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
         self._gps = gps
         self._leds = leds
         self._state = state
+        # Fed the fix's RMC date+time so the system clock can be disciplined
+        # when NTP is absent (utils.clock.ClockDiscipline.observe_gps).
+        self._on_time = on_time
 
     def interval_s(self) -> float:
         return float(self._settings().gps_fix_s)
@@ -412,6 +453,11 @@ class GpsWorker(Worker):
             if fix:
                 self._state.set_gps(fix.latitude, fix.longitude, fix.altitude, fix.satellites)
                 logger.info("GPS fix: %.6f, %.6f", fix.latitude, fix.longitude)
+                if self._on_time is not None:
+                    try:
+                        self._on_time(getattr(fix, "timestamp", None))
+                    except Exception as e:  # noqa: BLE001 — clock discipline never blocks the fix
+                        logger.error("clock discipline failed: %s", e)
             elif self._state.gps().lat is None:
                 self._gps.power_cycle()
         finally:
