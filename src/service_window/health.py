@@ -24,6 +24,16 @@ from sensing.monitor import NOISE_FLOOR as _NOISE_FLOOR
 _RECENT_S = 3 * 60
 
 
+def _span_minutes(readings: list[dict[str, Any]]) -> int:
+    """Whole minutes between the oldest and newest reading in the window (at
+    least 1). The card used to print the reading COUNT here, which is only
+    minutes at a 60 s cadence; at any other interval it named the wrong time."""
+    times = [t for t in (_parse_ts(r.get("timestamp")) for r in readings) if t is not None]
+    if len(times) < 2:
+        return 1
+    return max(1, round((max(times) - min(times)).total_seconds() / 60))
+
+
 def _parse_ts(ts: str | None) -> datetime | None:
     if not ts:
         return None
@@ -88,7 +98,7 @@ def sensor_cards(
             and len(present) >= 10
             and statistics.pstdev(present) < _NOISE_FLOOR[sensor]
         ):
-            cards[sensor] = explain(sensor, "stuck", {"minutes": len(present)})
+            cards[sensor] = explain(sensor, "stuck", {"minutes": _span_minutes(readings[:30])})
         else:
             cards[sensor] = explain(sensor, "ok")
     return cards

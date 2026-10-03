@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from sensing.monitor import NOISE_FLOOR
 from sensors.gps import GPSFix
 from sensors.status import (
     NO_CONDUCTION,
@@ -145,13 +146,23 @@ class _Walk:
     step: float
     rng: random.Random
     frozen: bool = False
+    # Per-sample measurement noise on top of the drift. A real probe never
+    # returns the same figure twice, and the flatline check (NOISE_FLOOR in
+    # sensing/monitor.py) flags anything quieter than that as stuck, so a
+    # healthy virtual probe must wander at least that much. A frozen walk
+    # (the flatline fault) returns its value with no noise at all.
+    jitter: float = 0.0
 
     def tick(self) -> float:
-        if not self.frozen:
-            self.value = min(
-                self.hi, max(self.lo, self.value + self.rng.uniform(-self.step, self.step))
-            )
-        return self.value
+        if self.frozen:
+            return self.value
+        self.value = min(
+            self.hi, max(self.lo, self.value + self.rng.uniform(-self.step, self.step))
+        )
+        # The noise is not clamped: the walk's own bounds sit at least one
+        # jitter inside anything physical, and a clamp would flatten the
+        # noise exactly where the walk rests against a bound.
+        return self.value + self.rng.uniform(-self.jitter, self.jitter)
 
 
 class _SimChannel:
@@ -407,20 +418,30 @@ def build_simulated_sensors(settings: Any, faults: list[Fault] | None = None) ->
     rng = random.Random(int(getattr(settings, "simulate_seed", 0) or 0))  # nosec B311 — not security
     cycle = Cycle()
 
-    def walk(v: float, lo: float, hi: float, step: float) -> _Walk:
-        return _Walk(v + rng.uniform(-step, step), lo, hi, step, rng)
+    # Jitter is three times the flatline noise floor: uniform noise of ±3f
+    # has a standard deviation of about 1.7f, so even the shortest window the
+    # status page judges (10 readings) does not read a healthy virtual probe
+    # as stuck (tests/test_demo_health_cards.py).
+    def walk(v: float, lo: float, hi: float, step: float, jitter: float) -> _Walk:
+        return _Walk(v + rng.uniform(-step, step), lo, hi, step, rng, jitter=jitter)
 
     fitted = lambda key: bool(getattr(settings, key, True))  # noqa: E731
     return SimulatedSensors(
         cycle=cycle,
-        temperature=SimTemperature(walk(21.5, 4.0, 38.0, 0.08), cycle, faults)
+        temperature=SimTemperature(
+            walk(21.5, 4.0, 38.0, 0.08, 3 * NOISE_FLOOR["temperature"]), cycle, faults
+        )
         if fitted("temperature_enabled")
         else None,
-        ph=SimPH(walk(7.2, 5.5, 9.0, 0.02), cycle, faults) if fitted("ph_enabled") else None,
-        tds=SimTDS(walk(320.0, 40.0, 1500.0, 2.5), cycle, faults)
+        ph=SimPH(walk(7.2, 5.5, 9.0, 0.02, 3 * NOISE_FLOOR["ph"]), cycle, faults)
+        if fitted("ph_enabled")
+        else None,
+        tds=SimTDS(walk(320.0, 40.0, 1500.0, 2.5, 3 * NOISE_FLOOR["tds"]), cycle, faults)
         if fitted("tds_enabled")
         else None,
-        turbidity=SimTurbidity(walk(4.0, 0.2, 60.0, 0.3), cycle, faults)
+        turbidity=SimTurbidity(
+            walk(6.0, 3.5, 60.0, 0.3, 3 * NOISE_FLOOR["turbidity"]), cycle, faults
+        )
         if fitted("turbidity_enabled")
         else None,
         flow=SimFlowMeter(cycle, faults, rng)
