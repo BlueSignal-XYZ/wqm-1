@@ -136,10 +136,15 @@ class TestCloudStep:
 class TestNetworkStep:
     """The link check the wizard never had — see PR discussion on WiFi vs LoRa."""
 
-    def test_network_step_is_in_the_wizard_before_cloud(self, factory_client):
-        from service_window.routes.setup import STEPS
+    def test_network_is_the_last_step_before_finish(self, factory_client):
+        """Site flow v2: the join drops the hotspot the page is served over,
+        so everything that needs the page comes first."""
+        from service_window.routes.setup import CARDED_STEPS, STEPS
 
-        assert STEPS.index("network") < STEPS.index("cloud")
+        for steps in (STEPS, CARDED_STEPS):
+            assert steps[-2:] == ["network", "done"]
+            assert steps.index("sensors") < steps.index("network")
+        assert STEPS.index("cloud") < STEPS.index("network")
 
     def test_page_reports_the_link(self, factory_client, monkeypatch):
         import utils.netinfo as netinfo
@@ -319,7 +324,8 @@ class TestNetworkStepDeclaresTheVariant:
             follow_redirects=False,
         )
         assert resp.status_code == 302
-        assert resp.headers["Location"].endswith("/setup/cloud")
+        # Network is last now: a no-network site goes to the go/no-go page.
+        assert resp.headers["Location"].endswith("/setup/done")
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["backhaul"] == "none"
         assert saved["gps_enabled"] is True
@@ -350,7 +356,8 @@ class TestNetworkStepDeclaresTheVariant:
 
         monkeypatch.setattr(netctl, "join_network", fake_join)
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "river-cedar-42"))
-        client, _ = factory_client
+        client, app = factory_client
+        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post(
             "/setup/network",
             data={"action": "join", "ssid": "PondHouse", "password": "wrong"},
@@ -358,7 +365,13 @@ class TestNetworkStepDeclaresTheVariant:
         )
         assert resp.status_code == 200
         assert calls["args"] == ("PondHouse", "wrong", "WQM1-0001", "river-cedar-42")
-        assert b"WQM1-0001 is back" in resp.data
+        # The reason is kept ON THE UNIT — the response that carried a flash
+        # is usually lost with the hotspot — so a fresh GET still shows it.
+        again = client.get("/setup/network")
+        assert b"Could not join <b>PondHouse</b>" in again.data
+        assert b"Secrets were required" in again.data
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert not (saved.get("service_window") or {}).get("setup_completed")
 
     def test_page_warns_before_a_join_when_served_over_the_ap(self, factory_client, monkeypatch):
         from utils import netctl, netinfo
@@ -377,58 +390,85 @@ class TestNetworkStepDeclaresTheVariant:
         client, _ = factory_client
         resp = client.get("/setup/network")
         assert resp.status_code == 200
-        assert b"turns that setup network off" in resp.data
+        assert b"This page goes away" in resp.data
+        assert b"Join and finish" in resp.data
         assert b"PondHouse" in resp.data
         assert b"No network here" in resp.data
 
 
 class TestWizardWalkedInOrder:
-    """Commissioning plan test #1: a factory-fresh unit walks
-    welcome→pin→identity→network→cloud→sensors→done IN ORDER and ends with
-    every config key written and setup_completed true. Every step used to
-    be tested alone against a fresh client; nothing had ever driven the
-    whole wizard on one unit."""
+    """Commissioning plan test #1, re-cut for site flow v2: a factory-fresh,
+    uncarded unit walks welcome→pin→identity→cloud→sensors→network IN ORDER,
+    and the network join is what finishes it — every config key written,
+    setup_completed true, the bench network forgotten."""
 
-    def test_factory_unit_walks_to_done_with_every_key_written(self, factory_client, monkeypatch):
+    def test_factory_unit_walks_to_the_join_with_every_key_written(
+        self, factory_client, monkeypatch
+    ):
         import utils.netinfo as netinfo
+        from utils import netctl
 
-        monkeypatch.setattr(netinfo, "current_ssid", lambda: "PondHouse")
-        monkeypatch.setattr(netinfo, "local_ip", lambda: "192.168.1.224")
-        monkeypatch.setattr("utils.health.read_wifi_rssi_dbm", lambda: -52)
         monkeypatch.setattr(
             netinfo, "verify_device_key", lambda *a, **k: {"state": "verified", "detail": ""}
         )
+        monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": True)
+        monkeypatch.setattr(
+            netctl,
+            "scan_networks",
+            lambda iface="wlan0": [{"ssid": "PondHouse", "signal": 72, "secured": True}],
+        )
+        monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "river-cedar-42"))
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *a, **k: {"ok": True, "connected": True, "ap_restored": False, "error": None},
+        )
+        forgot = {}
+
+        def fake_forget(keep, iface="wlan0"):
+            forgot["keep"] = keep
+            return {"ok": True, "forgotten": ["BlueSignal-Shop"], "failed": [], "kept": keep}
+
+        monkeypatch.setattr(netctl, "forget_saved_wifi", fake_forget)
         client, app = factory_client
         cfg = lambda: yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())  # noqa: E731
 
         assert client.get("/setup/").status_code == 200
-        # The wizard cannot be finished from here: still the factory PIN.
+        # The wizard cannot be finished from here: still the factory PIN —
+        # neither by Finish nor by a join.
         r = client.post("/setup/done", data={}, follow_redirects=False)
         assert r.headers["Location"].endswith("/setup/pin")
+        r = client.post("/setup/network", data={"action": "join", "ssid": "PondHouse"})
+        assert r.headers["Location"].endswith("/setup/pin")
+        assert "keep" not in forgot
 
         r = client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         assert r.headers["Location"].endswith("/setup/identity")
         assert client.get("/setup/identity").status_code == 200
 
-        assert client.get("/setup/network").status_code == 200
-        r = client.post(
-            "/setup/network",
-            data={"action": "declare", "backhaul": "wifi", "gps_enabled": "on"},
-        )
-        assert r.headers["Location"].endswith("/setup/cloud")
-
         r = client.post(
             "/setup/cloud",
             data={"api_key": "k" * 40, "app_key": "B" * 32, "app_eui": "70B3D57ED0000001"},
         )
-        assert r.status_code == 302
+        assert r.headers["Location"].endswith("/setup/sensors")
 
         r = client.post("/setup/sensors", data={"ph_enabled": "on", "temperature_enabled": "on"})
         assert r.status_code == 302
 
-        assert client.get("/setup/done").status_code == 200
-        r = client.post("/setup/done", data={}, follow_redirects=False)
-        assert r.status_code == 302
+        assert client.get("/setup/network").status_code == 200
+        r = client.post(
+            "/setup/network",
+            data={
+                "action": "join",
+                "ssid": "PondHouse",
+                "password": "hunter22",
+                "gps_enabled": "on",
+            },
+        )
+        assert r.status_code == 200
+        assert b"Joined PondHouse. Setup is finished." in r.data
+        assert b"BlueSignal-Shop" in r.data
+        assert forgot["keep"] == "PondHouse"
 
         saved = cfg()
         assert saved["service_window"]["pin"] == "8642"

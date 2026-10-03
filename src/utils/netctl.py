@@ -22,9 +22,29 @@ Two jobs (commissioning plan, PR 4):
   straight back on failure — an installer locked out by a typo is worse than
   no feature.
 
+Two more since site flow v2 (2026-10-03):
+
+* **Forget the bench network.** ``forget_saved_wifi(keep=…)`` deletes every
+  saved Wi-Fi profile except the one the unit is now using (and the AP's own
+  profile). The golden image remembers the shop network; a unit in the field
+  must not, both because every card would otherwise carry the shop password
+  and because a unit near the shop would prefer it to the customer's.
+* **The captive portal.** ``ensure_captive_redirect(port)`` installs one NAT
+  rule — hotspot clients' port 80 to the Service Window port — so the phone's
+  captive-network check lands on the setup page by itself. The DNS half (every
+  name answers 192.168.4.1) is a dnsmasq-shared drop-in ``setup.sh`` writes.
+  The rule matches only traffic from the hotspot subnet to the hotspot
+  address, so it is inert whenever the AP is down. Root only: it is called
+  from the boot-time AP fallback, never from the Service Window.
+
 Everything shells NetworkManager's ``nmcli`` with a fixed argv and no shell,
 the same tool ``netinfo`` already reads through. Every call returns a result
 dict and never raises.
+
+**Simulated units never reach this code's subprocesses.** When
+``WQM1_VIRTUAL_NET`` is set, every function delegates to ``utils.netsim`` — a
+virtual radio — so a simulator running the real Service Window on a laptop
+cannot scan or reconnect that laptop's own Wi-Fi.
 """
 
 from __future__ import annotations
@@ -37,11 +57,15 @@ import subprocess  # nosec B404 - fixed argv, no shell, resolved binaries only
 import time
 from typing import Any
 
+from utils import netsim
+
 logger = logging.getLogger("wqm1.netctl")
 
 AP_CONNECTION_NAME = "wqm1-setup-ap"
 AP_GRACE_S = 45
 AP_SUBNET = "192.168.4.1/24"
+AP_ADDRESS = "192.168.4.1"
+AP_NETWORK = "192.168.4.0/24"
 DEFAULT_WIFI_IFACE = "wlan0"
 JOIN_TIMEOUT_S = 40
 _SSID_RE = re.compile(r"^[^\x00-\x1f]{1,32}$")
@@ -98,6 +122,8 @@ def ap_credentials() -> tuple[str, str]:
 def station_connected(iface: str = DEFAULT_WIFI_IFACE) -> bool:
     """True when the Wi-Fi interface has an active NetworkManager connection
     that is NOT our own access point."""
+    if netsim.is_virtual():
+        return netsim.station_connected()
     rc, out, _ = _nmcli("-t", "-f", "DEVICE,STATE,CONNECTION", "device", "status")
     if rc != 0:
         return False
@@ -109,6 +135,8 @@ def station_connected(iface: str = DEFAULT_WIFI_IFACE) -> bool:
 
 
 def ap_active(iface: str = DEFAULT_WIFI_IFACE) -> bool:
+    if netsim.is_virtual():
+        return netsim.ap_active()
     rc, out, _ = _nmcli("-t", "-f", "NAME,DEVICE", "connection", "show", "--active")
     if rc != 0:
         return False
@@ -126,6 +154,8 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
         return {"ok": False, "error": "invalid ssid"}
     if not passphrase or len(passphrase) < 8:
         return {"ok": False, "error": "passphrase must be at least 8 characters"}
+    if netsim.is_virtual():
+        return netsim.start_ap(ssid, passphrase)
     if ap_active(iface):
         return {"ok": True, "ssid": ssid, "already": True}
     # A stale profile from a previous boot would hold the old passphrase.
@@ -163,6 +193,8 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
 
 
 def stop_ap(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    if netsim.is_virtual():
+        return netsim.stop_ap()
     rc, out, err = _nmcli("connection", "down", AP_CONNECTION_NAME)
     if rc != 0 and "not an active connection" not in (err + out).lower():
         return {"ok": False, "error": err or out}
@@ -171,6 +203,8 @@ def stop_ap(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
 
 def scan_networks(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, Any]]:
     """Visible networks, strongest first. Never raises; empty on failure."""
+    if netsim.is_virtual():
+        return netsim.scan_networks()
     _nmcli("device", "wifi", "rescan", "ifname", iface, timeout=20)
     rc, out, _ = _nmcli(
         "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list", "ifname", iface
@@ -214,6 +248,8 @@ def join_network(
     """
     if not _SSID_RE.match(ssid or ""):
         return {"ok": False, "connected": False, "ap_restored": False, "error": "invalid ssid"}
+    if netsim.is_virtual():
+        return netsim.join_network(ssid, password, ap_ssid, ap_passphrase)
     had_ap = ap_active(iface)
     if had_ap:
         stop_ap(iface)
@@ -266,3 +302,98 @@ def ensure_reachable(
         "ap": bool(result.get("ok")),
         "detail": result,
     }
+
+
+def saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]]:
+    """Saved Wi-Fi profiles as ``[{"name", "ssid"}]``, excluding the setup AP.
+    The profile NAME and the network's SSID usually match (``nmcli device
+    wifi connect`` names the profile after the SSID) but need not — a profile
+    written into the golden image by hand can be called anything — so both
+    are read."""
+    if netsim.is_virtual():
+        return [{"name": s, "ssid": s} for s in netsim.saved_wifi()]
+    rc, out, _ = _nmcli("-t", "-f", "NAME,TYPE", "connection", "show")
+    if rc != 0:
+        return []
+    found: list[dict[str, str]] = []
+    for line in out.splitlines():
+        # nmcli -t escapes a ':' inside a field as '\:'; split on the last one.
+        name, sep, ctype = line.rpartition(":")
+        if not sep:
+            continue
+        name = name.replace("\\:", ":")
+        if ctype != "802-11-wireless" or name == AP_CONNECTION_NAME:
+            continue
+        rc2, ssid, _ = _nmcli("-g", "802-11-wireless.ssid", "connection", "show", name)
+        found.append({"name": name, "ssid": ssid if rc2 == 0 and ssid else name})
+    return found
+
+
+def forget_saved_wifi(keep: str | None, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Delete every saved Wi-Fi profile whose SSID is not ``keep``.
+
+    Called when setup finishes. ``keep`` is the network the unit is using now
+    (the customer's), or None on an LTE or no-network site, where nothing is
+    kept. Never touches the setup AP's profile — the AP fallback must still be
+    able to raise it. Returns ``{"ok", "forgotten": [ssid…], "kept": ssid|None}``.
+    """
+    forgotten: list[str] = []
+    failed: list[str] = []
+    for prof in saved_wifi(iface):
+        if keep and prof["ssid"] == keep:
+            continue
+        if netsim.is_virtual():
+            ok = netsim.forget_wifi(prof["ssid"])
+        else:
+            rc, _, _ = _nmcli("connection", "delete", prof["name"])
+            ok = rc == 0
+        (forgotten if ok else failed).append(prof["ssid"])
+    if forgotten:
+        logger.info("Forgot saved Wi-Fi: %s (kept %s)", ", ".join(forgotten), keep or "none")
+    if failed:
+        logger.warning("Could not forget saved Wi-Fi: %s", ", ".join(failed))
+    return {"ok": not failed, "forgotten": forgotten, "failed": failed, "kept": keep}
+
+
+def _captive_rule(port: int, iface: str) -> list[str]:
+    return [
+        "-t",
+        "nat",
+        "PREROUTING",
+        "-i",
+        iface,
+        "-s",
+        AP_NETWORK,
+        "-d",
+        AP_ADDRESS,
+        "-p",
+        "tcp",
+        "--dport",
+        "80",
+        "-j",
+        "REDIRECT",
+        "--to-ports",
+        str(int(port)),
+    ]
+
+
+def ensure_captive_redirect(port: int = 8080, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Install (idempotently) the hotspot's port-80 → Service Window rule.
+
+    Root only. A failure is logged and returned, never raised: without the
+    rule the phone simply does not open the page by itself, and the printed
+    setup card still carries the address.
+    """
+    if netsim.is_virtual():
+        return {"ok": True, "virtual": True}
+    rule = _captive_rule(port, iface)
+    table, chain, match = rule[:2], rule[2], rule[3:]
+    rc, _, _ = _run(["iptables", *table, "-C", chain, *match])
+    if rc == 0:
+        return {"ok": True, "already": True}
+    rc, out, err = _run(["iptables", *table, "-A", chain, *match])
+    if rc != 0:
+        logger.warning("Captive redirect not installed: %s", err or out or f"rc {rc}")
+        return {"ok": False, "error": err or out or f"iptables rc {rc}"}
+    logger.info("Captive redirect: hotspot port 80 -> %s", port)
+    return {"ok": True}

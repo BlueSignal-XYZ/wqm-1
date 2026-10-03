@@ -10,7 +10,14 @@ Two tiers (commissioning plan, Track B):
   full  (N ≤ 10)                     — real `python -m main --config …`
         firmware processes with simulate_enabled, each with its own Service
         Window on its own port. Proves the commissioning wizard. With
-        --commission the setup wizard is driven welcome→done over HTTP.
+        --commission the setup wizard is driven the way an installer's phone
+        drives it (site flow v2: PIN → probes → join the owner's Wi-Fi).
+
+Every full-tier unit gets a VIRTUAL Wi-Fi radio (``utils/netsim.py``,
+``WQM1_VIRTUAL_NET``): its setup hotspot is up, the bench network is saved,
+and the homeowner network ``Smith-Home`` is in range. Without it, the
+wizard's network step would scan — and on Join, reconnect — the Wi-Fi of the
+laptop running the simulator.
 
 The unit's cloud endpoints MUST be loopback. There is no flag to relax
 that: this script pointed at production is the most damaging thing in the
@@ -234,7 +241,20 @@ def _unit_files(
     }
     config = d / "config.yaml"
     config.write_text(yaml.safe_dump(cfg, sort_keys=False))
-    return {"dir": d, "identity": identity, "config": config}
+    netsim_state = d / "netsim.json"
+    netsim_state.write_text(json.dumps(virtual_site_state(serial), indent=2))
+    return {"dir": d, "identity": identity, "config": config, "netsim": netsim_state}
+
+
+def virtual_site_state(serial: str) -> dict[str, Any]:
+    """A unit just powered on at a site: no known network in range, so its
+    setup hotspot is up; the bench network is still saved from the shop."""
+    from utils import netsim
+    from utils.identity import ap_name
+
+    state = netsim._default_state()
+    state.update(ap=True, ap_ssid=ap_name(serial), station=None)
+    return state
 
 
 class _Http:
@@ -256,23 +276,33 @@ class _Http:
 
 
 def commission_over_http(base: str, api_key: str, pin: str = SIM_PIN) -> list[str]:
-    """Walk the setup wizard welcome→done the way an installer's phone does.
-    Returns the step list completed, in order."""
+    """Walk the setup wizard the way an installer's phone does (site flow v2).
+
+    A full-tier unit is carded (identity file + cloud key in its config), so
+    the walk is welcome → pin → sensors → network, and the JOIN finishes
+    setup. Returns the step list completed, in order. ``api_key`` is kept for
+    the uncarded case: if the wizard asks for a key, it is given.
+    """
     import urllib.parse  # noqa: F401 — used by _Http.post
+
+    from utils import netsim
 
     c = _Http(base)
     done: list[str] = []
+    # On a virtual unit the browser counts as "on the hotspot", so first setup
+    # needs no PIN; logging in with the factory PIN still works and is what a
+    # LAN visit does.
     c.post("/login", {"pin": FACTORY_PIN})
-    c.get("/setup/")
+    _, welcome = c.get("/setup/")
     done.append("welcome")
+    carded = "already knows who it" in welcome
     c.post("/setup/pin", {"pin": pin, "pin_confirm": pin})
     done.append("pin")
-    c.get("/setup/identity")
-    done.append("identity")
-    c.get("/setup/network")
-    done.append("network")
-    c.post("/setup/cloud", {"api_key": api_key})
-    done.append("cloud")
+    if not carded:
+        c.get("/setup/identity")
+        done.append("identity")
+        c.post("/setup/cloud", {"api_key": api_key})
+        done.append("cloud")
     c.post(
         "/setup/sensors",
         {
@@ -284,8 +314,17 @@ def commission_over_http(base: str, api_key: str, pin: str = SIM_PIN) -> list[st
         },
     )
     done.append("sensors")
-    c.post("/setup/done", {})
-    done.append("done")
+    _, joined = c.post(
+        "/setup/network",
+        {
+            "action": "join",
+            "ssid": netsim.DEMO_HOME_SSID,
+            "password": netsim.DEMO_HOME_PASSWORD,
+            "gps_enabled": "on",
+        },
+    )
+    if "Setup is finished" in joined:
+        done.append("network")
     return done
 
 
@@ -304,6 +343,7 @@ def run_full(args: argparse.Namespace, workdir: Path, keys: dict[str, str]) -> d
                 env,
                 BLUESIGNAL_IDENTITY_FILE=str(files["identity"]),
                 BLUESIGNAL_CONFIG=str(files["config"]),
+                WQM1_VIRTUAL_NET=str(files["netsim"]),
             )
             fw = subprocess.Popen(  # nosec B603 — our own entry point, loopback config
                 [sys.executable, "-m", "main", "--config", str(files["config"])],
@@ -349,6 +389,9 @@ def run_full(args: argparse.Namespace, workdir: Path, keys: dict[str, str]) -> d
         cfg = yaml.safe_load(Path(u["dir"], "config.yaml").read_text()) or {}
         u["setup_completed"] = bool((cfg.get("service_window") or {}).get("setup_completed"))
         u["pin_changed"] = str((cfg.get("service_window") or {}).get("pin")) != FACTORY_PIN
+        net = json.loads(Path(u["dir"], "netsim.json").read_text())
+        u["wifi"] = net.get("station")
+        u["saved_wifi"] = net.get("saved")
     return {"tier": "full", "count": args.count, "units": units}
 
 

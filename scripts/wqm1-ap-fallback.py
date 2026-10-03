@@ -45,9 +45,26 @@ def resolve_credentials() -> tuple[str, str]:
     return ap_credentials()
 
 
-def main() -> int:
-    from utils.netctl import ensure_reachable
+def service_window_port(config_path: str = "/etc/bluesignal/config.yaml") -> int:
+    """The Service Window's port from the firmware config (default 8080)."""
+    try:
+        import yaml
 
+        with open(config_path) as f:
+            raw = yaml.safe_load(f) or {}
+        return int((raw.get("service_window") or {}).get("port") or 8080)
+    except (OSError, ValueError, TypeError, ImportError):
+        return 8080
+
+
+def main() -> int:
+    from utils.netctl import ensure_captive_redirect, ensure_reachable
+
+    # The captive-portal NAT rule is installed every boot, whatever happens
+    # next: it matches only hotspot clients, so it is inert on a unit that
+    # joins its saved network, and in place the moment the AP comes up —
+    # including when a failed join in the setup wizard brings the AP back.
+    ensure_captive_redirect(service_window_port())
     ssid, passphrase = resolve_credentials()
     result = ensure_reachable(ssid, passphrase)
     if result.get("mode") == "station":

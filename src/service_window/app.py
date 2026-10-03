@@ -108,6 +108,13 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
     # Register blueprints
     app.register_blueprint(auth_bp)
 
+    # Captive portal first (site flow v2): a phone joining the setup hotspot
+    # lands on the setup page by itself. Inert unless the hotspot is up.
+    from service_window.captive import PROBE_PATHS, captive_bp, foreign_host_redirect
+
+    app.register_blueprint(captive_bp)
+    app.before_request(foreign_host_redirect)
+
     from service_window.routes.awg import awg_bp
     from service_window.routes.calibration import calibration_bp
     from service_window.routes.diagnostics import diagnostics_bp
@@ -149,7 +156,7 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
     def _force_setup():  # type: ignore[reportUnusedFunction]
         from flask import redirect, request
 
-        allowed = ("/setup", "/login", "/logout", "/static", "/provision/qr.svg")
+        allowed = ("/setup", "/login", "/logout", "/static", "/provision/qr.svg", *PROBE_PATHS)
         if request.path.startswith(allowed):
             return None
         if needs_setup(app.config):

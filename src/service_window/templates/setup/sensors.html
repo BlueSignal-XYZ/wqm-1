@@ -39,7 +39,7 @@ water. This can take a minute or two after power-on.</p>
    to this check afterwards.</p>
 <div class="setup-actions">
     <a class="btn {{ 'btn-primary' if ready else 'btn-secondary' }} btn-lg"
-       href="{{ url_for('setup.done') }}">{{ 'Continue' if ready else 'Continue anyway' }}</a>
+       href="{{ url_for('setup.network') }}">{{ 'Continue' if ready else 'Continue anyway' }}</a>
 </div>
 {% endblock %}
 {% block scripts %}

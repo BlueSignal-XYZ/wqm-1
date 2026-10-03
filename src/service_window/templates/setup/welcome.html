@@ -2,13 +2,28 @@
 {% block title %}Setup{% endblock %}
 {% block content %}
 <h1 class="setup-h1">Let&rsquo;s set this unit up</h1>
-<p class="lead">About five minutes, right from your phone. Four things happen:</p>
+{% if carded %}
+<p class="lead">About three minutes, right from your phone. This unit already knows who it
+is and how to reach BlueSignal Cloud &mdash; that was done before it shipped. Three things
+happen here:</p>
 <ol class="welcome-list">
-    <li><b>Secure it</b> — replace the factory PIN with your own.</li>
-    <li><b>Record its identity</b> — device ID and radio address for your install records.</li>
-    <li><b>Connect the cloud</b> — claim the unit at cloud.bluesignal.xyz and paste its key.</li>
-    <li><b>Watch it come alive</b> — every sensor checked live before you walk away.</li>
+    <li><b>Secure it</b> &mdash; replace the factory PIN with your own.</li>
+    <li><b>Watch it come alive</b> &mdash; every fitted probe checked live, in the water.</li>
+    <li><b>Connect it, last</b> &mdash; the site's Wi-Fi, its own LTE, or no network at all.
+        Joining the site's Wi-Fi finishes setup.</li>
 </ol>
+<p class="skip-note">Afterwards, scan the label on the box with your phone's camera to put
+the unit on the owner's BlueSignal Cloud account.</p>
+{% else %}
+<p class="lead">About five minutes, right from your phone. Five things happen:</p>
+<ol class="welcome-list">
+    <li><b>Secure it</b> &mdash; replace the factory PIN with your own.</li>
+    <li><b>Record its identity</b> &mdash; device ID and radio address for your install records.</li>
+    <li><b>Connect the cloud</b> &mdash; claim the unit at cloud.bluesignal.xyz and paste its key.</li>
+    <li><b>Watch it come alive</b> &mdash; every sensor checked live before you walk away.</li>
+    <li><b>Connect it, last</b> &mdash; joining the site's Wi-Fi finishes setup.</li>
+</ol>
+{% endif %}
 <div class="setup-actions">
     <a class="btn btn-primary btn-lg" href="{{ url_for('setup.pin') }}">Start setup</a>
 </div>

@@ -235,6 +235,17 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# Captive portal for that AP (site flow v2): NetworkManager's shared-mode
+# dnsmasq reads this drop-in for the hotspot only, so every name a joined
+# phone looks up answers 192.168.4.1, and DHCP option 114 (RFC 8910) hands
+# out the setup URL. The phone's captive-network check then opens the setup
+# page by itself. The port-80 half is a NAT rule the AP fallback installs.
+sudo mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+printf '%s\n' \
+    '# BlueSignal WQM-1 setup hotspot captive portal (setup.sh)' \
+    'address=/#/192.168.4.1' \
+    'dhcp-option=114,"http://192.168.4.1/setup/"' \
+    | sudo tee /etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf > /dev/null
 # First-boot card consumer (root, oneshot before the firmware): moves the
 # bench-written bluesignal-cloud.json off the FAT boot partition into
 # /etc/bluesignal/config.yaml and deletes it — commissioning plan, PR 3/5.

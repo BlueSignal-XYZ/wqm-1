@@ -347,6 +347,15 @@ class TestManyUnits:
         assert cfg["cmd_sock"] == cfg["service_window"]["cmd_sock"]
         assert cfg["cmd_sock"].startswith(str(files["dir"]))
         assert cfg["service_window"]["port"] == 8102
+        # Site flow v2: every full-tier unit has a VIRTUAL radio with its
+        # setup hotspot up — the wizard must never touch the host's Wi-Fi.
+        net = json.loads(files["netsim"].read_text())
+        assert net["ap"] is True and net["ap_ssid"] == "WQM1-0002"
+        assert net["station"] is None and "BlueSignal-Shop" in net["saved"]
+
+    def test_full_tier_processes_run_on_the_virtual_radio(self):
+        src = (Path(__file__).parent.parent / "scripts" / "simulate-fleet.py").read_text()
+        assert 'WQM1_VIRTUAL_NET=str(files["netsim"])' in src
 
     def test_script_refuses_production_before_doing_anything(self, tmp_path, capsys):
         import importlib.util
