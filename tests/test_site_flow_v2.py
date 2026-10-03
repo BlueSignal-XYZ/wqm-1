@@ -393,3 +393,279 @@ class TestDemoUnit:
         mod = self._mod()
         url = mod.demo_claim_url("SIM-WQM1-00001", "demo" + "0" * 28)
         assert url.startswith("https://cloud.bluesignal.xyz/claim/SIM-WQM1-00001?demo=1#t=")
+
+
+class TestProbePageAgreesWithItself:
+    """The checkbox and the health card answered "is a flow meter fitted?"
+    differently for a unit whose config never mentioned one: ticked above,
+    "not installed" below. Opt-in probes are unticked when absent."""
+
+    def _page(self, tmp_path, mock_hardware, **extra):
+        app = make_app(tmp_path, mock_hardware, pin="8642", config_extra=extra or None)
+        with app.test_client() as c:
+            with c.session_transaction() as sess:
+                sess["pin_verified"] = True
+            return c.get("/setup/sensors").data.decode()
+
+    def test_absent_flow_is_unticked_and_listed_as_not_fitted(self, tmp_path, mock_hardware):
+        page = self._page(tmp_path, mock_hardware)
+        assert 'name="flow_pulse_enabled" >' in page  # unticked
+        assert "Not fitted on this unit:" in page and "flow meter" in page
+        assert 'name="ph_enabled" checked' in page  # core four still default fitted
+
+    def test_declared_flow_is_ticked_and_gets_a_card(self, tmp_path, mock_hardware):
+        page = self._page(tmp_path, mock_hardware, flow_pulse_enabled=True)
+        assert 'name="flow_pulse_enabled" checked' in page
+        assert "flow meter" not in page.split("Not fitted on this unit:")[-1].split("</p>")[0]
+
+
+# ── Scenario matrix (founder 2026-10-03: "test for failures … a variety of
+#    scenarios"). Each test is one thing that happens at a real site. ─────────
+
+
+def _seed_networks(path, extra):
+    """Start the virtual radio at a site: hotspot up, the shop network saved,
+    plus whatever networks this scenario needs in range."""
+    from utils import netsim
+
+    state = netsim._default_state()
+    state.update(ap=True, ap_ssid="WQM1-0001")
+    state["networks"] += extra
+    path.write_text(json.dumps(state))
+
+
+class TestSiteScenarios:
+    def _client(self, tmp_path, mock_hardware, pin="8642", **kw):
+        app = make_app(tmp_path, mock_hardware, pin=pin, **kw)
+        c = app.test_client()
+        with c.session_transaction() as sess:
+            sess["pin_verified"] = True
+        return c, app
+
+    def _done(self, app):
+        cfg = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        return bool((cfg.get("service_window") or {}).get("setup_completed"))
+
+    def test_hidden_network_typed_by_hand_that_is_not_there(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        _seed_networks(virtual_net, [])
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "join", "ssid": "Barn-5G", "password": "x" * 10})
+        page = c.get("/setup/network").data
+        assert b"No network named Barn-5G is in range" in page
+        assert json.loads(virtual_net.read_text())["ap"] is True
+        assert not self._done(app)
+
+    def test_open_network_with_a_blank_password(self, tmp_path, mock_hardware, virtual_net):
+        _seed_networks(virtual_net, [])
+        c, app = self._client(tmp_path, mock_hardware)
+        r = c.post("/setup/network", data={"action": "join", "ssid": "xfinitywifi", "password": ""})
+        assert b"Joined xfinitywifi" in r.data
+        assert self._done(app)
+
+    def test_names_and_passwords_with_awkward_characters(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        ssid = 'O\'Brien "Home": 2.4G'
+        password = 'p;a,s:s"w\\o rd!'
+        _seed_networks(
+            virtual_net, [{"ssid": ssid, "signal": 66, "secured": True, "password": password}]
+        )
+        c, app = self._client(tmp_path, mock_hardware)
+        page = c.get("/setup/network").data.decode()
+        assert "O&#39;Brien &#34;Home&#34;: 2.4G" in page  # escaped, not broken HTML
+        r = c.post("/setup/network", data={"action": "join", "ssid": ssid, "password": password})
+        assert b"Setup is finished" in r.data
+        assert json.loads(virtual_net.read_text())["station"] == ssid
+
+    def test_longest_wpa2_password(self, tmp_path, mock_hardware, virtual_net):
+        password = "A1" * 31 + "Z"  # 63 characters, the WPA2 maximum
+        _seed_networks(
+            virtual_net, [{"ssid": "LongPass", "signal": 70, "secured": True, "password": password}]
+        )
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "join", "ssid": "LongPass", "password": password})
+        assert self._done(app)
+
+    def test_wrong_then_right_clears_the_old_error(self, tmp_path, mock_hardware, virtual_net):
+        from utils import netsim
+
+        _seed_networks(virtual_net, [])
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "nope"})
+        assert "LAST_JOIN" in app.config
+        c.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "Smith-Home", "password": netsim.DEMO_HOME_PASSWORD},
+        )
+        assert "LAST_JOIN" not in app.config
+        assert b"Could not join" not in c.get("/setup/network").data
+
+    def test_three_wrong_passwords_never_strand_the_installer(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        _seed_networks(virtual_net, [])
+        c, app = self._client(tmp_path, mock_hardware)
+        for attempt in ("one", "two", "three"):
+            c.post(
+                "/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": attempt}
+            )
+            assert json.loads(virtual_net.read_text())["ap"] is True, attempt
+        assert not self._done(app)
+
+    def test_lte_site_forgets_every_wifi_and_records_lte(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        _seed_networks(virtual_net, [])
+        c, app = self._client(tmp_path, mock_hardware)
+        r = c.post("/setup/network", data={"action": "declare", "backhaul": "lte"})
+        assert r.headers["Location"].endswith("/setup/done")
+        c.post("/setup/done", data={})
+        cfg = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert cfg["backhaul"] == "lte"
+        assert json.loads(virtual_net.read_text())["saved"] == []
+        assert self._done(app)
+
+    def test_declare_without_choosing_changes_nothing(self, tmp_path, mock_hardware, virtual_net):
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "declare"})
+        cfg = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert "backhaul" not in cfg
+        assert not self._done(app)
+
+    @pytest.mark.parametrize("ssid", ["", "   ", "bad\x07name", "x" * 33])
+    def test_unusable_network_names_never_touch_the_radio(
+        self, tmp_path, mock_hardware, monkeypatch, ssid
+    ):
+        from utils import netctl
+
+        called = []
+        monkeypatch.setattr(netctl, "join_network", lambda *a, **k: called.append(a))
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "join", "ssid": ssid, "password": "whatever1"})
+        assert called == []
+        assert not self._done(app)
+
+    def test_failed_join_with_no_hotspot_to_restore_still_says_why(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        from utils import netctl
+
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *a, **k: {
+                "ok": False,
+                "connected": False,
+                "ap_restored": False,
+                "error": "radio busy",
+            },
+        )
+        monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "cedar-river-42"))
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "x" * 9})
+        assert b"radio busy" in c.get("/setup/network").data
+        assert not self._done(app)
+
+    def test_a_profile_that_will_not_delete_does_not_block_finishing(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        """polkit refusing `nmcli connection delete` must not leave a unit
+        half set up on the owner's network."""
+        from utils import netctl
+
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *a, **k: {"ok": True, "connected": True, "ap_restored": False, "error": None},
+        )
+        monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "cedar-river-42"))
+        monkeypatch.setattr(
+            netctl,
+            "forget_saved_wifi",
+            lambda keep, iface="wlan0": {
+                "ok": False,
+                "forgotten": [],
+                "failed": ["BlueSignal-Shop"],
+                "kept": keep,
+            },
+        )
+        c, app = self._client(tmp_path, mock_hardware)
+        r = c.post(
+            "/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "x" * 9}
+        )
+        assert b"Setup is finished" in r.data
+        assert b"The unit forgot" not in r.data  # never claims a forget that failed
+        assert self._done(app)
+
+    def test_keep_is_refused_while_only_the_hotspot_is_up(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        _seed_networks(virtual_net, [])
+        c, app = self._client(tmp_path, mock_hardware)
+        c.post("/setup/network", data={"action": "keep"})
+        assert not self._done(app)
+
+    def test_android_and_windows_probes_open_the_setup_page_too(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        _seed_networks(virtual_net, [])
+        app = make_app(tmp_path, mock_hardware)
+        with app.test_client() as c:
+            for path in ("/generate_204", "/gen_204", "/connecttest.txt", "/redirect"):
+                r = c.get(path)
+                assert r.status_code == 302 and r.headers["Location"] == "/setup/", path
+
+    def test_a_virtual_unit_behind_a_tunnel_never_redirect_loops(
+        self, tmp_path, mock_hardware, virtual_net
+    ):
+        """A browser bot reaches the demo unit at a tunnel host name. The
+        foreign-host rule must not bounce it to 192.168.4.1."""
+        _seed_networks(virtual_net, [])
+        app = make_app(tmp_path, mock_hardware)
+        with app.test_client() as c:
+            r = c.get("/setup/", headers={"Host": "demo-unit.trycloudflare.com"})
+        assert r.status_code == 200
+
+
+class TestNetworkModuleFailures:
+    def test_captive_rule_without_iptables_is_logged_not_raised(self, monkeypatch):
+        from utils import netctl
+
+        monkeypatch.setattr(
+            netctl, "_run", lambda argv, timeout=15.0: (127, "", "iptables not found")
+        )
+        out = netctl.ensure_captive_redirect(8080)
+        assert out["ok"] is False and "iptables" in out["error"]
+
+    def test_captive_rule_already_present_is_not_added_twice(self, monkeypatch):
+        from utils import netctl
+
+        calls = []
+
+        def run(argv, timeout=15.0):
+            calls.append(argv)
+            return (0, "", "")  # -C says the rule exists
+
+        monkeypatch.setattr(netctl, "_run", run)
+        assert netctl.ensure_captive_redirect(8080)["already"] is True
+        assert not any("-A" in c for c in calls)
+
+    def test_corrupt_virtual_state_falls_back_to_the_demo_scene(self, virtual_net):
+        from utils import netsim
+
+        virtual_net.write_text("{not json")
+        assert netsim.saved_wifi() == [netsim.BENCH_SSID]
+        assert netsim.scan_networks()[0]["ssid"] == netsim.DEMO_HOME_SSID
+
+    def test_forget_with_nothing_saved_is_a_clean_no_op(self, monkeypatch):
+        from utils import netctl
+
+        monkeypatch.setattr(netctl, "_run", lambda argv, timeout=15.0: (0, "", ""))
+        assert netctl.forget_saved_wifi("Smith-Home") == {
+            "ok": True,
+            "forgotten": [],
+            "failed": [],
+            "kept": "Smith-Home",
+        }

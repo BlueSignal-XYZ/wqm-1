@@ -2,17 +2,17 @@
 {% block title %}Setup — Done{% endblock %}
 {% block content %}
 <h1 class="setup-h1">Joined {{ ssid }}. Setup is finished.</h1>
-<p class="lead">{{ identity.device_id }} is restarting on the owner's network and will
-check in to BlueSignal Cloud within a minute or two.</p>
-<ol class="welcome-list">
-    <li>Your phone drops back to its usual connection by itself.</li>
-    <li><b>Scan the label on the box</b> with your camera. It opens BlueSignal Cloud, shows
-        this unit checking in, and puts it on the owner's account.</li>
-</ol>
+<p class="lead">{{ identity.device_id }} is restarting on the owner&rsquo;s network. It
+checks in to BlueSignal Cloud within a minute or two.</p>
+<div class="next-step">
+    <div class="next-step-title">Next: scan the label on the box</div>
+    <p>Your phone camera opens BlueSignal Cloud, shows the unit checking in, and adds it
+    to the owner&rsquo;s account.</p>
+</div>
 {% if forgotten %}
-<p class="skip-note">Forgotten on this unit: {{ forgotten|join(', ') }} &mdash; it will only
-ever look for {{ ssid }} from now on.</p>
+<p class="skip-note">The unit forgot {{ forgotten|join(', ') }} and will only look for
+{{ ssid }} from now on.</p>
 {% endif %}
-<p class="skip-note">On a real unit your phone usually never sees this page: the setup
-network goes away the moment the join starts. That is expected.</p>
+<p class="skip-note">On a real unit your phone usually never sees this page, because the
+setup network turns off when the join starts. That is expected.</p>
 {% endblock %}

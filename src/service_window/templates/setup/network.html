@@ -3,8 +3,6 @@
 {% block title %}Setup — Network{% endblock %}
 {% block content %}
 <h1 class="setup-h1">Last step: connect it</h1>
-<p class="lead">Do this <b>where the unit will actually live</b>, lid closed. A signal that
-works on the bench can fail behind a panel.</p>
 
 {% if last_join %}
 <div class="flash error" role="alert">
@@ -14,17 +12,12 @@ works on the bench can fail behind a panel.</p>
 {% endif %}
 
 <form method="post" id="network-form">
-    <fieldset>
-        <legend>Fitted radios</legend>
-        <label><input type="checkbox" name="lora_enabled" {{ 'checked' if lora_enabled }}> LoRa radio (long-range backup to a gateway)</label>
-        <label><input type="checkbox" name="gps_enabled" {{ 'checked' if gps_enabled }}> GPS receiver</label>
-    </fieldset>
-
     {% if station_ssid %}
-    <h2>On a network now</h2>
-    <div class="id-block">
-        <div class="id-label">Network</div>
-        <div class="id-row"><code class="id-value">{{ station_ssid }}</code></div>
+    <p class="lead">This unit is on <b>{{ station_ssid }}</b>.</p>
+    <div class="grid">
+        {% for name, card in cards.items() %}
+        {{ health_card('WiFi' if name == 'wifi' else name|capitalize, card) }}
+        {% endfor %}
     </div>
     <div class="id-block">
         <div class="id-label">Signal</div>
@@ -34,70 +27,83 @@ works on the bench can fail behind a panel.</p>
         <div class="id-label">Address on this network</div>
         <div class="id-row"><code class="id-value">{{ wifi.ip or '—' }}</code></div>
     </div>
-    <div class="grid">
-        {% for name, card in cards.items() %}
-        {{ health_card('WiFi' if name == 'wifi' else name|capitalize, card) }}
-        {% endfor %}
-    </div>
     <div class="setup-actions">
-        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg">Keep {{ station_ssid }} and finish</button>
+        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg btn-block">Keep {{ station_ssid }} and finish</button>
     </div>
     {% endif %}
 
     {% if on_ap or not station_ssid %}
-    <h2>The owner's Wi-Fi</h2>
+    {% if not station_ssid %}
+    <p class="lead">Have the owner pick their Wi-Fi and type the password. Do this where
+    the unit will live, lid closed.</p>
     {% if not on_ap %}<p class="skip-note">Not connected to any network yet.</p>{% endif %}
-    {% if on_ap %}
-    <div class="howto">
-        <div class="howto-title">What happens when you tap Join</div>
-        <p class="skip-note" style="margin-top: 0">This page goes away. Your phone is on the
-        unit's own setup network, and the unit turns that network off to join the owner's.
-        Your phone drops back to its usual connection by itself. <b>Setup finishes on the
-        unit</b> &mdash; then scan the label on the box with your camera to put
-        {{ identity.device_id }} on the owner's account and see it check in.</p>
-        <p class="skip-note">Wrong password? The setup network comes back within a minute
-        and this page tells you what went wrong.</p>
-    </div>
+    {% else %}
+    <h2>Or join a different network</h2>
     {% endif %}
-    <label for="ssid">Network</label>
+    <label for="ssid">Wi-Fi network</label>
     {% if networks %}
     <select id="ssid" name="ssid">
         {% for n in networks %}
-        <option value="{{ n.ssid }}" {{ 'selected' if last_join and last_join.ssid == n.ssid }}>{{ n.ssid }} — {{ n.signal }}%{{ ' (open)' if not n.secured }}</option>
+        <option value="{{ n.ssid }}" {{ 'selected' if last_join and last_join.ssid == n.ssid }}>{{ n.ssid }}{{ ' (open)' if not n.secured }} &middot; {{ n.signal }}%</option>
         {% endfor %}
     </select>
     {% else %}
-    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name">
-    <p class="skip-note">No networks were found on the last scan.</p>
+    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" autocapitalize="off" autocorrect="off">
+    <p class="skip-note">No networks found. <button type="submit" class="link-button" form="rescan-form">Scan again</button></p>
     {% endif %}
-    <label for="password">Password &mdash; the owner types it</label>
-    <input id="password" name="password" type="password" autocomplete="off" placeholder="Leave blank for an open network">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Leave blank for an open network">
+    <label class="inline-check"><input type="checkbox" id="show-password"> Show password</label>
+    {% if on_ap %}
+    <p class="skip-note">This page goes away when you tap Join: the unit turns off its
+    setup network and your phone drops back to its usual connection. A wrong password
+    brings this page back within a minute, with the reason.</p>
+    {% endif %}
     <div class="setup-actions">
-        <button type="submit" name="action" value="join" class="btn btn-primary btn-lg">Join and finish</button>
-        <button type="submit" class="btn btn-secondary" form="rescan-form">Rescan</button>
+        <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join and finish</button>
     </div>
+    {% if networks %}<p class="skip-note center"><button type="submit" class="link-button" form="rescan-form">Don&rsquo;t see it? Scan again</button></p>{% endif %}
     {% endif %}
 
-    <h2>No Wi-Fi at this unit?</h2>
-    <fieldset>
-        <legend>How does it reach the cloud?</legend>
-        <label><input type="radio" name="backhaul" value="lte" {{ 'checked' if backhaul == 'lte' }}> Its own LTE modem (option HAT with a SIM)</label>
-        <label><input type="radio" name="backhaul" value="none" {{ 'checked' if backhaul == 'none' }}> No network here &mdash; buffer locally and upload when a link exists</label>
-    </fieldset>
-    <div class="setup-actions">
+    <details class="setup-details">
+        <summary>No Wi-Fi at this unit?</summary>
+        <fieldset>
+            <legend>How does it reach the cloud?</legend>
+            <label><input type="radio" name="backhaul" value="lte" {{ 'checked' if backhaul == 'lte' }}> Its own LTE modem (option HAT with a SIM)</label>
+            <label><input type="radio" name="backhaul" value="none" {{ 'checked' if backhaul == 'none' }}> No network here: it keeps readings locally and uploads when a link exists</label>
+        </fieldset>
         <button type="submit" name="action" value="declare" class="btn btn-secondary">Continue without Wi-Fi</button>
-    </div>
+    </details>
+
+    <details class="setup-details">
+        <summary>Radios fitted <span class="summary-hint">{{ ['LoRa' if lora_enabled, 'GPS' if gps_enabled]|select|join(' + ') or 'none' }}</span></summary>
+        <label><input type="checkbox" name="lora_enabled" {{ 'checked' if lora_enabled }}> LoRa radio (long-range backup to a gateway)</label>
+        <label><input type="checkbox" name="gps_enabled" {{ 'checked' if gps_enabled }}> GPS receiver</label>
+        <p class="skip-note">Saved with whichever button you tap above. Monitoring and
+        fail-safe control run on the unit whatever the network does.</p>
+    </details>
 </form>
 <form method="post" id="rescan-form"><input type="hidden" name="action" value="rescan"></form>
-
-<div class="howto">
-    <div class="howto-title">Why this matters</div>
-    <p class="skip-note" style="margin-top: 0">
-        The network is how this unit uploads readings and receives updates.
-        Either way, <b>control decisions are made on this unit</b>, so a dropped
-        network never stops monitoring, logging, or fail-safe behaviour. A site with no
-        network at all is a valid outcome: readings wait on the unit and upload when a
-        link exists.
-    </p>
-</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var pw = document.getElementById('password');
+  var show = document.getElementById('show-password');
+  if (pw && show) show.addEventListener('change', function () { pw.type = show.checked ? 'text' : 'password'; });
+  var form = document.getElementById('network-form');
+  var join = document.getElementById('join-button');
+  if (form && join) {
+    form.addEventListener('submit', function (e) {
+      if (e.submitter !== join) return;
+      // The join takes up to 40 s and usually takes this page with it.
+      // Say so, and stop a second tap from starting a second join.
+      setTimeout(function () {
+        join.disabled = true;
+        join.textContent = 'Joining… your phone will reconnect by itself';
+      }, 0);
+    });
+  }
+})();
+</script>
 {% endblock %}

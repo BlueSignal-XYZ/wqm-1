@@ -3,28 +3,27 @@
 {% block content %}
 <h1 class="setup-h1">Let&rsquo;s set this unit up</h1>
 {% if carded %}
-<p class="lead">About three minutes, right from your phone. This unit already knows who it
-is and how to reach BlueSignal Cloud &mdash; that was done before it shipped. Three things
-happen here:</p>
+<p class="lead">About three minutes. This unit already knows who it is and how to reach
+BlueSignal Cloud, so the only things typed here are a PIN and the owner&rsquo;s Wi-Fi
+password.</p>
 <ol class="welcome-list">
-    <li><b>Secure it</b> &mdash; replace the factory PIN with your own.</li>
-    <li><b>Watch it come alive</b> &mdash; every fitted probe checked live, in the water.</li>
-    <li><b>Connect it, last</b> &mdash; the site's Wi-Fi, its own LTE, or no network at all.
-        Joining the site's Wi-Fi finishes setup.</li>
+    <li><b>Set a PIN</b> for this unit.</li>
+    <li><b>Check the probes</b> in the water.</li>
+    <li><b>Join the owner&rsquo;s Wi-Fi.</b> That finishes setup.</li>
 </ol>
-<p class="skip-note">Afterwards, scan the label on the box with your phone's camera to put
-the unit on the owner's BlueSignal Cloud account.</p>
+<p class="skip-note">Then scan the label on the box to add the unit to the owner&rsquo;s
+account.</p>
 {% else %}
-<p class="lead">About five minutes, right from your phone. Five things happen:</p>
+<p class="lead">About five minutes, right from your phone.</p>
 <ol class="welcome-list">
-    <li><b>Secure it</b> &mdash; replace the factory PIN with your own.</li>
-    <li><b>Record its identity</b> &mdash; device ID and radio address for your install records.</li>
-    <li><b>Connect the cloud</b> &mdash; claim the unit at cloud.bluesignal.xyz and paste its key.</li>
-    <li><b>Watch it come alive</b> &mdash; every sensor checked live before you walk away.</li>
-    <li><b>Connect it, last</b> &mdash; joining the site's Wi-Fi finishes setup.</li>
+    <li><b>Set a PIN</b> for this unit.</li>
+    <li><b>Record its identity</b> for your install records.</li>
+    <li><b>Connect the cloud:</b> paste the key from cloud.bluesignal.xyz.</li>
+    <li><b>Check the probes</b> in the water.</li>
+    <li><b>Join the site&rsquo;s Wi-Fi.</b> That finishes setup.</li>
 </ol>
 {% endif %}
 <div class="setup-actions">
-    <a class="btn btn-primary btn-lg" href="{{ url_for('setup.pin') }}">Start setup</a>
+    <a class="btn btn-primary btn-lg btn-block" href="{{ url_for('setup.pin') }}">Start setup</a>
 </div>
 {% endblock %}

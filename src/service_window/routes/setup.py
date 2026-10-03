@@ -410,6 +410,20 @@ FITTABLE_PROBES = (
 )
 
 
+_CORE_PROBES = ("ph_enabled", "tds_enabled", "turbidity_enabled", "temperature_enabled")
+_PROBE_NAMES = {
+    "ph": "pH",
+    "tds": "TDS",
+    "turbidity": "turbidity",
+    "temperature": "temperature",
+    "orp": "ORP",
+    "chlorine": "chlorine",
+    "conductivity": "conductivity",
+    "salinity": "salinity",
+    "flow": "flow meter",
+}
+
+
 @setup_bp.route("/sensors", methods=["GET", "POST"])
 @login_required
 def sensors() -> ResponseReturnValue:
@@ -443,18 +457,28 @@ def sensors() -> ResponseReturnValue:
         readings = []
     cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
     ready = all(c["status"] in ("ok", "disabled") for c in cards.values())
-    # Absent key = fitted, matching health.py — a unit upgrading from before
-    # these keys existed must not appear to have lost its probes.
-    fitment = {key: bool(config.get(key, key != "orp_enabled")) for key, _ in FITTABLE_PROBES}
+    # Absent key = fitted for the core four ONLY, matching health.py — a unit
+    # upgrading from before these keys existed must not appear to have lost
+    # its probes. ORP and the flow meter are opt-in: absent means not fitted.
+    # (The checkbox used to default flow to ticked while the health card said
+    # "flow meter is not installed" — two answers on one page.)
+    fitment = {key: bool(config.get(key, key in _CORE_PROBES)) for key, _ in FITTABLE_PROBES}
+    # Lead with the probes that are fitted; name the rest in one line rather
+    # than five grey "not installed" cards burying the four that matter.
+    fitted_cards = {k: c for k, c in cards.items() if c.get("status") != "disabled"}
+    not_fitted = [_PROBE_NAMES.get(k, k) for k, c in cards.items() if c.get("status") == "disabled"]
     return render_template(
         "setup/sensors.html",
         steps=_steps(),
         step="sensors",
         cards=cards,
+        fitted_cards=fitted_cards,
+        not_fitted=not_fitted,
         ready=ready,
         have_readings=bool(readings),
         probes=FITTABLE_PROBES,
         fitment=fitment,
+        carded=is_carded(config),
     )
 
 
