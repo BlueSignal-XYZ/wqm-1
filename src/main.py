@@ -61,6 +61,32 @@ from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.sdnotify import SdNotifier
 from utils.watchdog import FanController, HardwareWatchdog
 
+
+def _hat_nets() -> dict[str, int]:
+    """Every HAT net the direct-header stack drives, by name → BCM number."""
+    from utils.config import (
+        FAN_EN,
+        GPS_EXTINT,
+        LED_PINS,
+        LORA_BUSY,
+        LORA_DIO1,
+        LORA_RST,
+        RELAY_PINS,
+    )
+
+    nets: dict[str, int] = {}
+    for i, pin in enumerate(RELAY_PINS, start=1):
+        nets[f"relay_{i}"] = pin
+    for i, pin in enumerate(LED_PINS, start=1):
+        nets[f"led_{i}"] = pin
+    nets["lora_rst"] = LORA_RST
+    nets["lora_busy"] = LORA_BUSY
+    nets["lora_dio1"] = LORA_DIO1
+    nets["gps_extint"] = GPS_EXTINT
+    nets["fan_en"] = FAN_EN
+    return nets
+
+
 logger = logging.getLogger("wqm1")
 
 FW_VERSION = FIRMWARE_VERSION
@@ -129,6 +155,7 @@ class WQM1App:
 
         # Components (lazy-initialised in start(); typed Any to avoid
         # union-attr noise — init order is guaranteed by start())
+        self._pins: Any = None  # platform_support.HostPins on direct-header boards
         self._relays: Any = None
         self._leds: Any = None
         self._fan: Any = None
@@ -167,10 +194,41 @@ class WQM1App:
         logger.info("WQM-1 firmware v%s starting (device=%s)", FW_VERSION, self._device_id)
 
         # --- Host board: decides whether Linux can reach the headers ---
-        from platform_support import detect_board
+        from platform_support import active_pins, detect_board, set_active_board
 
         self._board = detect_board(override=self._settings.board)
+        # Every driver asks platform_support for the active profile from
+        # here on, so the config override reaches them too.
+        set_active_board(self._board)
         direct = self._board.has_direct_headers
+        # Where the HAT's nets land on this host: bus numbers, the GPS UART
+        # and a (chip, line) per BCM number. On the Pi this is the identity
+        # map; on the Orange Pi Zero 3W it is the published pinout plus the
+        # pins the bench read off the board (scripts/host-pins.py).
+        self._pins = active_pins() if direct else None
+        if self._pins is not None:
+            logger.info(
+                "Host pins: %s backend, i2c-%d, spidev%d.%d, GPS on %s (%s)",
+                self._pins.backend,
+                self._pins.i2c_bus,
+                self._pins.spi_bus,
+                self._pins.spi_device,
+                self._pins.gps_port,
+                self._pins.source,
+            )
+            missing = self._pins.unresolved(_hat_nets())
+            if missing:
+                # Say exactly which nets cannot be driven, and the fix. The
+                # driver that needs one of them refuses at construction
+                # (below), so this line is the one that explains the refusal.
+                logger.error(
+                    "%d HAT net(s) have no known line on %s: %s — run "
+                    "scripts/host-pins.py --from-readall on the board and "
+                    "restart (see docs/platforms.md)",
+                    len(missing),
+                    self._board.name,
+                    ", ".join(f"{net}=BCM{bcm}(pin {phys})" for net, bcm, phys in missing),
+                )
         if not direct:
             # Arduino Q family (UNO Q / VENTUNO Q): headers belong to the
             # MCU, so analog probes, LoRa, relays, LEDs, and the fan are
@@ -196,7 +254,7 @@ class WQM1App:
         # --- ADC + sensors (direct-header boards only) ---
         self._cal = CalibrationManager()
         if direct:
-            self._adc = ADS1115()
+            self._adc = ADS1115(bus=self._pins.i2c_bus)
             # Only build a sensor for a probe that is declared FITTED. An
             # undeclared channel is left as None, and SamplingWorker skips a
             # None sensor — so an open input can never be read, converted, and
@@ -292,11 +350,16 @@ class WQM1App:
 
                 db = self._db
                 saved = db.get_meta("flow_pulse_count")
+                # The BCM number names the net; the host says which chip and
+                # line that is (chip 0 / the same number on the Pi).
+                flow_chip, flow_line = self._pins.line(self._settings.flow_pulse_gpio)
                 self._flow = PulseFlowMeter(
                     gpio=self._settings.flow_pulse_gpio,
                     k_ppg=cal.flow_k_ppg,
                     initial_count=int(saved) if saved else 0,
                     persist=lambda n: db.set_meta("flow_pulse_count", str(n)),
+                    chip=flow_chip,
+                    line=flow_line,
                 )
                 if self._settings.rs485_flow_enabled:
                     logger.warning(
@@ -325,7 +388,10 @@ class WQM1App:
 
         # --- GPS ---
         try:
-            self._gps = GPS(baud=self._settings.gps_baud)
+            gps_kwargs: dict[str, Any] = {"baud": self._settings.gps_baud}
+            if self._pins is not None:
+                gps_kwargs["port"] = self._pins.gps_port
+            self._gps = GPS(**gps_kwargs)
         except Exception as e:
             logger.warning("GPS init failed: %s", e)
 
@@ -333,7 +399,7 @@ class WQM1App:
         try:
             if not direct:
                 raise RuntimeError("no direct SPI on this board")
-            self._radio = SX1262()
+            self._radio = SX1262(pins=self._pins)
             self._radio.init()
             app_key = bytes.fromhex(self._settings.app_key)
             # Config wins over the compiled-in placeholder so a TTN application

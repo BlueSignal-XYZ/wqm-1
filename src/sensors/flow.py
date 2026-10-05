@@ -88,6 +88,12 @@ class PulseFlowMeter:
 
     ``lgpio_module`` is injected in tests. On hardware it is the real
     ``lgpio``; on a board with no direct headers main.py never builds this.
+
+    ``gpio`` is the HAT's BCM number (what config.yaml names and what the
+    harness note in hardware-overview.md is written in). ``chip``/``line``
+    are where that net lands on THIS host: on the Pi, chip 0 and the BCM
+    number itself; on the Orange Pi Zero 3W, the Allwinner line main.py
+    resolves through platform_support.hostpins.
     """
 
     name = "flow"
@@ -102,10 +108,12 @@ class PulseFlowMeter:
         chip: int = 0,
         lgpio_module: Any = None,
         clock: Callable[[], float] = time.monotonic,
+        line: int | None = None,
     ) -> None:
         if gpio < 0 or gpio > 27:
             raise ValueError(f"flow pulse GPIO out of range: {gpio}")
         self._gpio = gpio
+        self._line = gpio if line is None else int(line)
         self._k = float(k_ppg) if k_ppg and k_ppg > 0 else 1703.4
         self._count = max(0, int(initial_count or 0))
         self._persist = persist
@@ -114,7 +122,7 @@ class PulseFlowMeter:
         self._lock = threading.Lock()
         self._last_read_count = self._count
         self._last_read_at: float | None = None
-        self._lg = lgpio_module
+        self._lg: Any = lgpio_module
         self._handle: Any = None
         self._callback: Any = None
         if self._lg is None:  # pragma: no cover - hardware path
@@ -122,17 +130,22 @@ class PulseFlowMeter:
 
             self._lg = lgpio
         self._handle = self._lg.gpiochip_open(chip)
-        self._lg.gpio_claim_alert(self._handle, gpio, self._lg.RISING_EDGE)
+        self._lg.gpio_claim_alert(self._handle, self._line, self._lg.RISING_EDGE)
         # Kernel-side debounce: hall meters are clean, but the pump beside
         # them is not, and a 500 µs floor still passes 2 kHz — ten times the
         # fastest pulse train a residential meter produces.
         with_debounce = getattr(self._lg, "gpio_set_debounce_micros", None)
         if with_debounce is not None:
-            with_debounce(self._handle, gpio, self._debounce_us)
-        self._callback = self._lg.callback(self._handle, gpio, self._lg.RISING_EDGE, self._on_edge)
+            with_debounce(self._handle, self._line, self._debounce_us)
+        self._callback = self._lg.callback(
+            self._handle, self._line, self._lg.RISING_EDGE, self._on_edge
+        )
+        where = f"GPIO {gpio}"
+        if self._line != gpio or chip != 0:
+            where = f"GPIO {gpio} (gpiochip{chip} line {self._line})"
         logger.info(
-            "Flow pulse meter on GPIO %d: K=%.1f pulses/gal, lifetime count restored at %d",
-            gpio,
+            "Flow pulse meter on %s: K=%.1f pulses/gal, lifetime count restored at %d",
+            where,
             self._k,
             self._count,
         )

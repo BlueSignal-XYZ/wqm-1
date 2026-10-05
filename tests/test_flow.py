@@ -489,3 +489,24 @@ class TestPlumbing:
         db.insert_reading({"timestamp": "2026-09-17T12:00:00Z", "flow_total_gal": 2.0})
         db.close()
         assert DBReader(str(new)).get_latest_reading()["flow_total_gal"] == 2.0
+
+
+class TestPulseMeterOnAnotherHost:
+    """The BCM number names the net; ``chip``/``line`` say where it is here."""
+
+    def test_claims_the_host_line_not_the_bcm_number(self):
+        lg = FakeLgpio()
+        meter = PulseFlowMeter(gpio=26, k_ppg=100.0, lgpio_module=lg, chip=0, line=100)
+        assert lg.claims == [(100, 100, 1)]
+        assert lg.debounce == [(100, 100, 500)]
+        meter.close()
+
+    def test_bcm_range_is_still_checked_whatever_the_line(self):
+        with pytest.raises(ValueError):
+            PulseFlowMeter(gpio=40, lgpio_module=FakeLgpio(), line=5)
+
+    def test_default_line_is_the_bcm_number(self):
+        lg = FakeLgpio()
+        meter = PulseFlowMeter(gpio=26, k_ppg=100.0, lgpio_module=lg)
+        assert lg.claims == [(100, 26, 1)]
+        meter.close()

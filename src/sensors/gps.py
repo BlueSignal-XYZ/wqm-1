@@ -13,14 +13,15 @@ from datetime import UTC, datetime
 
 import serial
 
+from platform_support.gpio import HostGpio, open_gpio
 from utils.config import GPS_BAUD, GPS_EXTINT, GPS_UART_PORT
 
 logger = logging.getLogger("wqm1.gps")
 
 try:
     import RPi.GPIO as GPIO
-except ImportError:  # non-Pi host (e.g. Arduino UNO Q): a USB GPS still works
-    GPIO = None  # over pyserial — only the EXTINT power-cycle pin is absent
+except ImportError:  # not a Raspberry Pi: a USB GPS still works over pyserial;
+    GPIO = None  # the EXTINT pin is driven through the facade where one exists
 
 
 @dataclass
@@ -39,7 +40,12 @@ class GPSFix:
 class GPS:
     """MAX-M10S GPS receiver over UART with NMEA parsing."""
 
-    def __init__(self, port: str = GPS_UART_PORT, baud: int = GPS_BAUD) -> None:
+    def __init__(
+        self,
+        port: str = GPS_UART_PORT,
+        baud: int = GPS_BAUD,
+        io: HostGpio | None = None,
+    ) -> None:
         self._port_name = port
         self._baud = baud
         self._serial = None
@@ -49,11 +55,17 @@ class GPS:
         self._last_no_fix_log = 0.0
         self._last_no_fix_detail = ""
 
-        # Setup EXTINT pin for power cycling (direct-header boards only)
-        if GPIO is not None:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            GPIO.setup(GPS_EXTINT, GPIO.OUT, initial=GPIO.LOW)
+        # EXTINT pin for power cycling (direct-header boards only). A host
+        # with no GPIO still gets a working USB GPS; only the power cycle
+        # becomes a no-op, and says so.
+        self._io: HostGpio | None = io
+        if self._io is None:
+            try:
+                self._io = open_gpio(rpi_module=GPIO)
+            except RuntimeError as e:
+                logger.info("GPS EXTINT not driven on this host: %s", e)
+        if self._io is not None:
+            self._io.setup_output(GPS_EXTINT, initial=False)
 
         try:
             self._serial = serial.Serial(
@@ -82,7 +94,9 @@ class GPS:
             # Say so. This used to return silently, so a unit whose UART never
             # opened logged nothing at all — the only visible symptom was a
             # power cycle every gps_fix_s with no stated reason.
-            self._explain_no_fix("UART is not open (check /dev/serial0 and dialout membership)")
+            self._explain_no_fix(
+                f"UART is not open (check {self._port_name} and dialout membership)"
+            )
             return self._last_fix
 
         deadline = time.monotonic() + timeout_s
@@ -175,13 +189,13 @@ class GPS:
         u-blox EXTINT: a high level forces the receiver out of power-save; in
         continuous mode (the default) the pulse is harmless.
         """
-        if GPIO is None:
+        if self._io is None:
             logger.info("GPS power cycle skipped — EXTINT pin not wired on this host")
             return
         logger.info("GPS power cycle via EXTINT")
-        GPIO.output(GPS_EXTINT, GPIO.HIGH)
+        self._io.write(GPS_EXTINT, True)
         time.sleep(0.2)
-        GPIO.output(GPS_EXTINT, GPIO.LOW)
+        self._io.write(GPS_EXTINT, False)
         time.sleep(1.0)
 
     def close(self) -> None:

@@ -1,0 +1,13 @@
+# Direct-header hardware drivers for a Linux host whose 40-pin header is a
+# plain kernel gpiochip — the Orange Pi Zero 3W (Allwinner A733). The same
+# buses as the Raspberry Pi (I2C via smbus2, SPI via spidev, 1-Wire via the
+# kernel w1 driver), but GPIO through lgpio on /dev/gpiochipN instead of
+# RPi.GPIO, which only knows Broadcom silicon. Installed by setup.sh when the
+# host is an Orange Pi. See docs/platforms.md.
+#
+# lgpio builds from source here (pip pulls the lg library in with it); it
+# needs swig and python3-dev, which setup.sh installs first.
+lgpio
+smbus2==0.6.1
+spidev==3.8
+w1thermsensor==2.3.0

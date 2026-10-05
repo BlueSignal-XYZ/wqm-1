@@ -2,8 +2,9 @@
 Fan Controller + Hardware Watchdog
 
 Fan: On/off via GPIO21 (BCX56-16 NPN), hysteresis 60/55°C.
-Watchdog: BCM2835 hardware watchdog (/dev/watchdog), must be pet
-          periodically or the system reboots.
+Watchdog: the host's hardware watchdog (/dev/watchdog — BCM2835 on the Pi,
+          sunxi-wdt on the Orange Pi), must be pet periodically or the
+          system reboots.
 """
 
 import atexit
@@ -11,14 +12,15 @@ import contextlib
 import logging
 from typing import IO
 
+from platform_support.gpio import HostGpio, open_gpio
 from utils.config import FAN_EN
 
 logger = logging.getLogger("wqm1.fan")
 
 try:
     import RPi.GPIO as GPIO
-except ImportError:  # non-Pi host (e.g. Arduino UNO Q): fan pin belongs to
-    GPIO = None  # the MCU — the board gate never constructs FanController
+except ImportError:  # not a Raspberry Pi: the facade drives a gpiochip host
+    GPIO = None  # (Orange Pi) or refuses on a headerless one (Arduino Q)
 
 
 def get_cpu_temp() -> float:
@@ -33,16 +35,15 @@ def get_cpu_temp() -> float:
 class FanController:
     """On/off fan with temperature hysteresis."""
 
-    def __init__(self, on_temp: float = 60.0, off_temp: float = 55.0) -> None:
-        if GPIO is None:
-            raise RuntimeError("RPi.GPIO not installed — no direct GPIO on this host")
+    def __init__(
+        self, on_temp: float = 60.0, off_temp: float = 55.0, io: HostGpio | None = None
+    ) -> None:
+        self._io = io if io is not None else open_gpio(rpi_module=GPIO)
         self._on_temp = on_temp
         self._off_temp = off_temp
         self._is_on = False
 
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        GPIO.setup(FAN_EN, GPIO.OUT, initial=GPIO.LOW)
+        self._io.setup_output(FAN_EN, initial=False)
 
         atexit.register(self.cleanup)
         logger.info("Fan controller initialised (on=%.0f°C, off=%.0f°C)", on_temp, off_temp)
@@ -71,7 +72,7 @@ class FanController:
         return False
 
     def _set(self, state: bool) -> None:
-        GPIO.output(FAN_EN, GPIO.HIGH if state else GPIO.LOW)
+        self._io.write(FAN_EN, state)
         self._is_on = state
 
     @property
@@ -80,12 +81,12 @@ class FanController:
 
     def cleanup(self) -> None:
         with contextlib.suppress(Exception):
-            GPIO.output(FAN_EN, GPIO.LOW)
+            self._io.write(FAN_EN, False)
         self._is_on = False
 
 
 class HardwareWatchdog:
-    """BCM2835 hardware watchdog. Pet it or the system reboots."""
+    """The host's hardware watchdog (/dev/watchdog). Pet it or the system reboots."""
 
     def __init__(self) -> None:
         self._fd: IO[bytes] | None = None

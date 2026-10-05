@@ -36,11 +36,17 @@ DEVICE_TREE_MODEL = "/proc/device-tree/model"
 class BoardProfile:
     id: str
     name: str
-    family: str  # "raspberry-pi" | "arduino-qualcomm" | "generic"
+    family: str  # "raspberry-pi" | "orange-pi" | "arduino-qualcomm" | "generic"
     #: Linux can reach the analog ADC, 1-Wire, SPI radio, and GPIO
     #: (relays/LEDs/fan/hardware watchdog) directly through the kernel.
     has_direct_headers: bool
     notes: str = ""
+    #: How the firmware drives the HAT's lines on this host — see
+    #: platform_support/gpio.py. "rpi" is RPi.GPIO (+ lgpio for alerts),
+    #: "gpiochip" is lgpio on the kernel's gpiochips with the BCM numbers
+    #: translated by platform_support/hostpins.py, "none" means the headers
+    #: are not Linux's to drive.
+    gpio_backend: str = "none"
 
 
 PROFILES: dict[str, BoardProfile] = {
@@ -50,6 +56,24 @@ PROFILES: dict[str, BoardProfile] = {
         family="raspberry-pi",
         has_direct_headers=True,
         notes="Reference platform. Full analog + LoRa + relay support.",
+        gpio_backend="rpi",
+    ),
+    "orangepi-zero-3w": BoardProfile(
+        id="orangepi-zero-3w",
+        name="Orange Pi Zero 3W",
+        family="orange-pi",
+        has_direct_headers=True,
+        notes=(
+            "Allwinner A733, Raspberry Pi Zero form factor and 40-pin header "
+            "layout: power, ground, I2C (TWI0, pins 3/5), SPI (SPI3, pins "
+            "19/21/23/24) and UART (UART0, pins 8/10) sit where the Pi puts "
+            "them, so the HAT seats unchanged. GPIO lines are Allwinner "
+            "pins driven through lgpio; five plain-GPIO header pins are not "
+            "in the published pinout and are read off the board at the "
+            "bench (scripts/host-pins.py). Full stack, bench verification "
+            "pending — see docs/platforms.md."
+        ),
+        gpio_backend="gpiochip",
     ),
     "arduino-uno-q": BoardProfile(
         id="arduino-uno-q",
@@ -82,8 +106,12 @@ PROFILES: dict[str, BoardProfile] = {
 }
 
 # Substring of /proc/device-tree/model -> profile id. First match wins;
-# ordered most-specific first.
+# ordered most-specific first. Matched against the lower-cased model AND a
+# compacted copy with spaces/hyphens removed, because Orange Pi images have
+# printed the same board as "OrangePi Zero3", "Orange Pi Zero 3" and
+# "orangepi-zero3" across releases.
 _MODEL_MATCHES: tuple[tuple[str, str], ...] = (
+    ("orangepizero3w", "orangepi-zero-3w"),
     ("raspberry pi", "rpi-zero-2w"),
     ("ventuno", "arduino-ventuno-q"),
     ("uno q", "arduino-uno-q"),
@@ -123,8 +151,9 @@ def detect_board(
 
     model = _read_model(model_path).lower()
     if model:
+        compact = model.replace(" ", "").replace("-", "").replace("_", "")
         for needle, profile_id in _MODEL_MATCHES:
-            if needle in model:
+            if needle in model or needle in compact:
                 logger.info("Detected board: %s (%r)", profile_id, model)
                 return PROFILES[profile_id]
         logger.warning("Unrecognized board model %r — assuming Raspberry Pi", model)

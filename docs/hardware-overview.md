@@ -88,7 +88,12 @@ values. See [BUILD provisional engineering estimates](#build-provisional-enginee
 
 The active device-tree pin assignments are documented in
 [`config/pinmap.yaml`](../config/pinmap.yaml) and match the
-constants in `src/utils/config.py`.
+constants in `src/utils/config.py`. Those numbers are Raspberry Pi BCM
+numbers — the HAT's own naming, fixed by the 40-pin header. On another host
+with the same header layout (the Orange Pi Zero 3W) the firmware maps each
+BCM number to that host's line at startup; the table is
+`src/platform_support/hostpins.py` and the per-host notes are in
+[`docs/platforms.md`](platforms.md).
 
 ## BUILD provisional engineering estimates (2026-09-04)
 
