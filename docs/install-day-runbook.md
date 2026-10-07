@@ -71,7 +71,7 @@ sudo reboot                     # the boot-config overlays need it
 ### 1.3 Prove the hardware on the bench
 
 ```bash
-sudo bash /opt/bluesignal/scripts/diagnostics.sh
+sudo bash /opt/bluesignal/current/scripts/diagnostics.sh
 ```
 
 Every line **PASS** except the LoRaWAN AppKey warning (expected until §1.4) and

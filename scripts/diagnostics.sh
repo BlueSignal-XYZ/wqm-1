@@ -1,8 +1,22 @@
 #!/bin/bash
 # WQM-1 Hardware Diagnostics
 # Run after setup.sh + reboot to verify all subsystems.
-# Usage: sudo bash /opt/bluesignal/scripts/diagnostics.sh
+# Usage: sudo bash /opt/bluesignal/current/scripts/diagnostics.sh [--relays]
+#
+#   --relays   Also click each of the four relays ON for 1 s, then OFF, so you
+#              can hear them. Off by default: whatever is wired to a relay
+#              output runs for that second. Stops the firmware service for the
+#              test and starts it again afterwards.
 set -uo pipefail
+
+RUN_RELAYS=0
+for arg in "$@"; do
+    case "$arg" in
+        --relays) RUN_RELAYS=1 ;;
+        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
+    esac
+done
 
 PASS=0
 WARN=0
@@ -286,6 +300,87 @@ if [ -f "$WQM_DB" ] && command -v sqlite3 &>/dev/null; then
     fi
 elif [ -f "$WQM_DB" ]; then
     warn "Buffer:  sqlite3 not installed — cannot check the reading buffer (apt install sqlite3)"
+fi
+
+# --- Relay click test (opt-in: --relays) ---
+#
+# Hearing the coils is the only bench check that proves the whole relay path:
+# GPIO -> LTV-354T opto -> S8050 -> coil. A relay on a HAT powered from the
+# Pi's USB alone will NOT click — the coils run from the 24 V input — so a
+# silent relay on USB power is expected, not a fault.
+#
+# Pins are the BCM numbers in src/utils/config.py RELAY_PINS (active-high);
+# tests/test_diagnostics_relays.py keeps the two lists equal.
+RELAY_TEST_PINS=(17 27 22 23)
+if [ "$RUN_RELAYS" = "1" ]; then
+    echo ""
+    echo "--- Relay click test ---"
+    echo "Each relay switches ON for 1 second, then OFF: listen for two clicks."
+    echo "Anything wired to a relay output WILL run for that second."
+    echo "The HAT must be on 24 V — the coils do not click on USB power alone."
+    INTERACTIVE=0
+    if [ -t 0 ]; then
+        INTERACTIVE=1
+        read -r -p "Press Enter to start (Ctrl+C to cancel) " _
+    fi
+
+    # The firmware owns these GPIO lines while it runs. Stop it so the test
+    # is the only thing driving them, and always start it again — on success,
+    # on failure and on Ctrl+C. At start the firmware forces every relay OFF.
+    RELAY_SVC_WAS_ACTIVE=0
+    if systemctl is-active --quiet bluesignal-wqm; then
+        RELAY_SVC_WAS_ACTIVE=1
+        systemctl stop bluesignal-wqm
+    fi
+    relay_test_restore() {
+        if [ "$RELAY_SVC_WAS_ACTIVE" = "1" ]; then
+            systemctl start bluesignal-wqm && echo "         (firmware service started again)"
+            RELAY_SVC_WAS_ACTIVE=0
+        fi
+    }
+    trap relay_test_restore EXIT
+    trap 'relay_test_restore; exit 130' INT TERM
+
+    RELAY_N=0
+    for pin in "${RELAY_TEST_PINS[@]}"; do
+        RELAY_N=$((RELAY_N + 1))
+        echo "Relay $RELAY_N (GPIO $pin): ON..."
+        if ! RELAY_ERR=$(python3 - "$pin" 2>&1 <<'PYEOF'
+import sys, time
+import RPi.GPIO as GPIO
+pin = int(sys.argv[1])
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+try:
+    GPIO.output(pin, GPIO.HIGH)
+    time.sleep(1.0)
+finally:
+    GPIO.output(pin, GPIO.LOW)
+    GPIO.cleanup(pin)
+PYEOF
+        ); then
+            fail "Relay $RELAY_N: could not drive GPIO $pin — $(echo "$RELAY_ERR" | tail -1)"
+            continue
+        fi
+        echo "Relay $RELAY_N (GPIO $pin): OFF"
+        if [ "$INTERACTIVE" = "1" ]; then
+            read -r -p "  Heard relay $RELAY_N click on and off? [Y/n] " heard
+            case "$heard" in
+                n|N|no|NO)
+                    fail "Relay $RELAY_N: no click heard (GPIO $pin)"
+                    echo "         On 24 V? Then check the relay is seated and the opto/transistor"
+                    echo "         for channel $RELAY_N. Re-test one channel at a time with --relays." ;;
+                *) pass "Relay $RELAY_N: clicked (GPIO $pin)" ;;
+            esac
+        else
+            info "Relay $RELAY_N: switched GPIO $pin on and off — listen for the click"
+        fi
+        sleep 1
+    done
+    relay_test_restore
+    trap - EXIT INT TERM
+    echo ""
 fi
 
 # --- Disk space ---
