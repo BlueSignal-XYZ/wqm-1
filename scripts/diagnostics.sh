@@ -77,6 +77,51 @@ svc_perm_fail() {
     echo "         Fix: sudo usermod -aG $group $SERVICE_USER  (then restart the service)"
 }
 
+# --- Identity: what to type into Cloud ---
+#
+# Printed first because it is the one thing the bench needs to carry away:
+# the device id the firmware reports under (from the Pi serial — NOT the
+# printed WQM- label on 2.3.0 firmware) and the DevEUI the claim asks for.
+# Read from the installed firmware's own identity module so it can never
+# disagree with what the unit actually posts.
+ID_SRC=""
+for d in /opt/bluesignal/current/src "$(cd "$(dirname "$0")" && pwd)/../src"; do
+    [ -f "$d/utils/identity.py" ] && { ID_SRC="$d"; break; }
+done
+if [ -n "$ID_SRC" ]; then
+    IDENTITY="$(python3 - "$ID_SRC" <<'PYEOF' 2>/dev/null
+import sys
+sys.path.insert(0, sys.argv[1])
+from utils.identity import get_dev_eui, get_device_id, get_pi_serial
+print(get_device_id())
+print(get_dev_eui().hex().upper())
+print(get_pi_serial())
+PYEOF
+)"
+    DEVICE_ID="$(echo "$IDENTITY" | sed -n 1p)"
+    DEV_EUI="$(echo "$IDENTITY" | sed -n 2p)"
+    PI_SERIAL="$(echo "$IDENTITY" | sed -n 3p)"
+    if [ -n "$DEVICE_ID" ]; then
+        info "Device ID: $DEVICE_ID   (enter this in Cloud commissioning)"
+        info "DevEUI:    $DEV_EUI"
+        info "Pi serial: $PI_SERIAL"
+        if [ "$PI_SERIAL" = "0000000000000000" ]; then
+            fail "Identity: Pi serial unreadable — every unit would share one device id"
+        fi
+    else
+        warn "Identity: could not read device id from $ID_SRC/utils/identity.py"
+    fi
+else
+    warn "Identity: firmware not installed — run setup.sh"
+fi
+API_KEY_SET="$(cfg api_key '')"
+if [ -n "$API_KEY_SET" ]; then
+    info "Cloud key: set in $CONFIG_FILE (…${API_KEY_SET: -4})"
+else
+    info "Cloud key: not set yet — claim in Cloud, then paste it at http://$(hostname).local:8080"
+fi
+echo ""
+
 # --- I2C: ADS1115 at 0x48 ---
 if command -v i2cdetect &>/dev/null; then
     # On fresh Trixie boots i2c-dev may not be loaded yet; make sure it is

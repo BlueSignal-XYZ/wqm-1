@@ -116,3 +116,17 @@ def test_no_relay_touched_without_flag(tmp_path):
 def test_unknown_option_is_refused(tmp_path):
     result, _, _ = _run(tmp_path, ["--relay"])
     assert result.returncode == 2
+
+
+def test_identity_block_prints_device_id_and_dev_eui(tmp_path):
+    """The bench must leave the first pass knowing what to type into Cloud.
+
+    Uses the script's repo-relative fallback (no /opt install here), so the
+    printed id comes from the same identity module the firmware posts under.
+    """
+    from utils.identity import get_dev_eui, get_device_id
+
+    result, _, _ = _run(tmp_path, [])
+    assert f"Device ID: {get_device_id()}" in result.stdout
+    assert f"DevEUI:    {get_dev_eui().hex().upper()}" in result.stdout
+    assert "Cloud key:" in result.stdout
