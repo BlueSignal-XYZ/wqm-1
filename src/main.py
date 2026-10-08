@@ -860,7 +860,6 @@ class WQM1App:
                 channels[name] = {"channel": ch, "error": str(e)[:80]}
         return {"ok": True, "channels": channels}
 
-
     # First match wins. /etc/bluesignal is the only location that survives an
     # upgrade: setup.sh and the OTA agent install each release into its own
     # /opt/bluesignal/releases/<version>/ tree with the STOCK policies.yaml, so

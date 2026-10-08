@@ -40,9 +40,9 @@ DEMO_HOME_PASSWORD = "riverstone42"  # nosec B105 — virtual network, not a cre
 
 _DEFAULT_NETWORKS: list[dict[str, Any]] = [
     {"ssid": DEMO_HOME_SSID, "signal": 78, "secured": True, "password": DEMO_HOME_PASSWORD},
-    {"ssid": "Smith-Home-Guest", "signal": 61, "secured": True, "password": "guestpass2026"},
-    {"ssid": "Installer iPhone", "signal": 54, "secured": True, "password": "hotspot1234"},
-    {"ssid": "xfinitywifi", "signal": 31, "secured": False, "password": ""},
+    {"ssid": "Smith-Home-Guest", "signal": 61, "secured": True, "password": "guestpass2026"},  # nosec B105
+    {"ssid": "Installer iPhone", "signal": 54, "secured": True, "password": "hotspot1234"},  # nosec B105
+    {"ssid": "xfinitywifi", "signal": 31, "secured": False, "password": ""},  # nosec B105
 ]
 
 

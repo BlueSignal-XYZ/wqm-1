@@ -263,7 +263,7 @@ def _lgpio_line_by_name(name: str, lgpio_module: Any, max_chips: int = 4) -> tup
                 li = lgpio_module.gpio_get_line_info(handle, line)
                 if str(li[2]).strip().upper() == name.upper():
                     return (chip, line)
-        except Exception:  # noqa: BLE001 — a chip that cannot be opened is skipped
+        except Exception:  # noqa: BLE001  # nosec B112 — a chip that cannot be opened is skipped
             continue
         finally:
             if handle is not None:

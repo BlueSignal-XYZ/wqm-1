@@ -30,7 +30,7 @@ logger = logging.getLogger("wqm1.adc")
 try:
     import smbus2
 except ImportError:  # non-Pi host (e.g. Arduino UNO Q): kernel I2C is not
-    smbus2 = None  # exposed to Linux — the board gate never constructs this
+    smbus2 = None  # type: ignore[assignment]  # exposed to Linux — the board gate never constructs this
 
 # ADS1115 register addresses
 _REG_CONVERSION = 0x00

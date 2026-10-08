@@ -9,7 +9,7 @@
 # --- Timing (seconds) ---
 sensor_read_s: 60            # How often to read all sensors
 lora_tx_s: 300               # How often to transmit via LoRaWAN
-gps_fix_s: 600               # How often to attempt a GPS fix
+gps_fix_s: 86400             # GPS fix interval: daily (86400) to every 15 days (1296000)
 gps_fix_timeout_s: 60        # Max seconds to wait for GPS lock
 
 # --- GPS ---

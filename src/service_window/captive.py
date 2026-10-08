@@ -26,7 +26,8 @@ from __future__ import annotations
 import ipaddress
 import time
 
-from flask import Blueprint, Response, current_app, redirect, request
+from flask import Blueprint, current_app, redirect, request
+from werkzeug.wrappers import Response
 
 captive_bp = Blueprint("captive", __name__)
 
