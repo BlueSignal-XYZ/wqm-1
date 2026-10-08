@@ -77,6 +77,16 @@ jobs:
                 continue;
               }
 
-              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch.name}` });
-              core.notice(`deleted ${branch.name} (${reason})`);
+              try {
+                await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch.name}` });
+                core.notice(`deleted ${branch.name} (${reason})`);
+              } catch (err) {
+                // GitHub's delete-head-branch-on-merge can remove a branch
+                // between the listing and this call; gone is the goal.
+                if (err.status === 422 || err.status === 404) {
+                  core.info(`gone  ${branch.name} (already deleted)`);
+                } else {
+                  throw err;
+                }
+              }
             }
