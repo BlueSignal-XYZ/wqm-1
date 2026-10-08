@@ -2,54 +2,108 @@
 {% from "_health.html" import health_card %}
 {% block title %}Setup — Network{% endblock %}
 {% block content %}
-<h1 class="setup-h1">Network check</h1>
-<p class="lead">Check the link <b>where the unit will actually live</b> — lid closed,
-in its final spot. A signal that works on the bench can fail behind a panel.</p>
+<h1 class="setup-h1">Last step: connect it</h1>
 
-<div class="id-block">
-    <div class="id-label">Network</div>
-    <div class="id-row">
-        <code class="id-value">{{ wifi.ssid or 'Not connected' }}</code>
-    </div>
+{% if last_join %}
+<div class="flash error" role="alert">
+    Could not join <b>{{ last_join.ssid }}</b>: {{ last_join.error }}
+    Check the password with the owner and try again.
 </div>
-<div class="id-block">
-    <div class="id-label">Signal</div>
-    <div class="id-row">
-        <code class="id-value">{{ (wifi.rssi_dbm ~ ' dBm') if wifi.rssi_dbm is not none else '—' }}</code>
-    </div>
-</div>
-<div class="id-block">
-    <div class="id-label">Address on this network</div>
-    <div class="id-row">
-        <code class="id-value">{{ wifi.ip or '—' }}</code>
-    </div>
-</div>
-
-<div class="grid">
-    {% for name, card in cards.items() %}
-    {{ health_card('WiFi' if name == 'wifi' else name|capitalize, card) }}
-    {% endfor %}
-</div>
-
-<div class="howto">
-    <div class="howto-title">Why this matters</div>
-    <p class="skip-note" style="margin-top: 0">
-        WiFi is how this unit uploads readings and receives updates.
-        {% if lora_enabled %}LoRa runs alongside it as a long-range backup, but it is
-        far slower and carries less — WiFi is the path you want working.{% endif %}
-        Either way, <b>control decisions are made on this unit</b>, so a dropped
-        network never stops monitoring, logging, or fail-safe behaviour.
-    </p>
-</div>
-
-{% if not wifi.ssid %}
-<p class="skip-note">Changing networks isn&rsquo;t done from this page — the page is
-served over the very connection it would be changing. Re-flash with the network set
-in Raspberry Pi Imager, or connect a keyboard and run <code>sudo nmtui</code>.</p>
 {% endif %}
 
-<div class="setup-actions">
-    <a class="btn btn-primary btn-lg" href="{{ url_for('setup.cloud') }}">Continue</a>
-    <a class="btn btn-secondary" href="{{ url_for('setup.network') }}">Re-check</a>
-</div>
+<form method="post" id="network-form">
+    {% if station_ssid %}
+    <p class="lead">This unit is on <b>{{ station_ssid }}</b>.</p>
+    <div class="grid">
+        {% for name, card in cards.items() %}
+        {{ health_card('WiFi' if name == 'wifi' else name|capitalize, card) }}
+        {% endfor %}
+    </div>
+    <div class="id-block">
+        <div class="id-label">Signal</div>
+        <div class="id-row"><code class="id-value">{{ (wifi.rssi_dbm ~ ' dBm') if wifi.rssi_dbm is not none else '—' }}</code></div>
+    </div>
+    <div class="id-block">
+        <div class="id-label">Address on this network</div>
+        <div class="id-row"><code class="id-value">{{ wifi.ip or '—' }}</code></div>
+    </div>
+    <div class="setup-actions">
+        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg btn-block">Keep {{ station_ssid }} and finish</button>
+    </div>
+    {% endif %}
+
+    {% if on_ap or not station_ssid %}
+    {% if not station_ssid %}
+    <p class="lead">Have the owner pick their Wi-Fi and type the password. Do this where
+    the unit will live, lid closed.</p>
+    {% if not on_ap %}<p class="skip-note">Not connected to any network yet.</p>{% endif %}
+    {% else %}
+    <h2>Or join a different network</h2>
+    {% endif %}
+    <label for="ssid">Wi-Fi network</label>
+    {% if networks %}
+    <select id="ssid" name="ssid">
+        {% for n in networks %}
+        <option value="{{ n.ssid }}" {{ 'selected' if last_join and last_join.ssid == n.ssid }}>{{ n.ssid }}{{ ' (open)' if not n.secured }} &middot; {{ n.signal }}%</option>
+        {% endfor %}
+    </select>
+    {% else %}
+    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" autocapitalize="off" autocorrect="off">
+    <p class="skip-note">No networks found. <button type="submit" class="link-button" form="rescan-form">Scan again</button></p>
+    {% endif %}
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Leave blank for an open network">
+    <label class="inline-check"><input type="checkbox" id="show-password"> Show password</label>
+    {% if on_ap %}
+    <p class="skip-note">This page goes away when you tap Join: the unit turns off its
+    setup network and your phone drops back to its usual connection. A wrong password
+    brings this page back within a minute, with the reason.</p>
+    {% endif %}
+    <div class="setup-actions">
+        <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join and finish</button>
+    </div>
+    {% if networks %}<p class="skip-note center"><button type="submit" class="link-button" form="rescan-form">Don&rsquo;t see it? Scan again</button></p>{% endif %}
+    {% endif %}
+
+    <details class="setup-details">
+        <summary>No Wi-Fi at this unit?</summary>
+        <fieldset>
+            <legend>How does it reach the cloud?</legend>
+            <label><input type="radio" name="backhaul" value="lte" {{ 'checked' if backhaul == 'lte' }}> Its own LTE modem (option HAT with a SIM)</label>
+            <label><input type="radio" name="backhaul" value="none" {{ 'checked' if backhaul == 'none' }}> No network here: it keeps readings locally and uploads when a link exists</label>
+        </fieldset>
+        <button type="submit" name="action" value="declare" class="btn btn-secondary">Continue without Wi-Fi</button>
+    </details>
+
+    <details class="setup-details">
+        <summary>Radios fitted <span class="summary-hint">{{ ['LoRa' if lora_enabled, 'GPS' if gps_enabled]|select|join(' + ') or 'none' }}</span></summary>
+        <label><input type="checkbox" name="lora_enabled" {{ 'checked' if lora_enabled }}> LoRa radio (long-range backup to a gateway)</label>
+        <label><input type="checkbox" name="gps_enabled" {{ 'checked' if gps_enabled }}> GPS receiver</label>
+        <p class="skip-note">Saved with whichever button you tap above. Monitoring and
+        fail-safe control run on the unit whatever the network does.</p>
+    </details>
+</form>
+<form method="post" id="rescan-form"><input type="hidden" name="action" value="rescan"></form>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var pw = document.getElementById('password');
+  var show = document.getElementById('show-password');
+  if (pw && show) show.addEventListener('change', function () { pw.type = show.checked ? 'text' : 'password'; });
+  var form = document.getElementById('network-form');
+  var join = document.getElementById('join-button');
+  if (form && join) {
+    form.addEventListener('submit', function (e) {
+      if (e.submitter !== join) return;
+      // The join takes up to 40 s and usually takes this page with it.
+      // Say so, and stop a second tap from starting a second join.
+      setTimeout(function () {
+        join.disabled = true;
+        join.textContent = 'Joining… your phone will reconnect by itself';
+      }, 0);
+    });
+  }
+})();
+</script>
 {% endblock %}

@@ -41,11 +41,31 @@ def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(f)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if not session.get("pin_verified"):
+        if not session.get("pin_verified") and not _first_setup_on_hotspot():
             return redirect(url_for("auth.login", next=request.path))
         return f(*args, **kwargs)
 
     return wrapper
+
+
+def _first_setup_on_hotspot() -> bool:
+    """A phone on this unit's own setup hotspot, during FIRST setup only,
+    skips the PIN prompt (site flow v2).
+
+    Why that is no weaker: until the wizard's PIN step runs, the PIN is the
+    factory ``1234`` — printed in every manual, so asking for it proves
+    nothing. What does prove presence is joining the hotspot, which takes the
+    unit's own WPA2 passphrase from the card in its box. The exemption ends
+    the moment the factory PIN is replaced (``needs_setup`` goes false), and
+    never applies on any other network.
+    """
+    try:
+        from service_window.captive import from_hotspot
+        from service_window.routes.setup import needs_setup
+
+        return bool(needs_setup(current_app.config)) and from_hotspot()
+    except Exception:
+        return False
 
 
 def _is_locked_out(ip: str, now: float | None = None) -> float:

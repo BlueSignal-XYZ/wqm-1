@@ -11,12 +11,17 @@ import threading
 import time
 
 try:
-    import lgpio
-    import RPi.GPIO as GPIO
     import spidev
-except ImportError:  # non-Pi host (e.g. Arduino UNO Q): SPI belongs to the
-    lgpio = GPIO = spidev = None  # MCU — the board gate never builds SX1262
+except ImportError:  # no spidev: the board gate never builds SX1262 on a
+    spidev = None  # headerless host; a gpiochip host installs it with lgpio
 
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # not a Raspberry Pi — RST/BUSY/DIO1 go through the
+    GPIO = None  # platform facade, which drives a gpiochip host via lgpio
+
+from platform_support.gpio import AlertHandle, HostGpio, open_gpio
+from platform_support.hostpins import HostPins
 from utils.config import (
     LORA_BANDWIDTH,
     LORA_BUSY,
@@ -33,8 +38,6 @@ from utils.config import (
     LORA_SPREADING_FACTOR,
     LORA_SYNC_WORD,
     LORA_TX_POWER,
-    SPI_BUS,
-    SPI_DEVICE,
 )
 
 logger = logging.getLogger("wqm1.sx1262")
@@ -133,20 +136,21 @@ def _ldro_for(sf: int, bw_code: int) -> int:
 class SX1262:
     """SX1262 LoRa transceiver via SPI."""
 
-    def __init__(self) -> None:
-        if spidev is None or GPIO is None or lgpio is None:
-            raise RuntimeError("spidev/RPi.GPIO/lgpio not installed — no direct SPI on this host")
+    def __init__(self, pins: HostPins | None = None, io: HostGpio | None = None) -> None:
+        if spidev is None:
+            raise RuntimeError("spidev not installed — no direct SPI on this host")
+        # RST / BUSY / DIO1 through the platform facade: RPi.GPIO + lgpio on
+        # the Pi (unchanged — RPi.GPIO's add_event_detect() is broken on
+        # kernel 6.6+, so DIO1 was already an lgpio alert there), lgpio on a
+        # gpiochip host such as the Orange Pi Zero 3W, with the HAT's BCM
+        # numbers translated to that host's lines.
+        self._io = io if io is not None else open_gpio(rpi_module=GPIO)
+        self._pins = pins if pins is not None else self._io.pins
         self._spi: spidev.SpiDev | None = None
         self._tx_done_event = threading.Event()
         self._last_rssi = -120
         self._last_snr = 0.0
-
-        # lgpio handle + callback for DIO1 edge detection. RPi.GPIO's
-        # add_event_detect() is broken on kernel 6.6+ ("Failed to add edge
-        # detection"), so we use lgpio just for the DIO1 interrupt. CS/RST/BUSY
-        # still go through RPi.GPIO since simple setup/output/input work fine.
-        self._lg_handle = None
-        self._lg_callback = None
+        self._dio1_alert: AlertHandle | None = None
 
         # Uplink radio parameters. Re-applied before EVERY transmission,
         # because set_rx_config() retunes the chip for the RX1/RX2 windows and
@@ -159,15 +163,14 @@ class SX1262:
         )
 
         # Setup GPIO
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-        GPIO.setup(LORA_RST, GPIO.OUT, initial=GPIO.HIGH)
-        GPIO.setup(LORA_BUSY, GPIO.IN)
-        # LORA_DIO1 is claimed below via lgpio.gpio_claim_alert() in init().
+        self._io.setup_output(LORA_RST, initial=True)
+        self._io.setup_input(LORA_BUSY)
+        # LORA_DIO1 is claimed as an edge alert in init().
 
-        # Open SPI
+        # Open SPI — bus/device are the host's (spidev0.0 on the Pi,
+        # spidev3.0 on the Orange Pi Zero 3W).
         self._spi = spidev.SpiDev()
-        self._spi.open(SPI_BUS, SPI_DEVICE)
+        self._spi.open(self._pins.spi_bus, self._pins.spi_device)
         self._spi.max_speed_hz = _SPI_MAX_SPEED
         self._spi.mode = 0  # CPOL=0, CPHA=0
         self._spi.no_cs = False
@@ -269,18 +272,13 @@ class SX1262:
         )
         self._wait_busy()
 
-        # Setup DIO1 interrupt callback via lgpio (RPi.GPIO add_event_detect
-        # is broken on kernel 6.6+).
-        if self._lg_callback is not None:
+        # DIO1 interrupt callback — an edge alert through the facade (lgpio
+        # on every host; RPi.GPIO add_event_detect is broken on kernel 6.6+).
+        if self._dio1_alert is not None:
             with contextlib.suppress(Exception):
-                self._lg_callback.cancel()
-            self._lg_callback = None
-        if self._lg_handle is None:
-            self._lg_handle = lgpio.gpiochip_open(0)
-        lgpio.gpio_claim_alert(self._lg_handle, LORA_DIO1, lgpio.RISING_EDGE)
-        self._lg_callback = lgpio.callback(
-            self._lg_handle, LORA_DIO1, lgpio.RISING_EDGE, self._on_dio1_lg
-        )
+                self._dio1_alert.cancel()
+            self._dio1_alert = None
+        self._dio1_alert = self._io.claim_alert(LORA_DIO1, self._on_dio1_lg)
 
         logger.info(
             "SX1262 initialised: %.1f MHz, SF%d, BW%d, CR4/%d, %d dBm",
@@ -415,15 +413,15 @@ class SX1262:
 
     def _reset(self) -> None:
         """Hardware reset: pull RST low for 1 ms, then release."""
-        GPIO.output(LORA_RST, GPIO.LOW)
+        self._io.write(LORA_RST, False)
         time.sleep(0.001)
-        GPIO.output(LORA_RST, GPIO.HIGH)
+        self._io.write(LORA_RST, True)
         time.sleep(0.010)  # wait 10 ms after reset
 
     def _wait_busy(self, timeout_s: float = 1.0) -> bool:
         """Wait until BUSY pin goes low. Returns False on timeout."""
         deadline = time.monotonic() + timeout_s
-        while GPIO.input(LORA_BUSY):
+        while self._io.read(LORA_BUSY):
             if time.monotonic() > deadline:
                 logger.warning("SX1262 BUSY timeout")
                 return False
@@ -619,16 +617,13 @@ class SX1262:
 
     def close(self) -> None:
         """Close SPI and release GPIO."""
-        if self._lg_callback is not None:
+        if self._dio1_alert is not None:
             with contextlib.suppress(Exception):
-                self._lg_callback.cancel()
-            self._lg_callback = None
-        if self._lg_handle is not None:
-            with contextlib.suppress(Exception):
-                lgpio.gpio_free(self._lg_handle, LORA_DIO1)
-            with contextlib.suppress(Exception):
-                lgpio.gpiochip_close(self._lg_handle)
-            self._lg_handle = None
+                self._dio1_alert.cancel()
+            self._dio1_alert = None
+        with contextlib.suppress(Exception):
+            self._io.release(LORA_RST)
+            self._io.release(LORA_BUSY)
         if self._spi:
             self._spi.close()
             self._spi = None

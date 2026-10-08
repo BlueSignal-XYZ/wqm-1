@@ -383,10 +383,14 @@ class TestPlumbing:
         conn.close()
 
         db = WQM1Database(path=str(path))
-        assert SCHEMA_VERSION == 6
+        # v7 (clock confidence) followed v6; a v5 buffer must land on the
+        # CURRENT version, having applied both — the v6 block writes '6'
+        # literally so that a v5 device cannot record itself as v7 and skip
+        # the v7 column (the v3 trap, again).
+        assert SCHEMA_VERSION == 7
         cols = {r[1] for r in db._conn.execute("PRAGMA table_info(readings)")}
-        assert {"flow_total_gal", "flow_rate_gpm"} <= cols
-        assert db.get_meta("schema_version") == "6"
+        assert {"flow_total_gal", "flow_rate_gpm", "clock_source"} <= cols
+        assert db.get_meta("schema_version") == "7"
         # The old row survives with NULL flow — never a zero.
         assert db.get_latest()["flow_total_gal"] is None
         # Lifetime pulse count round-trips through meta.
@@ -489,3 +493,24 @@ class TestPlumbing:
         db.insert_reading({"timestamp": "2026-09-17T12:00:00Z", "flow_total_gal": 2.0})
         db.close()
         assert DBReader(str(new)).get_latest_reading()["flow_total_gal"] == 2.0
+
+
+class TestPulseMeterOnAnotherHost:
+    """The BCM number names the net; ``chip``/``line`` say where it is here."""
+
+    def test_claims_the_host_line_not_the_bcm_number(self):
+        lg = FakeLgpio()
+        meter = PulseFlowMeter(gpio=26, k_ppg=100.0, lgpio_module=lg, chip=0, line=100)
+        assert lg.claims == [(100, 100, 1)]
+        assert lg.debounce == [(100, 100, 500)]
+        meter.close()
+
+    def test_bcm_range_is_still_checked_whatever_the_line(self):
+        with pytest.raises(ValueError):
+            PulseFlowMeter(gpio=40, lgpio_module=FakeLgpio(), line=5)
+
+    def test_default_line_is_the_bcm_number(self):
+        lg = FakeLgpio()
+        meter = PulseFlowMeter(gpio=26, k_ppg=100.0, lgpio_module=lg)
+        assert lg.claims == [(100, 26, 1)]
+        meter.close()

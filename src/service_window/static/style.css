@@ -321,7 +321,7 @@ pre.output {
 }
 .setup-brand { font-weight: 700; font-size: 1.05rem; letter-spacing: 0.01em; }
 .setup-brand span { font-weight: 400; opacity: 0.7; margin-left: 0.4rem; }
-.setup-exit { color: var(--sidebar-fg); opacity: 0.75; font-size: 0.85rem; text-decoration: none; }
+.setup-exit { color: var(--sidebar-fg); opacity: 0.75; font-size: 0.85rem; text-decoration: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.25rem; }
 .setup-exit:hover { opacity: 1; text-decoration: underline; }
 
 .setup-shell {
@@ -394,6 +394,15 @@ pre.output {
 }
 .setup-h1 { font-size: 1.45rem; margin-bottom: 0.6rem; }
 .setup-card .lead { margin-bottom: 1rem; }
+/* Site flow v2: the network picker is tapped on a phone at a well head —
+   full width, a 44px target, and 16px text so iOS does not zoom on focus. */
+.setup-card select {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+    margin-bottom: 0.75rem;
+}
 .setup-foot {
     text-align: center;
     color: #8a94a0;
@@ -401,8 +410,59 @@ pre.output {
     margin-top: 1rem;
 }
 
-.welcome-list { margin: 0 0 1.25rem 1.25rem; line-height: 1.9; }
-.welcome-list li { padding-left: 0.25rem; }
+.welcome-list { margin: 0 0 1.25rem 1.25rem; line-height: 1.45; }
+.welcome-list li { padding-left: 0.25rem; margin-bottom: 0.6rem; }
+
+/* Site flow v2 — the wizard is used one-handed on a phone at a well head. */
+.btn-block { display: flex; width: 100%; justify-content: center; min-height: 48px; align-items: center; }
+.setup-card input[type="text"],
+.setup-card input[type="password"] { max-width: none; min-height: 44px; font-size: 16px; }
+.setup-card label { margin-bottom: 0.4rem; }
+.inline-check { display: flex; align-items: center; gap: 0.5rem; min-height: 44px; margin: 0.25rem 0 0.5rem; }
+.inline-check input { width: 20px; height: 20px; margin: 0; }
+.setup-details {
+    margin-top: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 0.9rem;
+}
+.setup-details[open] { padding-bottom: 0.9rem; }
+.setup-details summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 48px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+}
+.setup-details summary::-webkit-details-marker { display: none; }
+.setup-details summary::after { content: "+"; font-weight: 400; font-size: 1.3rem; color: #6b7280; margin-left: 0.5rem; }
+.setup-details[open] summary::after { content: "\2212"; }
+.summary-hint { margin-left: auto; font-weight: 400; font-size: 0.85rem; color: #6b7280; }
+.setup-details fieldset { border: 0; padding: 0; margin: 0 0 0.75rem; }
+.setup-details legend { font-weight: 500; margin-bottom: 0.5rem; padding: 0; }
+.setup-details fieldset label { display: flex; gap: 0.5rem; align-items: flex-start; min-height: 44px; }
+.link-button {
+    background: none;
+    border: 0;
+    padding: 0.6rem 0;
+    min-height: 44px;
+    color: #2c6cb0;
+    text-decoration: underline;
+    font: inherit;
+    cursor: pointer;
+}
+.center { text-align: center; }
+.next-step {
+    margin: 1rem 0;
+    padding: 0.9rem 1rem;
+    border-radius: 8px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+}
+.next-step-title { font-weight: 700; margin-bottom: 0.25rem; }
+.next-step p { margin: 0; }
 
 .setup-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.25rem; align-items: center; }
 .btn-lg { padding: 12px 24px; font-size: 1.05rem; }

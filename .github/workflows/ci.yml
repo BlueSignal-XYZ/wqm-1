@@ -158,11 +158,15 @@ jobs:
           pip install pytest pytest-mock pytest-cov flask
           pip install smbus2 pyserial pycryptodome pyyaml qrcode
 
-      # Tests marked with @pytest.mark.hardware require physical I2C/GPIO/SPI
-      # and are automatically skipped in CI via the -m flag below.
+      # No test in this suite needs a board: conftest.py fakes RPi.GPIO,
+      # smbus2, spidev, serial and w1thermsensor at collection time. The old
+      # `-m "not hardware"` filter excluded exactly zero of 1,324 tests while
+      # its comment claimed hardware tests were "automatically skipped" — a
+      # filter that filters nothing reads as coverage that isn't there. If a
+      # test ever does need hardware, mark it AND put the filter back.
       - name: Run tests
         run: |
-          pytest tests/ -v --tb=short -m "not hardware" \
+          pytest tests/ -v --tb=short \
             --cov=src --cov-report=term-missing --cov-fail-under=75
 
   typecheck:

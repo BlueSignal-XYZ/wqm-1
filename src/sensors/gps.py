@@ -2,7 +2,15 @@
 MAX-M10S GPS Driver
 
 NMEA sentence parser over UART for the u-blox MAX-M10S.
-Parses GGA (fix) and RMC (time/date) sentences.
+
+Parses GGA for the fix (position, quality, satellites, HDOP, altitude) and
+RMC for the DATE + time. GGA carries only a time-of-day; for years this file
+grafted that time onto whatever date the system clock happened to hold and
+called it a timestamp — on a Pi with no RTC that is the 1970 date, or the
+last fake-hwclock save, wearing a real second. ``GPSFix.timestamp`` is now
+set only from an RMC sentence with a valid (``A``) status, and is ``None``
+otherwise. ``utils.clock`` uses it to discipline the system clock when NTP is
+absent (commissioning plan, PR 5).
 """
 
 import logging
@@ -13,14 +21,20 @@ from datetime import UTC, datetime
 
 import serial
 
+from platform_support.gpio import HostGpio, open_gpio
 from utils.config import GPS_BAUD, GPS_EXTINT, GPS_UART_PORT
 
 logger = logging.getLogger("wqm1.gps")
 
+# After a GGA fix arrives without an RMC in hand, keep reading this long for
+# the RMC that carries the date. One NMEA burst is a second; 1.5 s covers a
+# burst boundary without stretching a 10 s fix timeout noticeably.
+_RMC_GRACE_S = 1.5
+
 try:
     import RPi.GPIO as GPIO
-except ImportError:  # non-Pi host (e.g. Arduino UNO Q): a USB GPS still works
-    GPIO = None  # over pyserial — only the EXTINT power-cycle pin is absent
+except ImportError:  # not a Raspberry Pi: a USB GPS still works over pyserial;
+    GPIO = None  # the EXTINT pin is driven through the facade where one exists
 
 
 @dataclass
@@ -39,21 +53,39 @@ class GPSFix:
 class GPS:
     """MAX-M10S GPS receiver over UART with NMEA parsing."""
 
-    def __init__(self, port: str = GPS_UART_PORT, baud: int = GPS_BAUD) -> None:
+    def __init__(
+        self,
+        port: str = GPS_UART_PORT,
+        baud: int = GPS_BAUD,
+        io: HostGpio | None = None,
+    ) -> None:
         self._port_name = port
         self._baud = baud
         self._serial = None
         self._last_fix: GPSFix | None = None
+        # Most recent RMC date+time the receiver reported with a valid status
+        # — what utils.clock disciplines the system clock from when NTP is
+        # absent. None until the receiver has locked.
+        self._last_rmc_time: datetime | None = None
         self._lock = threading.Lock()
+        # What we BELIEVE the EXTINT toggle last did. Never trusted on its own
+        # — see the power-save block below for how the loop is closed.
+        self._power_saving = False
         # Rate-limiting state for _explain_no_fix.
         self._last_no_fix_log = 0.0
         self._last_no_fix_detail = ""
 
-        # Setup EXTINT pin for power cycling (direct-header boards only)
-        if GPIO is not None:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            GPIO.setup(GPS_EXTINT, GPIO.OUT, initial=GPIO.LOW)
+        # EXTINT pin for power cycling (direct-header boards only). A host
+        # with no GPIO still gets a working USB GPS; only the power cycle
+        # becomes a no-op, and says so.
+        self._io: HostGpio | None = io
+        if self._io is None:
+            try:
+                self._io = open_gpio(rpi_module=GPIO)
+            except RuntimeError as e:
+                logger.info("GPS EXTINT not driven on this host: %s", e)
+        if self._io is not None:
+            self._io.setup_output(GPS_EXTINT, initial=False)
 
         try:
             self._serial = serial.Serial(
@@ -82,7 +114,9 @@ class GPS:
             # Say so. This used to return silently, so a unit whose UART never
             # opened logged nothing at all — the only visible symptom was a
             # power cycle every gps_fix_s with no stated reason.
-            self._explain_no_fix("UART is not open (check /dev/serial0 and dialout membership)")
+            self._explain_no_fix(
+                f"UART is not open (check {self._port_name} and dialout membership)"
+            )
             return self._last_fix
 
         deadline = time.monotonic() + timeout_s
@@ -94,11 +128,21 @@ class GPS:
         lines = 0
         bad_checksum = 0
         gga_seen = 0
+        # The RMC date+time seen in this burst. The M10S emits RMC before GGA
+        # in each one-second burst, so it is usually already in hand when the
+        # fix arrives; if GGA came first we read on for up to _RMC_GRACE_S to
+        # collect it rather than return a fix with no date.
+        rmc_time: datetime | None = None
+        rmc_wait_until: float | None = None
 
         # Flush stale data
         self._serial.reset_input_buffer()
 
         while time.monotonic() < deadline:
+            if fix is not None and (
+                rmc_time is not None or time.monotonic() >= (rmc_wait_until or 0)
+            ):
+                break
             try:
                 line = self._serial.readline().decode("ascii", errors="ignore").strip()
             except Exception as e:
@@ -114,13 +158,24 @@ class GPS:
                 bad_checksum += 1
                 continue
 
+            rmc = _parse_rmc(line)
+            if rmc is not None:
+                rmc_time = rmc
+                continue
+
             if line.startswith(("$GPGGA", "$GNGGA")):
                 gga_seen += 1
 
-            parsed = _parse_gga(line)
-            if parsed is not None:
-                fix = parsed
-                break
+            if fix is None:
+                parsed = _parse_gga(line)
+                if parsed is not None:
+                    fix = parsed
+                    rmc_wait_until = time.monotonic() + _RMC_GRACE_S
+
+        if fix is not None:
+            fix.timestamp = rmc_time
+            with self._lock:
+                self._last_rmc_time = rmc_time or self._last_rmc_time
 
         if fix is None:
             if lines == 0:
@@ -165,6 +220,12 @@ class GPS:
             self._last_no_fix_detail = detail
 
     @property
+    def last_time(self) -> datetime | None:
+        """Most recent valid RMC UTC date+time, or None before lock."""
+        with self._lock:
+            return self._last_rmc_time
+
+    @property
     def last_fix(self) -> GPSFix | None:
         with self._lock:
             return self._last_fix
@@ -175,14 +236,71 @@ class GPS:
         u-blox EXTINT: a high level forces the receiver out of power-save; in
         continuous mode (the default) the pulse is harmless.
         """
-        if GPIO is None:
+        if self._io is None:
             logger.info("GPS power cycle skipped — EXTINT pin not wired on this host")
             return
         logger.info("GPS power cycle via EXTINT")
+        self._io.write(GPS_EXTINT, True)
+        time.sleep(0.2)
+        self._io.write(GPS_EXTINT, False)
+        time.sleep(1.0)
+
+    # ── Power save between daily fixes ──────────────────────────────────────
+    #
+    # EXTINT is a TOGGLE with no readback: the pulse flips power-save on or
+    # off and the module never tells us which state it landed in. Open-loop
+    # control over hardware that cannot be interrogated is precisely how a
+    # `Fan ON` line came to mean "a GPIO is high" on a unit with no fan, so
+    # this does not trust its own bookkeeping.
+    #
+    # Instead `sleep()` records what it BELIEVES, `wake()` acts on that belief,
+    # and `GpsWorker` closes the loop through the only observable that matters:
+    # whether NMEA actually arrives. A failed attempt pulses again and retries,
+    # so a desynchronised toggle self-corrects within one cycle instead of
+    # costing every fix from then on, silently.
+    #
+    # NOT MEASURED: whether this materially lowers pack draw. A u-blox part
+    # typically falls from ~25-40 mA acquiring to microamps in backup, which
+    # on a 3.3 V rail is on the order of 1 Wh/day — real, but small next to a
+    # panel that is undersized. Confirm it on a bench meter before anybody
+    # counts it in an energy budget.
+
+    def sleep(self) -> None:
+        """Ask the module to enter power save until the next fix is due."""
+        if GPIO is None or self._power_saving:
+            return
+        self._toggle_extint()
+        self._power_saving = True
+        logger.info("GPS asked to enter power save until the next fix is due")
+
+    def wake(self) -> None:
+        """Bring the module out of power save. Safe to call when already awake."""
+        if GPIO is None or not self._power_saving:
+            return
+        self._toggle_extint()
+        self._power_saving = False
+        logger.info("GPS woken from power save")
+
+    def resync(self) -> None:
+        """Pulse once and invert the belief, after an attempt found no NMEA.
+
+        This is the self-correcting half: if `wake()` actually put the module
+        to sleep because the two sides had drifted, one more pulse restores it.
+        """
+        if GPIO is None:
+            return
+        self._toggle_extint()
+        self._power_saving = not self._power_saving
+        logger.warning(
+            "GPS produced nothing; pulsed EXTINT again (now believed %s)",
+            "asleep" if self._power_saving else "awake",
+        )
+
+    def _toggle_extint(self) -> None:
         GPIO.output(GPS_EXTINT, GPIO.HIGH)
         time.sleep(0.2)
         GPIO.output(GPS_EXTINT, GPIO.LOW)
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     def close(self) -> None:
         """Close UART port."""
@@ -255,27 +373,50 @@ def _parse_gga(sentence: str) -> GPSFix | None:
         hdop = float(parts[8]) if parts[8] else None
         altitude = float(parts[9]) if parts[9] else None
 
-        # Parse time (HHMMSS.ss)
-        timestamp = None
-        if parts[1]:
-            try:
-                h = int(parts[1][:2])
-                m = int(parts[1][2:4])
-                s = int(float(parts[1][4:]))
-                now = datetime.now(UTC)
-                timestamp = now.replace(hour=h, minute=m, second=s, microsecond=0)
-            except (ValueError, IndexError):
-                pass
-
+        # GGA carries a time-of-day and NO date. It used to be grafted onto
+        # datetime.now(UTC) here, which on a Pi with no RTC produced a real
+        # second on a fictional day. The date comes from RMC (_parse_rmc);
+        # get_fix attaches it. Until then the fix has no timestamp.
         return GPSFix(
             latitude=latitude,
             longitude=longitude,
             altitude=altitude,
             satellites=satellites,
             hdop=hdop,
-            timestamp=timestamp,
+            timestamp=None,
             fix_quality=fix_quality,
         )
 
+    except (ValueError, IndexError):
+        return None
+
+
+def _parse_rmc(sentence: str) -> datetime | None:
+    """
+    Parse $GPRMC / $GNRMC for the UTC date + time.
+
+    Format: $G?RMC,HHMMSS.ss,A,DDMM.mmm,N,DDDMM.mmm,W,SPD,COG,DDMMYY,...
+
+    Returns an aware UTC datetime only when the status field is ``A``
+    (valid) and both time and date are present — a ``V`` (void) sentence
+    is the receiver saying its clock is not yet trustworthy, and a
+    receiver's untrusted time is no better than the Pi's.
+    """
+    if not sentence.startswith(("$GPRMC", "$GNRMC")):
+        return None
+    body = sentence.split("*")[0]
+    parts = body.split(",")
+    if len(parts) < 10:
+        return None
+    if parts[2] != "A" or not parts[1] or not parts[9]:
+        return None
+    try:
+        hh, mm = int(parts[1][:2]), int(parts[1][2:4])
+        ss = int(float(parts[1][4:]))
+        dd, mo = int(parts[9][:2]), int(parts[9][2:4])
+        yy = int(parts[9][4:6])
+        # NMEA years are two digits; the GPS week rollover means a receiver
+        # cannot express a pre-2000 date anyway, so 20yy is the only reading.
+        return datetime(2000 + yy, mo, dd, hh, mm, ss, tzinfo=UTC)
     except (ValueError, IndexError):
         return None

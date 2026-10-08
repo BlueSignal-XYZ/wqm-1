@@ -16,6 +16,7 @@ import atexit
 import contextlib
 import json
 import logging
+import os
 import signal
 import socket
 import sys
@@ -41,6 +42,7 @@ from app.workers import (
     Worker,
 )
 from calibration.calibrate import CalibrationManager
+from control.irrigation_hold import IrrigationHold
 from control.led import StatusLEDs
 from control.relay import RelayController
 from control.rules import RulesEngine
@@ -55,11 +57,47 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
-from utils.config import FIRMWARE_VERSION, get_config_manager, hot_keys, restart_keys
+from utils.clock import ClockDiscipline
+from utils.config import (
+    ADC_CH_ORP,
+    ADC_CH_PH,
+    ADC_CH_TDS,
+    ADC_CH_TURBIDITY,
+    FIRMWARE_VERSION,
+    get_config_manager,
+    hot_keys,
+    restart_keys,
+)
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.sdnotify import SdNotifier
 from utils.watchdog import FanController, HardwareWatchdog
+
+
+def _hat_nets() -> dict[str, int]:
+    """Every HAT net the direct-header stack drives, by name → BCM number."""
+    from utils.config import (
+        FAN_EN,
+        GPS_EXTINT,
+        LED_PINS,
+        LORA_BUSY,
+        LORA_DIO1,
+        LORA_RST,
+        RELAY_PINS,
+    )
+
+    nets: dict[str, int] = {}
+    for i, pin in enumerate(RELAY_PINS, start=1):
+        nets[f"relay_{i}"] = pin
+    for i, pin in enumerate(LED_PINS, start=1):
+        nets[f"led_{i}"] = pin
+    nets["lora_rst"] = LORA_RST
+    nets["lora_busy"] = LORA_BUSY
+    nets["lora_dio1"] = LORA_DIO1
+    nets["gps_extint"] = GPS_EXTINT
+    nets["fan_en"] = FAN_EN
+    return nets
+
 
 logger = logging.getLogger("wqm1")
 
@@ -117,11 +155,20 @@ def _setup_logging() -> None:
 class WQM1App:
     """Firmware wiring: builds hardware + workers, runs the supervisor."""
 
-    def __init__(self) -> None:
-        self._config = get_config_manager()
+    # Class-level default so a partially built app (tests build one with
+    # __new__ to exercise _handle_cmd) still answers relay_set.
+    _hold: Any = None
+
+    def __init__(self, config_path: str | None = None) -> None:
+        # An explicit path lets N virtual units run on one host, each with its
+        # own config; a real unit passes nothing and gets /etc/bluesignal.
+        self._config = get_config_manager(config_path) if config_path else get_config_manager()
         self._settings_provider = lambda: self._config.settings
         self._state = StateStore()
         self._supervisor: Supervisor | None = None
+        # Clock confidence: NTP when timesyncd has it, GPS RMC when it does
+        # not, and 'unsynced' stamped on every reading otherwise.
+        self._clock = ClockDiscipline()
 
         # Device identity
         self._device_id = get_device_id()
@@ -129,6 +176,7 @@ class WQM1App:
 
         # Components (lazy-initialised in start(); typed Any to avoid
         # union-attr noise — init order is guaranteed by start())
+        self._pins: Any = None  # platform_support.HostPins on direct-header boards
         self._relays: Any = None
         self._leds: Any = None
         self._fan: Any = None
@@ -150,6 +198,7 @@ class WQM1App:
         self._health: Any = None
         self._cal: Any = None
         self._rules: Any = None
+        self._hold: Any = None
         self._monitor: Any = None
         self._adaptive: Any = None
         self._smart_breaker: Any = None
@@ -167,10 +216,41 @@ class WQM1App:
         logger.info("WQM-1 firmware v%s starting (device=%s)", FW_VERSION, self._device_id)
 
         # --- Host board: decides whether Linux can reach the headers ---
-        from platform_support import detect_board
+        from platform_support import active_pins, detect_board, set_active_board
 
         self._board = detect_board(override=self._settings.board)
+        # Every driver asks platform_support for the active profile from
+        # here on, so the config override reaches them too.
+        set_active_board(self._board)
         direct = self._board.has_direct_headers
+        # Where the HAT's nets land on this host: bus numbers, the GPS UART
+        # and a (chip, line) per BCM number. On the Pi this is the identity
+        # map; on the Orange Pi Zero 3W it is the published pinout plus the
+        # pins the bench read off the board (scripts/host-pins.py).
+        self._pins = active_pins() if direct else None
+        if self._pins is not None:
+            logger.info(
+                "Host pins: %s backend, i2c-%d, spidev%d.%d, GPS on %s (%s)",
+                self._pins.backend,
+                self._pins.i2c_bus,
+                self._pins.spi_bus,
+                self._pins.spi_device,
+                self._pins.gps_port,
+                self._pins.source,
+            )
+            missing = self._pins.unresolved(_hat_nets())
+            if missing:
+                # Say exactly which nets cannot be driven, and the fix. The
+                # driver that needs one of them refuses at construction
+                # (below), so this line is the one that explains the refusal.
+                logger.error(
+                    "%d HAT net(s) have no known line on %s: %s — run "
+                    "scripts/host-pins.py --from-readall on the board and "
+                    "restart (see docs/platforms.md)",
+                    len(missing),
+                    self._board.name,
+                    ", ".join(f"{net}=BCM{bcm}(pin {phys})" for net, bcm, phys in missing),
+                )
         if not direct:
             # Arduino Q family (UNO Q / VENTUNO Q): headers belong to the
             # MCU, so analog probes, LoRa, relays, LEDs, and the fan are
@@ -180,6 +260,24 @@ class WQM1App:
                 "Board %s has no direct header access — running digital-first "
                 "(RS485 + GPS + cloud); analog/LoRa/relay disabled",
                 self._board.name,
+            )
+
+        # --- Virtual unit: synthetic drivers, no hardware at all ---
+        # `simulate_enabled` is never remotely settable (config schema), so a
+        # field unit cannot be switched into this branch from the cloud. The
+        # drivers present the hardware drivers' surface; everything below the
+        # sensors (DB, cloud client, workers, command socket) is the real code.
+        self._sim = None
+        if self._settings.simulate_enabled:
+            from sensors.sim import build_simulated_sensors
+
+            self._sim = build_simulated_sensors(self._settings)
+            direct = False
+            logger.warning(
+                "SIMULATED UNIT (simulate_enabled=true) — synthetic sensors, no hardware. "
+                "Device %s must carry a SIM-WQM1- serial; faults=%r",
+                self._device_id,
+                self._settings.simulate_faults,
             )
 
         # --- GPIO outputs (direct-header boards only) ---
@@ -195,8 +293,14 @@ class WQM1App:
 
         # --- ADC + sensors (direct-header boards only) ---
         self._cal = CalibrationManager()
+        if self._sim is not None:
+            self._temp = self._sim.temperature
+            self._ph = self._sim.ph
+            self._tds = self._sim.tds
+            self._turbidity = self._sim.turbidity
+            self._flow = self._sim.flow
         if direct:
-            self._adc = ADS1115()
+            self._adc = ADS1115(bus=self._pins.i2c_bus)
             # Only build a sensor for a probe that is declared FITTED. An
             # undeclared channel is left as None, and SamplingWorker skips a
             # None sensor — so an open input can never be read, converted, and
@@ -225,7 +329,7 @@ class WQM1App:
         # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
         # supersede their analog equivalents inside SamplingWorker.step().
         s = self._settings
-        if (
+        if self._sim is None and (
             s.rs485_chlorine_enabled
             or s.rs485_orp_enabled
             or s.rs485_multi_enabled
@@ -292,11 +396,16 @@ class WQM1App:
 
                 db = self._db
                 saved = db.get_meta("flow_pulse_count")
+                # The BCM number names the net; the host says which chip and
+                # line that is (chip 0 / the same number on the Pi).
+                flow_chip, flow_line = self._pins.line(self._settings.flow_pulse_gpio)
                 self._flow = PulseFlowMeter(
                     gpio=self._settings.flow_pulse_gpio,
                     k_ppg=cal.flow_k_ppg,
                     initial_count=int(saved) if saved else 0,
                     persist=lambda n: db.set_meta("flow_pulse_count", str(n)),
+                    chip=flow_chip,
+                    line=flow_line,
                 )
                 if self._settings.rs485_flow_enabled:
                     logger.warning(
@@ -324,16 +433,28 @@ class WQM1App:
             logger.info("Sensing modules not present — fixed-cadence sampling")
 
         # --- GPS ---
-        try:
-            self._gps = GPS(baud=self._settings.gps_baud)
-        except Exception as e:
-            logger.warning("GPS init failed: %s", e)
+        if self._sim is not None:
+            self._gps = self._sim.gps
+        elif not self._settings.gps_enabled:
+            # Declared not fitted at the network step: no UART opened, no
+            # power-cycles of a receiver that is not there, no amber card.
+            logger.info("GPS not fitted (gps_enabled: false) — skipping")
+        else:
+            try:
+                gps_kwargs: dict[str, Any] = {"baud": self._settings.gps_baud}
+                if self._pins is not None:
+                    gps_kwargs["port"] = self._pins.gps_port
+                self._gps = GPS(**gps_kwargs)
+            except Exception as e:
+                logger.warning("GPS init failed: %s", e)
 
         # --- LoRa + LoRaWAN (direct-header boards only: SX1262 is SPI) ---
         try:
             if not direct:
                 raise RuntimeError("no direct SPI on this board")
-            self._radio = SX1262()
+            if not self._settings.lora_enabled:
+                raise RuntimeError("LoRa not fitted (lora_enabled: false)")
+            self._radio = SX1262(pins=self._pins)
             self._radio.init()
             app_key = bytes.fromhex(self._settings.app_key)
             # Config wins over the compiled-in placeholder so a TTN application
@@ -412,13 +533,29 @@ class WQM1App:
                 retry_delays=self._settings.retry_delays,
                 radios_provider=self._radios_snapshot,
                 health_provider=self._health.get_report,
+                irrigation_hold_provider=self._irrigation_hold_payload,
             )
             logger.info("Cloud HTTP transport enabled (ingest=%s)", self._settings.cloud_ingest_url)
         else:
             self._cloud = None
 
+        # --- Irrigation hold ---
+        # Its own engine, not a Rule: rules cannot arrive from the cloud, and
+        # every rules-engine guard would cut an energised hold short. Built
+        # before the rules engine so rules on its channel are set aside (with a
+        # WARNING) at load. A virtual unit has no relay controller; it gets an
+        # in-memory one so the hold can be driven in the emulator.
+        hold_relays = self._relays
+        if hold_relays is None and self._sim is not None:
+            from sensors.sim import SimRelays
+
+            hold_relays = SimRelays()
+        self._hold = IrrigationHold(hold_relays)
+        self._hold.configure(self._settings)
+
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
+        self._rules.set_reserved_channels_provider(self._hold.reserved_channels)
         self._load_policies()
         # The hard on-time ceiling lives in the relay controller so it binds
         # every source — rules, cloud, Service Window, LoRa downlink alike.
@@ -474,8 +611,16 @@ class WQM1App:
         logger.info("All subsystems initialised")
 
     def _build_workers(self) -> list[Worker]:
+        sampler_cls: Any = SamplingWorker
+        sampler_args: tuple[Any, ...] = ()
+        if self._sim is not None:
+            from sensors.sim.unit import SimSamplingWorker
+
+            sampler_cls = SimSamplingWorker
+            sampler_args = (self._sim,)
         workers: list[Worker] = [
-            SamplingWorker(
+            sampler_cls(
+                *sampler_args,
                 self._settings_provider,
                 sensors={
                     "temperature": self._temp,
@@ -495,10 +640,20 @@ class WQM1App:
                 state=self._state,
                 monitor=self._monitor,
                 adaptive=self._adaptive,
+                clock_source=self._clock.source,
+                irrigation_hold=self._hold,
             )
         ]
         if self._gps is not None:
-            workers.append(GpsWorker(self._settings_provider, self._gps, self._leds, self._state))
+            workers.append(
+                GpsWorker(
+                    self._settings_provider,
+                    self._gps,
+                    self._leds,
+                    self._state,
+                    on_time=self._clock.observe_gps,
+                )
+            )
         if self._lorawan is not None:
             workers.append(
                 _JoiningRadioWorker(
@@ -547,11 +702,13 @@ class WQM1App:
 
     # -- service-window command socket ---------------------------------------
 
-    _CMD_SOCK_PATH = "/var/run/bluesignal/cmd.sock"
+    @property
+    def _cmd_sock_path(self) -> str:
+        return str(self._settings.cmd_sock)
 
     def _start_cmd_listener(self) -> None:
         """Start Unix domain socket listener for service window commands."""
-        sock_path = Path(self._CMD_SOCK_PATH)
+        sock_path = Path(self._cmd_sock_path)
         try:
             sock_path.parent.mkdir(parents=True, exist_ok=True)
             if sock_path.exists():
@@ -597,6 +754,12 @@ class WQM1App:
                 return {"ok": False, "error": "channel must be 1-4"}
             if not isinstance(state, bool):
                 return {"ok": False, "error": "state must be boolean"}
+            if self._hold is not None and self._hold.owns(channel):
+                # A manual OFF would silently release a hold; a manual ON would
+                # leave a coil the hold then thinks it controls. Cloud commands
+                # and the Service Window both arrive here; LoRa FPort 100 is
+                # refused in RulesEngine.process_downlink_command.
+                return {"ok": False, "error": f"irrigation hold owns relay {channel}"}
             duration = cmd.get("duration_s")
             if duration is not None and (
                 isinstance(duration, bool) or not isinstance(duration, int | float) or duration < 0
@@ -627,7 +790,12 @@ class WQM1App:
             return request_host_reboot(self._relays, REBOOT_REQUEST_FLAG)
         if action == "config_reload":
             self._config.reload()
+            self._reconfigure_hold()
             return {"ok": True, "configVersion": self._config.remote_version}
+        if action == "irrigation_hold_status":
+            if self._hold is None:
+                return {"ok": False, "error": "irrigation hold not initialised"}
+            return {"ok": True, **self._hold.status()}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
         if action in ("awg_set", "circuit_set"):
@@ -650,7 +818,47 @@ class WQM1App:
             if self._smart_breaker is None:
                 return {"ok": True, "configured": False, "vendor": "none"}
             return {"ok": True, "configured": True, **self._smart_breaker.status()}
+        if action == "adc_voltages":
+            return self._adc_voltages()
         return {"ok": False, "error": f"unknown action: {action}"}
+
+    # Channel order is the wizard's order, not the chip's.
+    _ADC_CHANNELS: tuple[tuple[str, int], ...] = (
+        ("ph", ADC_CH_PH),
+        ("tds", ADC_CH_TDS),
+        ("turbidity", ADC_CH_TURBIDITY),
+        ("orp", ADC_CH_ORP),
+    )
+
+    def _adc_voltages(self) -> dict:
+        """Raw ADC voltages, for the Service Window's calibration wizards.
+
+        Every wizard tells the installer to "read the voltage" and, until this
+        existed, nothing in the product displayed one — so the only way to
+        calibrate a unit was to SSH in and poke the ADC by hand, which is not a
+        thing a field installer does. The channel therefore stayed on its
+        factory-nominal constants, and a nominal pH reading looks exactly like
+        a calibrated one.
+
+        This runs in the daemon rather than in the Service Window process for a
+        specific reason: the daemon owns the I2C bus. Two processes driving an
+        ADS1115's single conversion register cannot be made safe by a lock in
+        either one of them (see ADS1115._lock) — the Service Window must ask,
+        never read.
+
+        Returns raw volts only. Anything derived (divider, temperature, ppm) is
+        computed from the one shared function the sensor itself uses, so a
+        wizard can never be arithmetically out of step with the measurement.
+        """
+        if self._adc is None:
+            return {"ok": False, "error": "no ADC on this board"}
+        channels: dict[str, dict] = {}
+        for name, ch in self._ADC_CHANNELS:
+            try:
+                channels[name] = {"channel": ch, "adcVolts": round(self._adc.read_voltage(ch), 5)}
+            except Exception as e:  # noqa: BLE001 — one dead channel must not hide the other three
+                channels[name] = {"channel": ch, "error": str(e)[:80]}
+        return {"ok": True, "channels": channels}
 
     # First match wins. /etc/bluesignal is the only location that survives an
     # upgrade: setup.sh and the OTA agent install each release into its own
@@ -780,6 +988,7 @@ class WQM1App:
                 self._state.request_restart()
             elif cmd_type == "config_reload":
                 self._config.reload()
+                self._reconfigure_hold()
                 self._cloud.ack_command(cmd_id, "done")
             elif cmd_type == "ota_check":
                 self._nudge_ota_agent()
@@ -833,6 +1042,7 @@ class WQM1App:
             needs_restart = restart_keys(values)
             if applied_hot:
                 logger.info("Hot-applied: %s", ", ".join(sorted(applied_hot)))
+                self._reconfigure_hold()
             if needs_restart:
                 logger.info(
                     "Restart-required keys applied (%s) — requesting graceful restart",
@@ -848,6 +1058,19 @@ class WQM1App:
                     "details": {"version": version, "errors": errors[:5]},
                 }
             )
+
+    def _reconfigure_hold(self) -> None:
+        """Re-snapshot the irrigation hold's (hot) settings after a reload, so
+        a disable or a relay change takes effect now rather than next sample."""
+        if self._hold is not None:
+            try:
+                self._hold.configure(self._settings)
+            except Exception as e:  # noqa: BLE001 — a reload must not fail on this
+                logger.error("Irrigation hold reconfigure failed: %s", e)
+
+    def _irrigation_hold_payload(self) -> dict[str, Any] | None:
+        """metadata.irrigationHold at upload time; None omits the key."""
+        return self._hold.payload() if self._hold is not None else None
 
     def _apply_water_profile(self, profile: dict, persist: bool = True) -> None:
         """Install the learned baseline into the rules engine and (by default)
@@ -910,7 +1133,7 @@ class WQM1App:
         if self._cmd_sock:
             with contextlib.suppress(Exception):
                 self._cmd_sock.close()
-            sock_path = Path(self._CMD_SOCK_PATH)
+            sock_path = Path(self._cmd_sock_path)
             if sock_path.exists():
                 with contextlib.suppress(Exception):
                     sock_path.unlink()
@@ -966,9 +1189,25 @@ class _JoiningRadioWorker(RadioWorker):
         super().step()
 
 
+def _config_path_from_argv(argv: list[str]) -> str | None:
+    """``--config PATH`` (or ``BLUESIGNAL_CONFIG``) — used by the fleet
+    simulator; a real unit runs with neither and reads /etc/bluesignal."""
+    for i, arg in enumerate(argv):
+        if arg == "--config" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--config="):
+            return arg.split("=", 1)[1]
+    return os.environ.get("BLUESIGNAL_CONFIG") or None
+
+
 def main() -> None:
+    config_path = _config_path_from_argv(sys.argv[1:])
+    if config_path:
+        # Settings are read once at construction; logging needs them, so the
+        # manager must be primed with the path BEFORE _setup_logging runs.
+        get_config_manager(config_path)
     _setup_logging()
-    app = WQM1App()
+    app = WQM1App(config_path)
     try:
         app.start()
         app.run()

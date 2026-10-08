@@ -1,0 +1,82 @@
+# Deletes finished branches so master is the only long-lived one.
+# Ported from the marketplace repo's cleanup-session-branches.yml (2026-10-08):
+# branch deletes are refused from a Claude Code session, so the repo prunes
+# itself. A branch is deleted only when:
+#   - its head commit is already reachable from master, or
+#   - one of its PRs was merged (a squash leaves the head unreachable), or
+#   - all its PRs have been closed unmerged for 2+ days, or
+#   - it has no PR and its last commit is 2+ days old.
+# A branch with an open PR is never touched. Runs daily, on dispatch, and on
+# the push to master that changes this file.
+name: Cleanup branches
+
+'on':
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/cleanup-branches.yml']
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune finished branches
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const STALE_DAYS = 2;
+            const now = Date.now();
+            const { owner, repo } = context.repo;
+            const { data: info } = await github.rest.repos.get({ owner, repo });
+            const base = info.default_branch;
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner, repo, per_page: 100,
+            });
+
+            for (const branch of branches.filter((b) => b.name !== base && !b.protected)) {
+              const prs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'all', head: `${owner}:${branch.name}`, per_page: 100,
+              });
+
+              if (prs.some((pr) => pr.state === 'open')) {
+                core.info(`keep  ${branch.name} (open PR)`);
+                continue;
+              }
+
+              let reason = null;
+              const { data: cmp } = await github.rest.repos.compareCommits({
+                owner, repo, base, head: branch.commit.sha,
+              });
+              if (cmp.status === 'behind' || cmp.status === 'identical') {
+                reason = `reachable from ${base}`;
+              } else if (prs.some((pr) => pr.merged_at)) {
+                reason = 'PR merged';
+              } else if (prs.length > 0) {
+                const newestClose = Math.max(...prs.map((pr) => Date.parse(pr.closed_at)));
+                if (now - newestClose > STALE_DAYS * 86400e3) {
+                  reason = `PR closed unmerged >${STALE_DAYS}d`;
+                }
+              } else {
+                const { data: commit } = await github.rest.repos.getCommit({
+                  owner, repo, ref: branch.commit.sha,
+                });
+                if (now - Date.parse(commit.commit.committer.date) > STALE_DAYS * 86400e3) {
+                  reason = `no PR, last commit >${STALE_DAYS}d`;
+                }
+              }
+
+              if (!reason) {
+                core.info(`keep  ${branch.name} (not finished yet)`);
+                continue;
+              }
+
+              await github.rest.git.deleteRef({ owner, repo, ref: `heads/${branch.name}` });
+              core.notice(`deleted ${branch.name} (${reason})`);
+            }

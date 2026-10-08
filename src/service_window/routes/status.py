@@ -5,6 +5,7 @@ import time
 
 from flask import Blueprint, current_app, render_template
 
+from control.irrigation_hold import status_line
 from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
@@ -24,14 +25,15 @@ def index() -> str:
     try:
         readings = db.get_readings(limit=30)
         count = db.get_reading_count()
+        pending = db.get_pending_count()
         session = db.get_lorawan_session()
     except Exception:
-        readings, count, session = [], 0, None
+        readings, count, pending, session = [], 0, 0, None
     latest = readings[0] if readings else None
     config = read_config(current_app.config["CONFIG_PATH"])
 
     s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
-    sys_cards = system_cards(readings, config, session, count)
+    sys_cards = system_cards(readings, config, session, count, pending=pending)
     if config.get("smart_breaker_vendor") == "ableedge":
         # Live snapshot, not SQLite: only asked for when a breaker is bound so
         # an unbound unit never pays the socket round-trip on its home page.
@@ -40,6 +42,11 @@ def index() -> str:
         if card is not None:
             sys_cards["smart_breaker"] = card
     overall = worst_status({**s_cards, **sys_cards})
+    # The hold's settings live in the remote overlay this process cannot
+    # read, so ask the firmware every time. No answer = no row, never a guess.
+    irrigation_hold = status_line(
+        send_command(current_app.config["CMD_SOCK"], "irrigation_hold_status")
+    )
 
     lora_joined = bool(session and session.get("joined"))
     lora_fcnt = session.get("fcnt_up", 0) if session else 0
@@ -51,9 +58,11 @@ def index() -> str:
         overall=overall,
         reading=latest,
         reading_count=count,
+        pending=pending,
         lora_joined=lora_joined,
         lora_fcnt=lora_fcnt,
         fw_version=read_firmware_version(),
         hostname=platform.node(),
         uptime_s=int(time.monotonic() - _START_TIME),
+        irrigation_hold=irrigation_hold,
     )

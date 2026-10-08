@@ -71,6 +71,18 @@ sys.modules["w1thermsensor"] = _w1
 
 
 @pytest.fixture(autouse=True)
+def _reset_active_board():
+    """A test that pins a board profile must not leak it into the next one."""
+    yield
+    try:
+        from platform_support import set_active_board
+
+        set_active_board(None)
+    except Exception:  # noqa: BLE001 — platform_support may be unimportable mid-refactor
+        pass
+
+
+@pytest.fixture(autouse=True)
 def mock_hardware():
     """Provide access to mock hardware objects and reset between tests."""
     _gpio.reset_mock()
@@ -145,3 +157,27 @@ def no_outbound_http(monkeypatch):
         raise netinfo.urllib.error.URLError("outbound HTTP blocked in tests")
 
     monkeypatch.setattr(netinfo.urllib.request, "urlopen", blocked)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network_mutation(monkeypatch):
+    """No test may reconfigure the machine running it.
+
+    The setup wizard now forgets saved Wi-Fi profiles when it finishes and the
+    AP fallback installs a NAT rule (site flow v2). On a developer laptop with
+    NetworkManager, an unpatched test walking the wizard would delete that
+    laptop's saved networks. Every ``utils.netctl`` subprocess answers
+    "binary not found" unless a test installs its own fake (test_netctl.py
+    does, and a later setattr wins). The virtual radio is cleared too, so a
+    shell that exported WQM1_VIRTUAL_NET cannot change what a test sees.
+    """
+    from utils import netctl
+
+    monkeypatch.setattr(netctl, "_run", lambda argv, timeout=15.0: (127, "", "blocked in tests"))
+    monkeypatch.delenv("WQM1_VIRTUAL_NET", raising=False)
+    try:
+        from service_window import captive
+
+        captive.reset_cache()
+    except ImportError:
+        pass

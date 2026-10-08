@@ -1,8 +1,22 @@
 #!/bin/bash
 # WQM-1 Hardware Diagnostics
 # Run after setup.sh + reboot to verify all subsystems.
-# Usage: sudo bash /opt/bluesignal/scripts/diagnostics.sh
+# Usage: sudo bash /opt/bluesignal/current/scripts/diagnostics.sh [--relays]
+#
+#   --relays   Also click each of the four relays ON for 1 s, then OFF, so you
+#              can hear them. Off by default: whatever is wired to a relay
+#              output runs for that second. Stops the firmware service for the
+#              test and starts it again afterwards.
 set -uo pipefail
+
+RUN_RELAYS=0
+for arg in "$@"; do
+    case "$arg" in
+        --relays) RUN_RELAYS=1 ;;
+        -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
+    esac
+done
 
 PASS=0
 WARN=0
@@ -63,6 +77,110 @@ svc_perm_fail() {
     echo "         Fix: sudo usermod -aG $group $SERVICE_USER  (then restart the service)"
 }
 
+# --- Identity: what to type into Cloud ---
+#
+# Printed first because it is the one thing the bench needs to carry away:
+# the device id the firmware reports under (the printed WQM- label when the
+# card carries an identity file, else derived from the board serial) and the
+# DevEUI the claim asks for.
+# Read from the installed firmware's own identity module so it can never
+# disagree with what the unit actually posts.
+ID_SRC=""
+for d in /opt/bluesignal/current/src "$(cd "$(dirname "$0")" && pwd)/../src"; do
+    [ -f "$d/utils/identity.py" ] && { ID_SRC="$d"; break; }
+done
+if [ -n "$ID_SRC" ]; then
+    IDENTITY="$(python3 - "$ID_SRC" <<'PYEOF' 2>/dev/null
+import sys
+sys.path.insert(0, sys.argv[1])
+from utils.identity import get_dev_eui, get_device_id, get_pi_serial
+print(get_device_id())
+print(get_dev_eui().hex().upper())
+print(get_pi_serial())
+PYEOF
+)"
+    DEVICE_ID="$(echo "$IDENTITY" | sed -n 1p)"
+    DEV_EUI="$(echo "$IDENTITY" | sed -n 2p)"
+    PI_SERIAL="$(echo "$IDENTITY" | sed -n 3p)"
+    if [ -n "$DEVICE_ID" ]; then
+        info "Device ID: $DEVICE_ID   (enter this in Cloud commissioning)"
+        info "DevEUI:    $DEV_EUI"
+        info "Pi serial: $PI_SERIAL"
+        if [ "$PI_SERIAL" = "0000000000000000" ] && [ "${DEVICE_ID#BS-WQM1-}" != "$DEVICE_ID" ]; then
+            fail "Identity: Pi serial unreadable — every unit would share one device id"
+        fi
+    else
+        warn "Identity: could not read device id from $ID_SRC/utils/identity.py"
+    fi
+else
+    warn "Identity: firmware not installed — run setup.sh"
+fi
+API_KEY_SET="$(cfg api_key '')"
+if [ -n "$API_KEY_SET" ]; then
+    info "Cloud key: set in $CONFIG_FILE (…${API_KEY_SET: -4})"
+else
+    info "Cloud key: not set yet — claim in Cloud, then paste it at http://$(hostname).local:8080"
+fi
+echo ""
+
+# --- Host board: which device nodes the firmware will open ---
+#
+# The HAT's nets are the same on every host; the kernel's names for the
+# buses are not. Ask the firmware's own platform layer so this script checks
+# the nodes the service will open, not the Pi's by habit. Falls back to the
+# Pi's nodes if the platform layer cannot be imported (a broken install is a
+# separate FAIL further down).
+FW_SRC="$(cd "$(dirname "$0")/.." && pwd)/src"
+HOST_FACTS="$(PYTHONPATH="$FW_SRC" python3 - "$CONFIG_FILE" <<'HOSTPY' 2>/dev/null || true
+import sys
+try:
+    import yaml
+    cfg = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception:
+    cfg = {}
+from platform_support import detect_board, pins_for_board
+board = detect_board(override=str(cfg.get("board", "auto")))
+pins = pins_for_board(board.id)
+print(board.id, pins.backend, pins.i2c_bus, pins.spi_bus, pins.spi_device, pins.gps_port, pins.w1_pin or "-")
+HOSTPY
+)"
+read -r HOST_BOARD HOST_BACKEND HOST_I2C_BUS HOST_SPI_BUS HOST_SPI_DEV HOST_GPS_PORT HOST_W1_PIN \
+    <<< "${HOST_FACTS:-rpi-zero-2w rpi 1 0 0 /dev/serial0 GPIO4}"
+I2C_DEV="/dev/i2c-${HOST_I2C_BUS}"
+SPI_DEV="/dev/spidev${HOST_SPI_BUS}.${HOST_SPI_DEV}"
+GPS_DEV="$HOST_GPS_PORT"
+if [ "$HOST_BACKEND" = "gpiochip" ]; then
+    # Orange Pi (Allwinner): overlays live in /boot/orangepiEnv.txt, the GPS
+    # shares UART0 with the debug console, and five header pins are read
+    # off the board rather than published.
+    I2C_HINT="enable the TWI0 (i2c0) overlay in /boot/orangepiEnv.txt — see docs/platforms.md"
+    SPI_HINT="enable the SPI3 spidev overlay in /boot/orangepiEnv.txt — see docs/platforms.md"
+    W1_HINT="enable the w1-gpio overlay on ${HOST_W1_PIN} in /boot/orangepiEnv.txt"
+    GPS_HINT="UART0 is the debug console on this board — set console=display in /boot/orangepiEnv.txt, mask serial-getty@ttyS0, reboot"
+    GPS_CONSOLE_HINT="         holds the UART as a console — set console=display in /boot/orangepiEnv.txt,\n         mask serial-getty@ttyS0, and reboot."
+else
+    I2C_HINT="check dtparam=i2c_arm=on in config.txt"
+    SPI_HINT="check dtparam=spi=on in config.txt"
+    W1_HINT="check dtoverlay=w1-gpio in config.txt"
+    GPS_HINT="check enable_uart=1 and dtoverlay=disable-bt"
+    GPS_CONSOLE_HINT="         holds the UART as a console — remove console=serial0 from\n         /boot/firmware/cmdline.txt, mask serial-getty@ttyAMA0, and reboot."
+fi
+info "Host:    $HOST_BOARD ($HOST_BACKEND) — i2c ${I2C_DEV}, spi ${SPI_DEV}, gps ${GPS_DEV}"
+
+# --- Host pins (gpiochip hosts only): every HAT net must have a known line ---
+if [ "$HOST_BACKEND" = "gpiochip" ]; then
+    HOSTPINS_SCRIPT="$(dirname "$0")/host-pins.py"
+    if [ -f "$HOSTPINS_SCRIPT" ]; then
+        if PYTHONPATH="$FW_SRC" python3 "$HOSTPINS_SCRIPT" --check >/tmp/host-pins.txt 2>&1; then
+            pass "Pins:    every HAT net resolved on $HOST_BOARD"
+        else
+            fail "Pins:    unresolved HAT net(s) on $HOST_BOARD — relays/LEDs/LoRa cannot start"
+            grep -E "UNRESOLVED|CONFLICT" /tmp/host-pins.txt | sed 's/^/         /'
+            echo "         Fix: gpio readall | sudo python3 $HOSTPINS_SCRIPT --from-readall -"
+        fi
+    fi
+fi
+
 # --- I2C: ADS1115 at 0x48 ---
 if command -v i2cdetect &>/dev/null; then
     # On fresh Trixie boots i2c-dev may not be loaded yet; make sure it is
@@ -76,7 +194,7 @@ if command -v i2cdetect &>/dev/null; then
     # lands mid-transaction can miss a device that is present.
     I2C_SCAN=""
     for _ in 1 2 3; do
-        I2C_SCAN="$(i2cdetect -y 1 2>/dev/null || true)"
+        I2C_SCAN="$(i2cdetect -y "$HOST_I2C_BUS" 2>/dev/null || true)"
         case "$I2C_SCAN" in
             *" 48 "*|*" 48"|*"UU"*) break ;;
         esac
@@ -85,12 +203,12 @@ if command -v i2cdetect &>/dev/null; then
     case "$I2C_SCAN" in
         *" 48 "*|*" 48")
             # Root found the chip. That is only half the answer: the firmware
-            # opens /dev/i2c-1 as SERVICE_USER, and a node root can drive is
+            # opens the bus node as SERVICE_USER, and a node root can drive is
             # not necessarily one the service can.
-            if svc_can_rw /dev/i2c-1; then
-                pass "I2C:     ADS1115 found at 0x48"
+            if svc_can_rw "$I2C_DEV"; then
+                pass "I2C:     ADS1115 found at 0x48 on $I2C_DEV"
             else
-                svc_perm_fail /dev/i2c-1 i2c "I2C:    "
+                svc_perm_fail "$I2C_DEV" i2c "I2C:    "
                 echo "         (the ADS1115 IS present at 0x48 — this is permissions, not hardware)"
             fi ;;
         *)
@@ -101,7 +219,7 @@ if command -v i2cdetect &>/dev/null; then
             if [ -n "$I2C_SCAN" ]; then
                 echo "$I2C_SCAN" | sed 's/^/         /'
             else
-                echo "         (i2cdetect produced no output — is /dev/i2c-1 present?)"
+                echo "         (i2cdetect produced no output — is $I2C_DEV present? $I2C_HINT)"
             fi ;;
     esac
 else
@@ -123,10 +241,10 @@ if [ -d "$W1_DIR" ]; then
         fail "1-Wire:  No DS18B20 sensor found in $W1_DIR (declared fitted — check the 4.7k pull-up to 3.3V and wiring to GPIO 4)"
     fi
 else
-    fail "1-Wire:  $W1_DIR does not exist — check dtoverlay=w1-gpio in config.txt"
+    fail "1-Wire:  $W1_DIR does not exist — $W1_HINT"
 fi
 
-# --- UART: GPS on /dev/serial0 ---
+# --- UART: GPS on $GPS_DEV (/dev/serial0 on the Pi, /dev/ttyS0 on the Orange Pi) ---
 #
 # Three things are checked, in the order that a real failure presents:
 #   1. Can the SERVICE USER open the port? Root always can — that is precisely
@@ -137,9 +255,9 @@ fi
 #   3. If not, which baud does work? A mismatch is the most common GPS fault
 #      and the fix is one config line, so the check names it rather than
 #      leaving "no NMEA sentences" for someone to interpret.
-if [ -e /dev/serial0 ]; then
+if [ -e $GPS_DEV ]; then
     GPS_BAUD="$(cfg gps_baud 38400)"
-    SERIAL_REAL="$(readlink -f /dev/serial0)"
+    SERIAL_REAL="$(readlink -f $GPS_DEV)"
 
     # 1. Permission, as the firmware's user rather than as root. Write matters
     #    as much as read: pyserial sets termios on open, which needs both.
@@ -152,50 +270,49 @@ if [ -e /dev/serial0 ]; then
     if [ "$GPS_READABLE" -eq 0 ]; then
         svc_perm_fail "$SERIAL_REAL" dialout "GPS:    "
         echo "         Expected root:dialout 0660. root:tty 0600 means the kernel still"
-        echo "         holds the UART as a console — remove console=serial0 from"
-        echo "         /boot/firmware/cmdline.txt, mask serial-getty@ttyAMA0, and reboot."
+        printf '%b\n' "$GPS_CONSOLE_HINT"
     else
         # 2. Read at the configured baud.
-        stty -F /dev/serial0 "$GPS_BAUD" raw -echo 2>/dev/null || true
-        GPS_DATA=$(timeout 3 cat /dev/serial0 2>/dev/null || true)
+        stty -F $GPS_DEV "$GPS_BAUD" raw -echo 2>/dev/null || true
+        GPS_DATA=$(timeout 3 cat $GPS_DEV 2>/dev/null || true)
         if echo "$GPS_DATA" | grep -qE '\$G[NPLA]'; then
-            pass "GPS:     NMEA at ${GPS_BAUD} baud on /dev/serial0"
+            pass "GPS:     NMEA at ${GPS_BAUD} baud on $GPS_DEV"
         else
             # 3. Sweep. Naming the working baud turns a vague warning into a fix.
             GPS_FOUND=""
             for b in 38400 9600 115200 19200 57600; do
                 [ "$b" = "$GPS_BAUD" ] && continue
-                stty -F /dev/serial0 "$b" raw -echo 2>/dev/null || continue
-                if timeout 2 cat /dev/serial0 2>/dev/null | grep -qE '\$G[NPLA]'; then
+                stty -F $GPS_DEV "$b" raw -echo 2>/dev/null || continue
+                if timeout 2 cat $GPS_DEV 2>/dev/null | grep -qE '\$G[NPLA]'; then
                     GPS_FOUND="$b"
                     break
                 fi
             done
-            stty -F /dev/serial0 "$GPS_BAUD" raw -echo 2>/dev/null || true
+            stty -F $GPS_DEV "$GPS_BAUD" raw -echo 2>/dev/null || true
             if [ -n "$GPS_FOUND" ]; then
                 fail "GPS:     no NMEA at ${GPS_BAUD} baud — but valid NMEA at ${GPS_FOUND}"
                 echo "         Set 'gps_baud: ${GPS_FOUND}' in $CONFIG_FILE and restart."
             elif [ -n "$GPS_DATA" ]; then
-                warn "GPS:     bytes on /dev/serial0 but no NMEA at any common baud (module may need time)"
+                warn "GPS:     bytes on $GPS_DEV but no NMEA at any common baud (module may need time)"
             else
-                warn "GPS:     no data on /dev/serial0 (check antenna / wait for cold start)"
+                warn "GPS:     no data on $GPS_DEV (check antenna / wait for cold start)"
             fi
         fi
     fi
 else
-    fail "GPS:     /dev/serial0 does not exist — check enable_uart=1 and dtoverlay=disable-bt"
+    fail "GPS:     $GPS_DEV does not exist — $GPS_HINT"
 fi
 
 # --- SPI: LoRa radio ---
-if [ -e /dev/spidev0.0 ]; then
-    if svc_can_rw /dev/spidev0.0; then
-        pass "SPI:     /dev/spidev0.0"
+if [ -e "$SPI_DEV" ]; then
+    if svc_can_rw "$SPI_DEV"; then
+        pass "SPI:     $SPI_DEV"
     else
-        svc_perm_fail /dev/spidev0.0 spi "SPI:    "
+        svc_perm_fail "$SPI_DEV" spi "SPI:    "
         echo "         The LoRa radio will never key up; joins fail with no radio error."
     fi
 else
-    fail "SPI:     /dev/spidev0.0 missing — check dtparam=spi=on in config.txt"
+    fail "SPI:     $SPI_DEV missing — $SPI_HINT"
 fi
 
 # --- Config file ---
@@ -286,6 +403,87 @@ if [ -f "$WQM_DB" ] && command -v sqlite3 &>/dev/null; then
     fi
 elif [ -f "$WQM_DB" ]; then
     warn "Buffer:  sqlite3 not installed — cannot check the reading buffer (apt install sqlite3)"
+fi
+
+# --- Relay click test (opt-in: --relays) ---
+#
+# Hearing the coils is the only bench check that proves the whole relay path:
+# GPIO -> LTV-354T opto -> S8050 -> coil. A relay on a HAT powered from the
+# Pi's USB alone will NOT click — the coils run from the 24 V input — so a
+# silent relay on USB power is expected, not a fault.
+#
+# Pins are the BCM numbers in src/utils/config.py RELAY_PINS (active-high);
+# tests/test_diagnostics_relays.py keeps the two lists equal.
+RELAY_TEST_PINS=(17 27 22 23)
+if [ "$RUN_RELAYS" = "1" ]; then
+    echo ""
+    echo "--- Relay click test ---"
+    echo "Each relay switches ON for 1 second, then OFF: listen for two clicks."
+    echo "Anything wired to a relay output WILL run for that second."
+    echo "The HAT must be on 24 V — the coils do not click on USB power alone."
+    INTERACTIVE=0
+    if [ -t 0 ]; then
+        INTERACTIVE=1
+        read -r -p "Press Enter to start (Ctrl+C to cancel) " _
+    fi
+
+    # The firmware owns these GPIO lines while it runs. Stop it so the test
+    # is the only thing driving them, and always start it again — on success,
+    # on failure and on Ctrl+C. At start the firmware forces every relay OFF.
+    RELAY_SVC_WAS_ACTIVE=0
+    if systemctl is-active --quiet bluesignal-wqm; then
+        RELAY_SVC_WAS_ACTIVE=1
+        systemctl stop bluesignal-wqm
+    fi
+    relay_test_restore() {
+        if [ "$RELAY_SVC_WAS_ACTIVE" = "1" ]; then
+            systemctl start bluesignal-wqm && echo "         (firmware service started again)"
+            RELAY_SVC_WAS_ACTIVE=0
+        fi
+    }
+    trap relay_test_restore EXIT
+    trap 'relay_test_restore; exit 130' INT TERM
+
+    RELAY_N=0
+    for pin in "${RELAY_TEST_PINS[@]}"; do
+        RELAY_N=$((RELAY_N + 1))
+        echo "Relay $RELAY_N (GPIO $pin): ON..."
+        if ! RELAY_ERR=$(python3 - "$pin" 2>&1 <<'PYEOF'
+import sys, time
+import RPi.GPIO as GPIO
+pin = int(sys.argv[1])
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+try:
+    GPIO.output(pin, GPIO.HIGH)
+    time.sleep(1.0)
+finally:
+    GPIO.output(pin, GPIO.LOW)
+    GPIO.cleanup(pin)
+PYEOF
+        ); then
+            fail "Relay $RELAY_N: could not drive GPIO $pin — $(echo "$RELAY_ERR" | tail -1)"
+            continue
+        fi
+        echo "Relay $RELAY_N (GPIO $pin): OFF"
+        if [ "$INTERACTIVE" = "1" ]; then
+            read -r -p "  Heard relay $RELAY_N click on and off? [Y/n] " heard
+            case "$heard" in
+                n|N|no|NO)
+                    fail "Relay $RELAY_N: no click heard (GPIO $pin)"
+                    echo "         On 24 V? Then check the relay is seated and the opto/transistor"
+                    echo "         for channel $RELAY_N. Re-test one channel at a time with --relays." ;;
+                *) pass "Relay $RELAY_N: clicked (GPIO $pin)" ;;
+            esac
+        else
+            info "Relay $RELAY_N: switched GPIO $pin on and off — listen for the click"
+        fi
+        sleep 1
+    done
+    relay_test_restore
+    trap - EXIT INT TERM
+    echo ""
 fi
 
 # --- Disk space ---

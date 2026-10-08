@@ -1,0 +1,19 @@
+[Unit]
+Description=BlueSignal WQM-1 first-boot card consumer (bluesignal-cloud.json -> config.yaml)
+# Before the firmware and the service window so the very first sampling cycle
+# already has the bench-written API key, AppKey and JoinEUI.
+Before=bluesignal-wqm.service bluesignal-service-window.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-consume-card.py
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

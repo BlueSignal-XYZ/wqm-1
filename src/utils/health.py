@@ -134,6 +134,21 @@ class HealthReporter:
             "uptimeS": self.uptime_s(),
             "firmwareVersion": self._firmware_version,
         }
+        # Which Pi this unit is running on and which name it goes by. The
+        # label is the identity; the Pi serial is a hardware attribute, so a
+        # warranty Pi swap shows up here as a changed piSerial under an
+        # unchanged device id — which is exactly what support needs to see.
+        with contextlib.suppress(Exception):
+            from utils.identity import hardware_identity
+
+            hb.update(hardware_identity())
+        # Which host board the unit runs on (profile id, e.g. "rpi-zero-2w",
+        # "orangepi-zero-3w"). A hardware attribute like piSerial, never the
+        # identity; the cloud stores it under hardware/hostBoard.
+        with contextlib.suppress(Exception):
+            from platform_support import active_board
+
+            hb["hostBoard"] = active_board().id
         if self._last_rssi is not None:
             hb["loraRssi"] = self._last_rssi
         wifi = read_wifi_rssi_dbm()

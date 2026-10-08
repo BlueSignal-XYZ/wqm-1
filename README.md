@@ -57,9 +57,12 @@ unless bound from the Service Window's **AWG circuit** page — see
 **Supported platforms:**
 
 Tested on Debian Trixie (13), kernels 6.12–6.18, Pi Zero 2W (aarch64).
-`setup.sh` handles Bookworm and Trixie automatically. A digital-first subset
-(RS485 probes + USB GPS + WiFi; no analog, LoRa or relays) runs on Arduino
-UNO Q / VENTUNO Q — see [docs/platforms.md](docs/platforms.md).
+`setup.sh` handles Bookworm and Trixie automatically. The full stack also
+runs on the **Orange Pi Zero 3W** (Allwinner A733, Pi-layout 40-pin header;
+GPIO through lgpio on the kernel gpiochips) — built and tested against the
+published pinout, bench verification pending. A digital-first subset (RS485
+probes + USB GPS + WiFi; no analog, LoRa or relays) runs on Arduino UNO Q /
+VENTUNO Q. Both: [docs/platforms.md](docs/platforms.md).
 
 ## Applications
 

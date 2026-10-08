@@ -98,8 +98,16 @@ def signal_state(rssi_dbm: int | None) -> str:
 
 def wifi_status() -> dict[str, Any]:
     """{ssid, rssi_dbm, ip, state} — state is an explain() system state."""
+    from utils import netsim
     from utils.health import read_wifi_rssi_dbm
 
+    if netsim.is_virtual():
+        # A simulated unit reports its virtual radio, never the laptop's.
+        ssid = netsim.current_ssid()
+        rssi = netsim.rssi_dbm()
+        ip = "192.168.1.57" if ssid else None
+        state = "down" if (ssid is None and rssi is None) else signal_state(rssi)
+        return {"ssid": ssid, "rssi_dbm": rssi, "ip": ip, "state": state}
     ssid = current_ssid()
     rssi = read_wifi_rssi_dbm()
     ip = local_ip()

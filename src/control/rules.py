@@ -120,6 +120,14 @@ class RulesEngine:
         # down through the device config channel. Empty until set_baselines.
         self._baselines: dict[str, Any] = {}
 
+        # --- Channels another engine owns (the irrigation hold) ---
+        # Rules on a reserved channel are SET ASIDE, not deleted: they stop
+        # running while the channel is reserved and resume if it is released
+        # without a restart. The provider is read every cycle so a hot config
+        # change to the hold applies on the next evaluation.
+        self._reserved_provider: Callable[[], set[int]] | None = None
+        self._set_aside: set[int] = set()
+
     # Canonical monitor sensor names -> reading/rule column names.
     _SENSOR_TO_COLUMN = {
         "ph": "ph",
@@ -173,6 +181,38 @@ class RulesEngine:
         if newly:
             self._pending_failsafe |= {r.relay for r in self._rules if r.sensor in newly}
         self._suspended_columns = columns
+
+    def set_reserved_channels_provider(self, provider: Callable[[], set[int]] | None) -> None:
+        """Install the callable naming channels no rule, downlink or fail-safe
+        reversion may drive (the irrigation hold's relay while it is armed)."""
+        self._reserved_provider = provider
+        self._note_reserved()
+
+    def _reserved(self) -> set[int]:
+        if self._reserved_provider is None:
+            return set()
+        try:
+            return set(self._reserved_provider())
+        except Exception as e:  # noqa: BLE001 — a broken provider must not stop rules
+            logger.error("Reserved-channel provider failed: %s", e)
+            return set()
+
+    def _note_reserved(self) -> set[int]:
+        """Return the reserved channels, logging once when rules are set aside
+        on one and once when they resume."""
+        reserved = self._reserved()
+        ruled = {r.relay for r in self._rules}
+        for ch in sorted((reserved & ruled) - self._set_aside):
+            logger.warning(
+                "Rules on relay %d set aside: the irrigation hold owns relay %d. "
+                "They resume if the hold is disabled.",
+                ch,
+                ch,
+            )
+        for ch in sorted(self._set_aside - reserved):
+            logger.info("Rules on relay %d resume: the irrigation hold released it", ch)
+        self._set_aside = reserved & ruled
+        return reserved
 
     def load_policies(self, policies: dict) -> None:
         """Load safety policies from a policies dict (policies.yaml format)."""
@@ -251,6 +291,8 @@ class RulesEngine:
                 self.add_rule(Rule(**r))
             except (TypeError, KeyError) as e:
                 logger.warning("Invalid rule %s: %s", r, e)
+        self._set_aside = set()
+        self._note_reserved()
 
     def set_baselines(self, profile: dict | None) -> None:
         """
@@ -358,6 +400,7 @@ class RulesEngine:
         actions: list[tuple[int, bool]] = []
         durations: dict[int, int] = {}
         now_mono = time.monotonic()
+        reserved = self._note_reserved()
 
         # --- De-energizing runs BEFORE the guards, always ---
         #
@@ -368,8 +411,8 @@ class RulesEngine:
         # Without this, a relay switched on at 20:59 with a 30 s duration and a
         # window closing at 21:00 stayed on until the window reopened, because
         # the timer sweep sat below an early `return`.
-        actions.extend(self._revert_suspended_to_failsafe())
-        actions.extend(self._expire_timers(now_mono))
+        actions.extend(self._revert_suspended_to_failsafe(reserved))
+        actions.extend(self._expire_timers(now_mono, reserved))
 
         # --- Guard: schedule window ---
         if not self._is_in_schedule():
@@ -388,6 +431,8 @@ class RulesEngine:
             self._on_since[relay] = now_mono
 
         for rule in self._rules:
+            if rule.relay in reserved:
+                continue  # set aside while the irrigation hold owns the channel
             if rule.sensor in self._suspended_columns:
                 logger.debug("Rule for %s suspended (sensor health)", rule.sensor)
                 continue
@@ -442,9 +487,16 @@ class RulesEngine:
 
         return self._apply(actions, durations)
 
-    def _expire_timers(self, now_mono: float) -> list[tuple[int, bool]]:
-        """Auto-shutoff sweep: channels whose ``duration_s`` has elapsed."""
+    def _expire_timers(
+        self, now_mono: float, reserved: set[int] | None = None
+    ) -> list[tuple[int, bool]]:
+        """Auto-shutoff sweep: channels whose ``duration_s`` has elapsed.
+
+        A timer left on a channel the irrigation hold now owns is forgotten,
+        never fired — firing it would drop the hold's coil."""
         actions: list[tuple[int, bool]] = []
+        for ch in [ch for ch in self._timers if ch in (reserved or set())]:
+            del self._timers[ch]
         for ch in [ch for ch, t in self._timers.items() if now_mono >= t]:
             actions.append((ch, False))
             self._last_off[ch] = now_mono
@@ -452,7 +504,9 @@ class RulesEngine:
             del self._timers[ch]
         return actions
 
-    def _revert_suspended_to_failsafe(self) -> list[tuple[int, bool]]:
+    def _revert_suspended_to_failsafe(
+        self, reserved: set[int] | None = None
+    ) -> list[tuple[int, bool]]:
         """
         De-energize every channel driven by a sensor that has just been
         suspended, and forget its auto-shutoff timer.
@@ -480,7 +534,13 @@ class RulesEngine:
         Fires once per suspension transition, not every cycle: re-issuing OFF
         every 60 s would bury the log and defeat the operator's ability to
         override a channel by hand while a probe is being replaced.
+
+        A channel the irrigation hold owns is skipped: the hold has its own
+        probe-fault policy (``irrigation_hold_on_fault``), and a rule's sensor
+        going quiet must not drop the hold's coil.
         """
+        if reserved:
+            self._pending_failsafe -= reserved
         if not self._pending_failsafe:
             return []
         actions: list[tuple[int, bool]] = []
@@ -540,6 +600,11 @@ class RulesEngine:
 
         if not 1 <= channel <= 4:
             logger.warning("Invalid relay channel in downlink: %d", channel)
+            return False
+
+        if channel in self._reserved():
+            # A manual OFF would silently release an irrigation hold.
+            logger.warning("Downlink relay command refused: irrigation hold owns relay %d", channel)
             return False
 
         logger.info(

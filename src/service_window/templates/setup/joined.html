@@ -1,0 +1,18 @@
+{% extends "setup_base.html" %}
+{% block title %}Setup — Done{% endblock %}
+{% block content %}
+<h1 class="setup-h1">Joined {{ ssid }}. Setup is finished.</h1>
+<p class="lead">{{ identity.device_id }} is restarting on the owner&rsquo;s network. It
+checks in to BlueSignal Cloud within a minute or two.</p>
+<div class="next-step">
+    <div class="next-step-title">Next: scan the label on the box</div>
+    <p>Your phone camera opens BlueSignal Cloud, shows the unit checking in, and adds it
+    to the owner&rsquo;s account.</p>
+</div>
+{% if forgotten %}
+<p class="skip-note">The unit forgot {{ forgotten|join(', ') }} and will only look for
+{{ ssid }} from now on.</p>
+{% endif %}
+<p class="skip-note">On a real unit your phone usually never sees this page, because the
+setup network turns off when the join starts. That is expected.</p>
+{% endblock %}

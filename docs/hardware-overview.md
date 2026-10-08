@@ -30,7 +30,7 @@ Approximate cost: **~$147 per unit at 10-unit quantity.**
 | ORP | **not on the board** — optional RS485 digital probe | On rev Fin_3 the BNC front end is pH only and AIN3 is spare (`PH_INN`). See `config/pinmap.yaml`. Earlier revisions of this table showed analog ORP sharing the pH BNC; there is no such circuit. |
 | Temperature | **DS18B20** (1-Wire on GPIO 4) | Digital, no ADC channel consumed |
 | Flow meter (2.3.0) | inline pulse meter on **GPIO 26** (harness, see below), or a clamp-on ultrasonic meter on the RS485 bus | The WQM-1 as a CT clamp for water: the meter's lifetime totalizer is the evidence a QC settlement accrues from. No ADC channel; all four ADS1115 inputs are taken, so a 4–20 mA meter is a board revision |
-| Relays | **4× G5Q-14** optoisolated | Dosing pumps, aerators, valves |
+| Relays | **4× G5Q-14** optoisolated; dry contacts, COM/NO/NC; NC 3 A | Dosing pumps, aerators, valves; an irrigation controller's rain-sensor loop (`docs/irrigation-hold.md`) |
 | Radio | **SX1262** (SPI) | LoRa / LoRaWAN, up to +22 dBm |
 | GPS | **u-blox** module on UART0 | NMEA output on `/dev/serial0` |
 
@@ -88,7 +88,12 @@ values. See [BUILD provisional engineering estimates](#build-provisional-enginee
 
 The active device-tree pin assignments are documented in
 [`config/pinmap.yaml`](../config/pinmap.yaml) and match the
-constants in `src/utils/config.py`.
+constants in `src/utils/config.py`. Those numbers are Raspberry Pi BCM
+numbers — the HAT's own naming, fixed by the 40-pin header. On another host
+with the same header layout (the Orange Pi Zero 3W) the firmware maps each
+BCM number to that host's line at startup; the table is
+`src/platform_support/hostpins.py` and the per-host notes are in
+[`docs/platforms.md`](platforms.md).
 
 ## BUILD provisional engineering estimates (2026-09-04)
 

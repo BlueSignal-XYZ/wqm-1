@@ -19,11 +19,15 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from app.state import StateStore
 
 logger = logging.getLogger("wqm1.workers")
+
+# What a sensor read returns: a bare float from `read()`, a SensorResult from
+# `read_detailed()`. `_safe_read` wraps either without caring which.
+_T = TypeVar("_T")
 
 # After this many consecutive failures a worker backs off to its max backoff
 # and the supervisor lights the FAULT LED.
@@ -43,35 +47,6 @@ class Worker:
 
     def interval_s(self) -> float:
         raise NotImplementedError
-
-    def _read_channel(
-        self,
-        name: str,
-        channel: str,
-        sensor: Any,
-        status_out: dict[str, str],
-        **kwargs: Any,
-    ) -> float | None:
-        """Read one channel, recording WHY when there is no number.
-
-        Drivers that expose `read_detailed()` return a reason along with the
-        value (see sensors/status.py); the rest — pH, ORP, chlorine, the RS485
-        probe, and any driver written later — only have `read()`. Falling back
-        rather than requiring the richer method keeps this a per-driver upgrade
-        instead of a flag day, and means a driver that has not been converted
-        behaves exactly as it did before.
-        """
-        detailed = getattr(sensor, "read_detailed", None)
-        if detailed is None:
-            return self._safe_read(name, lambda: sensor.read(**kwargs))
-
-        result = self._safe_read(name, lambda: detailed(**kwargs))
-        if result is None:
-            # _safe_read swallowed an exception; it already logged and counted.
-            return None
-        if not result.ok:
-            status_out[channel] = result.status
-        return result.value
 
     def step(self) -> None:
         raise NotImplementedError
@@ -134,7 +109,9 @@ class SamplingWorker(Worker):
 
     Optional collaborators (wired when the sensing package is enabled):
     ``monitor`` (SensorMonitor: flatline/spike/drift events + rule
-    suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence).
+    suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence),
+    ``irrigation_hold`` (IrrigationHold: evaluated once per cycle, right
+    after the rules).
     """
 
     name = "sampling"
@@ -153,10 +130,18 @@ class SamplingWorker(Worker):
         monitor: Any = None,
         adaptive: Any = None,
         clock: Callable[[], float] = time.monotonic,
+        now_utc: Callable[[], datetime] | None = None,
+        clock_source: Callable[[], str] | None = None,
+        irrigation_hold: Any = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
+        self.irrigation_hold = irrigation_hold
         self._sensors = sensors  # {"temperature": DS18B20, "ph": ..., "tds": ..., ...}
+        # Which clock the timestamp below can be trusted to — 'ntp', 'gps' or
+        # 'unsynced' (utils.clock.ClockDiscipline.source). Without a provider
+        # nothing has vouched for the clock, and the reading says so.
+        self._clock_source: Callable[[], str] = clock_source or (lambda: "unsynced")
         self._db = db
         self._rules = rules
         self._relays = relays
@@ -167,6 +152,10 @@ class SamplingWorker(Worker):
         self.adaptive = adaptive
         self._no_sensor_cycles = 0
         self._empty_cycles = 0
+        # The wall clock a reading is stamped with. Injectable so a virtual
+        # unit (sensors/sim) can compress a month into minutes and script a
+        # clock jump; a real unit never passes one.
+        self._now_utc: Callable[[], datetime] = now_utc or (lambda: datetime.now(UTC))
 
     def interval_s(self) -> float:
         if self.adaptive is not None:
@@ -176,7 +165,14 @@ class SamplingWorker(Worker):
                 logger.debug("adaptive interval failed: %s", e)
         return float(self._settings().sensor_read_s)
 
-    def _safe_read(self, name: str, fn: Callable[[], float | None]) -> float | None:
+    def _safe_read(self, name: str, fn: Callable[[], _T | None]) -> _T | None:
+        """Run a sensor read, swallowing and accounting for a driver failure.
+
+        Generic because it is a try/except wrapper and nothing more: callers
+        pass it a `float`-returning `read()` or a `SensorResult`-returning
+        `read_detailed()`, and it has no opinion on either. Pinned to `float`
+        it silently mistyped every detailed read as a number.
+        """
         try:
             return fn()
         except Exception as e:  # noqa: BLE001 — one dead sensor must not stop the rest
@@ -185,6 +181,40 @@ class SamplingWorker(Worker):
             if self._leds:
                 self._leds.error_pattern(2)
             return None
+
+    def _read_channel(
+        self,
+        name: str,
+        channel: str,
+        sensor: Any,
+        status_out: dict[str, str],
+        **kwargs: Any,
+    ) -> float | None:
+        """Read one channel, recording WHY when there is no number.
+
+        Drivers that expose `read_detailed()` return a reason along with the
+        value (see sensors/status.py); the rest — pH, ORP, chlorine, the RS485
+        probe, and any driver written later — only have `read()`. Falling back
+        rather than requiring the richer method keeps this a per-driver upgrade
+        instead of a flag day, and means a driver that has not been converted
+        behaves exactly as it did before.
+
+        Lives on SamplingWorker, not Worker: it is built on `_safe_read`, which
+        is a sampling concern (it counts sensor errors and drives the status
+        LEDs). On the base class it type-checked as calling a method half its
+        subclasses do not have.
+        """
+        detailed = getattr(sensor, "read_detailed", None)
+        if detailed is None:
+            return self._safe_read(name, lambda: sensor.read(**kwargs))
+
+        result = self._safe_read(name, lambda: detailed(**kwargs))
+        if result is None:
+            # _safe_read swallowed an exception; it already logged and counted.
+            return None
+        if not result.ok:
+            status_out[channel] = result.status
+        return result.value
 
     def step(self) -> None:
         # No probe is fitted at all — record nothing.
@@ -289,7 +319,7 @@ class SamplingWorker(Worker):
 
         gps = self._state.gps()
         reading = {
-            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "timestamp": self._now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "ph": ph,
             "tds_ppm": tds,
             "turbidity_ntu": turb,
@@ -307,12 +337,22 @@ class SamplingWorker(Worker):
             # Only non-ok channels appear, so a healthy cycle stores nothing
             # extra. None rather than "{}" keeps the column NULL for those.
             "sensor_status": json.dumps(channel_status) if channel_status else None,
+            "clock_source": self._clock_source(),
         }
 
         # Sensor-health monitoring first: a stuck sensor's rules are suspended
         # BEFORE this cycle's rule evaluation, so a flatlined probe can't keep
         # (or start) actuating a relay on frozen data.
-        suspended: set[str] = set()
+        #
+        # `suspended` is None when there is no information this cycle — no
+        # monitor, or a monitor that threw — and a SET (possibly empty) when the
+        # monitor ran. An empty set is a real answer and must be forwarded: it
+        # is how a probe that recovers after a no-data suspension gets its rules
+        # (and the irrigation hold's condition) back. This used to forward only
+        # a non-empty set, so a sensor suspended after flatline_window_min of
+        # no data stayed suspended until the service restarted. A monitor error
+        # still forwards nothing, so an exception can never look like recovery.
+        suspended: set[str] | None = None
         if self.monitor is not None:
             try:
                 for event in self.monitor.observe(reading):
@@ -324,11 +364,24 @@ class SamplingWorker(Worker):
 
         if self._rules:
             try:
-                if suspended and hasattr(self._rules, "set_suspended_sensors"):
+                if suspended is not None and hasattr(self._rules, "set_suspended_sensors"):
                     self._rules.set_suspended_sensors(suspended)
                 self._rules.evaluate(reading)
             except Exception as e:  # noqa: BLE001
                 logger.error("Rules evaluation error: %s", e)
+
+        if self.irrigation_hold is not None:
+            try:
+                # Hot: the engine snapshots its settings each cycle (a no-op
+                # when nothing changed). No monitor at all means nothing is
+                # suspended; a monitor that threw passes None, which the engine
+                # reads as "reuse the last known set".
+                self.irrigation_hold.configure(self._settings())
+                self.irrigation_hold.evaluate(
+                    reading, suspended if self.monitor is not None else set()
+                )
+            except Exception as e:  # noqa: BLE001 — the hold must not stop sampling
+                logger.error("Irrigation hold evaluation error: %s", e)
 
         if self.adaptive is not None:
             try:
@@ -392,28 +445,66 @@ class GpsWorker(Worker):
         leds: Any,
         state: StateStore,
         clock: Callable[[], float] = time.monotonic,
+        on_time: Callable[[datetime | None], Any] | None = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
         self._gps = gps
         self._leds = leds
         self._state = state
+        # Fed the fix's RMC date+time so the system clock can be disciplined
+        # when NTP is absent (utils.clock.ClockDiscipline.observe_gps).
+        self._on_time = on_time
 
     def interval_s(self) -> float:
         return float(self._settings().gps_fix_s)
 
     def step(self) -> None:
+        """Acquire one fix, then put the module back to sleep.
+
+        The unit is bolted to a structure and its coordinate cannot change, so
+        this runs daily (see GPS_FIX_MIN_S) rather than every ten minutes, and
+        the module spends the interval in power save rather than tracking a
+        position nobody asked for.
+
+        The retry is the important part. EXTINT is a toggle with no readback,
+        so `wake()` may have done the opposite of what it believes. Rather than
+        trusting the bookkeeping, an attempt that yields nothing pulses again
+        and tries once more — the module's own output is the only honest
+        report of which state it is in. Without this a single desync would
+        cost every subsequent fix and never say so.
+        """
         if self._gps is None:
             return
         if self._leds:
             self._leds.gps_fix_on()
         try:
-            fix = self._gps.get_fix(timeout_s=self._settings().gps_fix_timeout_s)
+            timeout_s = self._settings().gps_fix_timeout_s
+            self._gps.wake()
+            fix = self._gps.get_fix(timeout_s=timeout_s)
+            if fix is None:
+                self._gps.resync()
+                fix = self._gps.get_fix(timeout_s=timeout_s)
+
             if fix:
                 self._state.set_gps(fix.latitude, fix.longitude, fix.altitude, fix.satellites)
                 logger.info("GPS fix: %.6f, %.6f", fix.latitude, fix.longitude)
+                if self._on_time is not None:
+                    try:
+                        self._on_time(getattr(fix, "timestamp", None))
+                    except Exception as e:  # noqa: BLE001 — clock discipline never blocks the fix
+                        logger.error("clock discipline failed: %s", e)
+                self._gps.sleep()
             elif self._state.gps().lat is None:
+                # Never had a fix at all: a cold module is a different problem
+                # from a drifted toggle, and a full power cycle is the bigger
+                # hammer. Leave it awake so the next attempt starts warm.
                 self._gps.power_cycle()
+            else:
+                # We have a known-good coordinate from before and this attempt
+                # failed. Nothing is broken about the position we hold, so go
+                # back to sleep rather than burning the interval searching.
+                self._gps.sleep()
         finally:
             if self._leds:
                 self._leds.gps_fix_off()
