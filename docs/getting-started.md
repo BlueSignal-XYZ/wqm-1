@@ -168,7 +168,7 @@ After the Pi comes back up (~60 seconds), SSH in again and run the
 **diagnostics script** to verify all hardware at once:
 
 ```bash
-sudo bash /opt/bluesignal/scripts/diagnostics.sh
+sudo bash /opt/bluesignal/current/scripts/diagnostics.sh
 ```
 
 Example output:
