@@ -3,8 +3,11 @@
 Step-by-step instructions for deploying the WQM-1 firmware onto a
 Raspberry Pi Zero 2W with the WQM-1 HAT.
 
-> Running on an Arduino UNO Q / VENTUNO Q or another non-Pi Linux host?
-> See [platforms.md](platforms.md) — the firmware runs digital-first there
+> Running on an Orange Pi Zero 3W? The HAT seats on its Pi-layout header and
+> the full stack runs there — see the Orange Pi section of
+> [platforms.md](platforms.md) for its own install steps, overlays and the
+> UART0 console trap. Running on an Arduino UNO Q / VENTUNO Q or another
+> non-Pi Linux host? Same document — the firmware runs digital-first there
 > (RS485 probes + USB GPS + Wi-Fi cloud sync; no analog/LoRa/relay).
 
 ## Prerequisites

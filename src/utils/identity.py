@@ -16,6 +16,15 @@ LoRaWAN DevEUI:
    field before the label existed. No file means no change: ``BS-WQM1-`` + the
    last 12 hex of ``/proc/cpuinfo`` Serial, DevEUI = OUI prefix + last 8 hex.
 
+Where the derived serial comes from, in order:
+
+- ``Serial`` in ``/proc/cpuinfo`` — the Raspberry Pi. Every unit in the field
+  reads this line, so it stays first and its result is unchanged.
+- ``/proc/device-tree/serial-number`` — set by U-Boot from the SoC's fused ID
+  on Allwinner boards (the Orange Pi Zero 3W), whose arm64 kernel prints no
+  ``Serial`` line in cpuinfo.
+- The Allwinner SID eFuse exported by the nvmem driver.
+
 A malformed file is logged and IGNORED, never partially applied — a unit with
 a bad card boots as the Pi it is rather than as half a label.
 
@@ -33,6 +42,10 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("wqm1.identity")
+
+_PROC_CPUINFO = "/proc/cpuinfo"
+_DT_SERIAL_NUMBER = "/proc/device-tree/serial-number"
+_SUNXI_SID = "/sys/bus/nvmem/devices/sunxi-sid0/nvmem"
 
 # BlueSignal OUI prefix for the DERIVED LoRaWAN DevEUI. Only used when no
 # provisioned DevEUI exists. New units get theirs assigned at the bench from
@@ -77,24 +90,66 @@ _PI_SERIAL_RE = re.compile(r"^[0-9a-f]{16}$")
 FALLBACK_PI_SERIAL = "0000000000000000"
 
 
+def _normalise(serial: str) -> str:
+    """Lower-case hex, last 16 digits, zero-padded on the left."""
+    hexdigits = "".join(c for c in serial.strip().lower() if c in "0123456789abcdef")
+    if not hexdigits:
+        return ""
+    return hexdigits[-16:].zfill(16)
+
+
+def _serial_from_cpuinfo() -> str:
+    with open(_PROC_CPUINFO) as f:
+        for line in f:
+            if line.startswith("Serial"):
+                return _normalise(line.split(":")[-1])
+    return ""
+
+
+def _serial_from_device_tree() -> str:
+    with open(_DT_SERIAL_NUMBER, "rb") as f:
+        raw = f.read(64)
+    return _normalise(raw.replace(b"\x00", b"").decode("ascii", errors="ignore"))
+
+
+def _serial_from_sunxi_sid() -> str:
+    with open(_SUNXI_SID, "rb") as f:
+        raw = f.read(16)
+    # The SID is a 128-bit fused chip id; its first 8 bytes are unique per
+    # die, which is what the 16-hex-digit identity needs.
+    return _normalise(raw[:8].hex()) if len(raw) >= 8 else ""
+
+
 def get_pi_serial() -> str:
     """
-    Read the Raspberry Pi hardware serial from /proc/cpuinfo.
+    Read the host board's hardware serial.
 
     Returns:
-        16-character hex string (e.g. "10000000abcdef01")
+        16-character hex string (e.g. "10000000abcdef01"), or
+        ``FALLBACK_PI_SERIAL`` on a host with no readable serial.
     """
-    try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("Serial"):
-                    serial = line.split(":")[-1].strip().lower()
-                    return serial.zfill(16)
-    except Exception as e:
-        logger.warning("Could not read Pi serial: %s", e)
+    for source, reader in (
+        ("/proc/cpuinfo", _serial_from_cpuinfo),
+        ("device-tree serial-number", _serial_from_device_tree),
+        ("sunxi SID", _serial_from_sunxi_sid),
+    ):
+        try:
+            serial = reader()
+        except Exception as e:  # noqa: BLE001 — try the next source
+            logger.debug("No serial from %s: %s", source, e)
+            continue
+        if serial and set(serial) != {"0"}:
+            if source != "/proc/cpuinfo":
+                logger.info("Host serial read from %s", source)
+            return serial
 
-    # Fallback for non-Pi platforms (development/testing)
+    logger.warning("Could not read a hardware serial from any source")
+    # Fallback for hosts with no readable serial (development/testing)
     return FALLBACK_PI_SERIAL
+
+
+#: The honest name for what this reads on a non-Pi host.
+get_host_serial = get_pi_serial
 
 
 def is_label_serial(serial: str) -> bool:

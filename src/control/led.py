@@ -14,26 +14,24 @@ import logging
 import threading
 import time
 
+from platform_support.gpio import HostGpio, open_gpio
 from utils.config import LED_ERROR, LED_GPS_FIX, LED_HEARTBEAT, LED_LORA_TX, LED_PINS
 
 logger = logging.getLogger("wqm1.leds")
 
 try:
     import RPi.GPIO as GPIO
-except ImportError:  # non-Pi host (e.g. Arduino UNO Q): status LEDs need the
-    GPIO = None  # Bridge companion sketch — the board gate never builds this
+except ImportError:  # not a Raspberry Pi: the facade drives a gpiochip host
+    GPIO = None  # (Orange Pi) or refuses on a headerless one (Arduino Q)
 
 
 class StatusLEDs:
     """Controls 4 status LEDs on the WQM-1 HAT."""
 
-    def __init__(self) -> None:
-        if GPIO is None:
-            raise RuntimeError("RPi.GPIO not installed — no direct GPIO on this host")
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
+    def __init__(self, io: HostGpio | None = None) -> None:
+        self._io = io if io is not None else open_gpio(rpi_module=GPIO)
         for pin in LED_PINS:
-            GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+            self._io.setup_output(pin, initial=False)
 
         self._heartbeat_thread: threading.Thread | None = None
         self._heartbeat_running = False
@@ -43,7 +41,7 @@ class StatusLEDs:
 
     def set(self, led_pin: int, state: bool) -> None:
         """Set an LED on or off by GPIO pin number."""
-        GPIO.output(led_pin, GPIO.HIGH if state else GPIO.LOW)
+        self._io.write(led_pin, state)
 
     def on(self, led_pin: int) -> None:
         self.set(led_pin, True)
@@ -95,9 +93,9 @@ class StatusLEDs:
         """Background heartbeat: 1 Hz (500 ms on, 500 ms off)."""
         while self._heartbeat_running:
             try:
-                GPIO.output(LED_HEARTBEAT, GPIO.HIGH)
+                self._io.write(LED_HEARTBEAT, True)
                 time.sleep(0.5)
-                GPIO.output(LED_HEARTBEAT, GPIO.LOW)
+                self._io.write(LED_HEARTBEAT, False)
                 time.sleep(0.5)
             except Exception:
                 break
@@ -133,5 +131,5 @@ class StatusLEDs:
         self._heartbeat_running = False
         for pin in LED_PINS:
             with contextlib.suppress(Exception):
-                GPIO.output(pin, GPIO.LOW)
+                self._io.write(pin, False)
         logger.info("LED cleanup complete")

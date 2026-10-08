@@ -91,3 +91,16 @@ class TestHeartbeatBuilder:
         assert hb["sensorHealth"] == {"ph": {"status": "ok"}}
         assert hb["configVersion"] == 4
         assert hb["otaPhase"] == "idle"
+
+
+class TestHeartbeatHostBoard:
+    def test_reports_the_active_board_profile(self, mock_hardware):
+        from platform_support import PROFILES, set_active_board
+        from utils.health import HealthReporter
+
+        set_active_board(PROFILES["orangepi-zero-3w"])
+        hb = HealthReporter("2.3.0").build_heartbeat()
+        assert hb["hostBoard"] == "orangepi-zero-3w"
+        set_active_board(None)
+        hb = HealthReporter("2.3.0").build_heartbeat()
+        assert hb["hostBoard"] == "rpi-zero-2w"

@@ -71,6 +71,18 @@ sys.modules["w1thermsensor"] = _w1
 
 
 @pytest.fixture(autouse=True)
+def _reset_active_board():
+    """A test that pins a board profile must not leak it into the next one."""
+    yield
+    try:
+        from platform_support import set_active_board
+
+        set_active_board(None)
+    except Exception:  # noqa: BLE001 — platform_support may be unimportable mid-refactor
+        pass
+
+
+@pytest.fixture(autouse=True)
 def mock_hardware():
     """Provide access to mock hardware objects and reset between tests."""
     _gpio.reset_mock()

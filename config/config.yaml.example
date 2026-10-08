@@ -235,3 +235,13 @@ rules:
     relay: 2
     action: "off"
     duration_s: 0
+
+# --- Host board ---
+# Which board the firmware runs on. "auto" (the default) reads
+# /proc/device-tree/model; set it explicitly only to pin a profile:
+#   rpi-zero-2w        Raspberry Pi Zero 2 W — the reference host
+#   orangepi-zero-3w   Orange Pi Zero 3W — same header, GPIO via lgpio;
+#                      its pin/bus overrides live in /etc/bluesignal/host-pins.yaml
+#   arduino-uno-q / arduino-ventuno-q / generic-linux — digital-first (no headers)
+# See docs/platforms.md.
+# board: auto

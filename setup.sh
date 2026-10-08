@@ -1,8 +1,10 @@
 #!/bin/bash
 # WQM-1 Firmware Setup Script
 # Reference host: Raspberry Pi Zero 2W with Raspberry Pi OS Lite.
-# Also runs digital-first on Debian hosts without direct header access
-# (Arduino UNO Q / VENTUNO Q) — see docs/platforms.md.
+# Full direct-header stack also on the Orange Pi Zero 3W (Allwinner A733,
+# Pi-layout 40-pin header; GPIO through lgpio on the kernel gpiochips).
+# Runs digital-first on Debian hosts without direct header access
+# (Arduino UNO Q / VENTUNO Q). See docs/platforms.md.
 set -euo pipefail
 
 INSTALL_DIR="/opt/bluesignal"
@@ -24,14 +26,21 @@ echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 
 # --- Host board detection (mirrors src/platform_support/board.py) ---
 # Raspberry Pi hosts get the full direct-header stack (I2C/SPI/1-Wire/GPIO,
-# boot overlays, RPi Python libs). Anything else — Arduino UNO Q / VENTUNO Q,
-# generic Debian — runs digital-first: RS485-USB probes, USB GPS, Wi-Fi sync.
+# boot overlays, RPi Python libs). The Orange Pi Zero 3W gets the same stack
+# through the kernel's gpiochips (lgpio) with its own overlay file and
+# console. Anything else — Arduino UNO Q / VENTUNO Q, generic Debian — runs
+# digital-first: RS485-USB probes, USB GPS, Wi-Fi sync.
 BOARD_MODEL="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo unknown)"
+BOARD_COMPACT="$(echo "$BOARD_MODEL" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')"
+IS_RPI=0
+IS_OPI=0
 if echo "$BOARD_MODEL" | grep -qi "raspberry pi"; then
     IS_RPI=1
     echo "Host: $BOARD_MODEL (direct-header install)"
+elif echo "$BOARD_COMPACT" | grep -q "orangepizero3w"; then
+    IS_OPI=1
+    echo "Host: $BOARD_MODEL (direct-header install via gpiochip — see docs/platforms.md)"
 else
-    IS_RPI=0
     echo "Host: $BOARD_MODEL (digital-first install — analog/LoRa/relay skipped)"
 fi
 
@@ -39,7 +48,33 @@ fi
 echo "[1/9] Installing system packages..."
 sudo apt-get update -qq
 
-if [ "$IS_RPI" = "1" ]; then
+if [ "$IS_OPI" = "1" ]; then
+    # i2c-tools for diagnostics; swig + python3-dev so pip can build lgpio
+    # (there is no Debian package for it outside Raspberry Pi OS). No
+    # RPi.GPIO here — it only knows Broadcom silicon.
+    sudo apt-get install -y -qq \
+        python3-pip python3-venv python3-dev \
+        i2c-tools swig build-essential
+    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
+    sudo modprobe i2c-dev 2>/dev/null || true
+    # The service unit asks for these supplementary groups; Raspberry Pi OS
+    # ships them, Orange Pi's Debian does not, and systemd refuses to start
+    # a unit whose SupplementaryGroups= names a group that does not exist.
+    for grp in gpio i2c spi dialout; do
+        getent group "$grp" >/dev/null || sudo groupadd "$grp"
+    done
+    # Pi OS also ships the udev rules that hand the bus nodes to those
+    # groups. Without them every node is root:root 0600 and the firmware
+    # fails with EACCES on first open (the same shape as the serial0 trap).
+    sudo tee /etc/udev/rules.d/90-bluesignal-host.rules > /dev/null <<'EOF'
+# BlueSignal WQM-1: bus nodes owned by the groups the service unit joins.
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="i2c-dev", GROUP="i2c", MODE="0660"
+SUBSYSTEM=="spidev", GROUP="spi", MODE="0660"
+EOF
+    sudo udevadm control --reload-rules 2>/dev/null || true
+    sudo udevadm trigger 2>/dev/null || true
+elif [ "$IS_RPI" = "1" ]; then
     # Detect libgpiod version: libgpiod3 on Trixie (13+), libgpiod2 on Bookworm.
     if apt-cache show libgpiod3 &>/dev/null; then
         GPIOD_PKG="libgpiod3"
@@ -73,11 +108,76 @@ echo "[2/9] Installing Python packages..."
 sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements.txt"
 if [ "$IS_RPI" = "1" ]; then
     sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-rpi.txt"
+elif [ "$IS_OPI" = "1" ]; then
+    sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-gpiochip.txt"
 fi
+
+# --- Boot overlays: Orange Pi (/boot/orangepiEnv.txt) ---
+#
+# Orange Pi's Debian enables header functions through U-Boot overlays named
+# on the `overlays=` line of /boot/orangepiEnv.txt. The overlay NAMES differ
+# per image, so nothing is written blind: each wanted overlay is enabled
+# only if a matching .dtbo exists on this image, and what was and was not
+# found is printed. A name this script cannot find has to be enabled by hand
+# (orangepi-config → System → Hardware) — diagnostics.sh will say which bus
+# is still missing after the reboot.
+if [ "$IS_OPI" = "1" ]; then
+echo "[3/9] Configuring /boot/orangepiEnv.txt..."
+OPI_ENV="/boot/orangepiEnv.txt"
+[ -f "/boot/armbianEnv.txt" ] && [ ! -f "$OPI_ENV" ] && OPI_ENV="/boot/armbianEnv.txt"
+OPI_OVERLAY_DIR="$(find /boot -maxdepth 4 -type d -name overlay 2>/dev/null | head -1)"
+opi_enable_overlay() {
+    # $1 = label for the log, $2 = grep -E pattern for the .dtbo basename.
+    local label="$1" pattern="$2" dtbo name
+    [ -n "$OPI_OVERLAY_DIR" ] || { echo "  $label: no overlay directory under /boot — enable by hand"; return; }
+    dtbo="$(find "$OPI_OVERLAY_DIR" -maxdepth 1 -name '*.dtbo' 2>/dev/null | xargs -n1 basename 2>/dev/null \
+            | grep -E "$pattern" | sort | head -1)"
+    if [ -z "$dtbo" ]; then
+        echo "  $label: no overlay matching /$pattern/ on this image — enable by hand (orangepi-config)"
+        return
+    fi
+    # U-Boot names overlays without the SoC prefix and the extension:
+    # sun55i-a733-i2c0.dtbo → i2c0.
+    name="$(echo "$dtbo" | sed -E 's/\.dtbo$//; s/^sun[0-9a-z]+-[0-9a-z]+-//')"
+    if grep -qE "^overlays=.*(^| )${name}( |$)" "$OPI_ENV" 2>/dev/null; then
+        echo "  $label: $name already enabled"
+    elif grep -qE "^overlays=" "$OPI_ENV" 2>/dev/null; then
+        sudo sed -i -E "s/^overlays=(.*)$/overlays=\1 ${name}/" "$OPI_ENV"
+        echo "  $label: enabled $name"
+    else
+        echo "overlays=${name}" | sudo tee -a "$OPI_ENV" > /dev/null
+        echo "  $label: enabled $name"
+    fi
+}
+if [ -f "$OPI_ENV" ]; then
+    sudo cp "$OPI_ENV" "${OPI_ENV}.bak.$(date +%s)" 2>/dev/null || true
+    opi_enable_overlay "I2C (TWI0, pins 3/5 → ADS1115)"      '(^|-)(i2c0|twi0)(\.|-|$)'
+    opi_enable_overlay "SPI (SPI3 spidev, pins 19-24 → LoRa)" '(^|-)spi3[-_a-z0-9]*spidev|(^|-)spidev3|(^|-)spi-spidev'
+    opi_enable_overlay "1-Wire (w1-gpio on PB4, pin 7)"       '(^|-)w1[-_]gpio'
+    # The w1-gpio overlay takes its pin as a parameter on most Allwinner
+    # images; harmless if this image's overlay ignores it.
+    grep -qE "^param_w1_pin=" "$OPI_ENV" || echo "param_w1_pin=PB4" | sudo tee -a "$OPI_ENV" > /dev/null
+    grep -qE "^param_w1_pin_int_pullup=" "$OPI_ENV" || echo "param_w1_pin_int_pullup=1" | sudo tee -a "$OPI_ENV" > /dev/null
+    # UART0 (pins 8/10) is where the GPS lands AND the board's debug
+    # console. Move the kernel console off it; U-Boot's own output on that
+    # UART during boot is the one thing this cannot change (see the trap in
+    # docs/platforms.md).
+    if grep -qE "^console=" "$OPI_ENV"; then
+        sudo sed -i -E 's/^console=.*/console=display/' "$OPI_ENV"
+    else
+        echo "console=display" | sudo tee -a "$OPI_ENV" > /dev/null
+    fi
+    echo "  console: display (UART0 freed for the GPS)"
+else
+    echo "  $OPI_ENV not found — enable TWI0, SPI3 spidev and w1-gpio(PB4) by hand (orangepi-config)"
+fi
+sudo systemctl disable --now serial-getty@ttyS0.service 2>/dev/null || true
+sudo systemctl mask serial-getty@ttyS0.service 2>/dev/null || true
+fi  # IS_OPI
 
 # --- /boot/config.txt overlays (Raspberry Pi only) ---
 if [ "$IS_RPI" = "0" ]; then
-echo "[3/9] Skipping /boot/config.txt overlays (non-Pi host)"
+[ "$IS_OPI" = "1" ] || echo "[3/9] Skipping /boot/config.txt overlays (non-Pi host)"
 else
 echo "[3/9] Configuring /boot/config.txt..."
 CONFIG="/boot/config.txt"
@@ -168,9 +268,11 @@ sudo mkdir -p /etc/bluesignal
 echo "[5/9] Installing firmware to $RELEASE_DIR..."
 sudo cp -r "$SCRIPT_DIR/src" "$RELEASE_DIR/"
 sudo cp "$SCRIPT_DIR/requirements.txt" "$RELEASE_DIR/"
-if [ -f "$SCRIPT_DIR/requirements-rpi.txt" ]; then
-    sudo cp "$SCRIPT_DIR/requirements-rpi.txt" "$RELEASE_DIR/"
-fi
+for extra in requirements-rpi.txt requirements-gpiochip.txt; do
+    if [ -f "$SCRIPT_DIR/$extra" ]; then
+        sudo cp "$SCRIPT_DIR/$extra" "$RELEASE_DIR/"
+    fi
+done
 sudo cp "$SCRIPT_DIR/VERSION" "$RELEASE_DIR/"
 sudo cp "$SCRIPT_DIR/setup.sh" "$RELEASE_DIR/"
 
@@ -198,6 +300,31 @@ else
 fi
 sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$RELEASE_DIR/scripts/"
 sudo chmod +x "$RELEASE_DIR/scripts/diagnostics.sh"
+if [ -f "$SCRIPT_DIR/scripts/host-pins.py" ]; then
+    sudo cp "$SCRIPT_DIR/scripts/host-pins.py" "$RELEASE_DIR/scripts/"
+fi
+
+# --- Host pins (Orange Pi): read the five unpublished header pins off the board ---
+#
+# The published Orange Pi Zero 3W pinout names the function pins; five plain
+# GPIO header pins (12, 15, 22, 29, 31 — LORA_RST, relay 3, LED2, ADS ALERT,
+# IO6) are not in it, and the firmware refuses to drive a net it cannot
+# place. wiringOP's `gpio readall` on the board itself is the source; the
+# result lands in /etc/bluesignal/host-pins.yaml, which the firmware reads.
+if [ "$IS_OPI" = "1" ]; then
+    if command -v gpio >/dev/null 2>&1; then
+        if gpio readall > /tmp/wqm1-gpio-readall.txt 2>/dev/null; then
+            PYTHONPATH="$RELEASE_DIR/src" sudo -E python3 "$RELEASE_DIR/scripts/host-pins.py" \
+                --from-readall /tmp/wqm1-gpio-readall.txt || \
+                echo "  WARNING: host pins still unresolved — see docs/platforms.md (the service will refuse to start relays/LEDs/LoRa until they are)"
+        else
+            echo "  WARNING: 'gpio readall' failed — run it by hand and pipe into scripts/host-pins.py --from-readall -"
+        fi
+    else
+        echo "  WARNING: wiringOP 'gpio' not found — install it (Orange Pi images ship it) and run:"
+        echo "           gpio readall | sudo python3 $RELEASE_DIR/scripts/host-pins.py --from-readall -"
+    fi
+fi
 
 # Flip the current symlink atomically (symlink + rename, never a dead window).
 sudo ln -s "$RELEASE_DIR" "$INSTALL_DIR/current.tmp"
@@ -299,6 +426,16 @@ echo "[9/9] Setup complete!"
 echo ""
 echo "Note: $INSTALL_USER was added to the 'dialout' group for GPS UART access."
 echo "      A reboot (or re-login) is required for the group change to take effect."
+if [ "$IS_OPI" = "1" ]; then
+echo ""
+echo "Orange Pi Zero 3W — read before the reboot (docs/platforms.md has the detail):"
+echo "  * The GPS shares UART0 with U-Boot's console. If the board stops at the"
+echo "    U-Boot prompt with the GPS connected, NMEA bytes aborted autoboot: set"
+echo "    bootdelay=0 in the U-Boot environment, or power the GPS after boot."
+echo "  * Bus nodes to expect after reboot: /dev/i2c-0, /dev/spidev3.0, /dev/ttyS0."
+echo "    If a number differs on this image, record it in /etc/bluesignal/host-pins.yaml"
+echo "    (i2c_bus / spi_bus / spi_device / gps_port) and restart the service."
+fi
 echo ""
 echo "Next steps:"
 echo "  1. Edit config:      sudo nano /etc/bluesignal/config.yaml"
