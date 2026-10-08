@@ -6,7 +6,11 @@
 <div class="wizard">
     <p>1. Place the sensor in <strong>clear distilled water</strong> (0 NTU).</p>
     <p>2. Wait 30 seconds for the reading to stabilize.</p>
-    <p>3. Enter the voltage below.</p>
+    <p>3. Press <em>Use this value</em> and save.</p>
+
+    {% with channel='turbidity', fields=[{'name': 'clear_v', 'label': 'Use this value'}] %}
+      {% include "calibration/_live.html" %}
+    {% endwith %}
 
     <form method="post">
         <label>Clear water voltage (V):

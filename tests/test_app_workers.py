@@ -324,29 +324,135 @@ class TestHeartbeatWorker:
         assert hb["bufferDepth"] == 0
 
 
+class FakeGps:
+    """A GPS that can express power save, because the worker now uses it.
+
+    The previous fake was a SimpleNamespace with `get_fix` and `power_cycle`
+    only. A fake that cannot represent sleeping cannot catch a unit that never
+    sleeps — the same shape of hole as an RTDB double that could not express
+    merge-vs-replace.
+
+    `fixes` is consumed one per get_fix() call, so a test can say "nothing on
+    the first attempt, a fix on the retry" and check the loop actually closes.
+    """
+
+    def __init__(self, fixes):
+        self._fixes = list(fixes)
+        self.calls = []
+        self.awake = True
+
+    def get_fix(self, timeout_s):
+        self.calls.append("get_fix")
+        return self._fixes.pop(0) if self._fixes else None
+
+    def wake(self):
+        self.calls.append("wake")
+        self.awake = True
+
+    def sleep(self):
+        self.calls.append("sleep")
+        self.awake = False
+
+    def resync(self):
+        self.calls.append("resync")
+
+    def power_cycle(self):
+        self.calls.append("power_cycle")
+
+
+FIX = SimpleNamespace(latitude=37.5, longitude=-78.5, altitude=90.0, satellites=7)
+
+
 class TestGpsWorker:
-    def test_fix_published_to_state(self, mock_hardware):
+    def _run(self, fixes, state=None):
         from app.state import StateStore
         from app.workers import GpsWorker
 
-        state = StateStore()
-        fix = SimpleNamespace(latitude=37.5, longitude=-78.5, altitude=90.0, satellites=7)
-        gps = SimpleNamespace(get_fix=lambda timeout_s: fix, power_cycle=lambda: None)
-        worker = GpsWorker(make_settings(), gps, None, state)
-        worker.step()
+        state = state or StateStore()
+        gps = FakeGps(fixes)
+        GpsWorker(make_settings(), gps, None, state).step()
+        return gps, state
+
+    def test_fix_published_to_state(self, mock_hardware):
+        gps, state = self._run([FIX])
         assert state.gps().lat == 37.5
         assert state.gps().sats == 7
 
+    def test_the_module_is_left_asleep_after_a_good_fix(self, mock_hardware):
+        """The whole point of a daily cadence on a solar unit.
+
+        Acquiring once a day and then tracking continuously for the other 23
+        hours 59 minutes spends the power the cadence change was meant to save.
+        """
+        gps, _ = self._run([FIX])
+        assert gps.calls == ["wake", "get_fix", "sleep"]
+        assert gps.awake is False
+
+    def test_a_desynced_toggle_self_corrects_within_one_cycle(self, mock_hardware):
+        """EXTINT has no readback, so `wake()` can do the opposite of its name.
+
+        Nothing arrives, we pulse again, and the retry succeeds. Without this
+        one desync would cost every fix from then on and never say so.
+        """
+        gps, state = self._run([None, FIX])
+        assert gps.calls == ["wake", "get_fix", "resync", "get_fix", "sleep"]
+        assert state.gps().lat == 37.5
+
     def test_no_fix_and_no_previous_triggers_power_cycle(self, mock_hardware):
+        # A module that has NEVER produced a coordinate is a different fault
+        # from a drifted toggle, and gets the bigger hammer. It is deliberately
+        # left awake so the next attempt starts warm.
+        gps, _ = self._run([None, None])
+        assert gps.calls.count("power_cycle") == 1
+        assert "sleep" not in gps.calls
+
+    def test_a_failed_attempt_with_a_known_coordinate_goes_back_to_sleep(self, mock_hardware):
+        """We already know where the unit is; it has not moved.
+
+        Burning the interval searching for a coordinate we hold would trade
+        real power for nothing.
+        """
         from app.state import StateStore
-        from app.workers import GpsWorker
 
         state = StateStore()
-        cycles = []
-        gps = SimpleNamespace(get_fix=lambda timeout_s: None, power_cycle=lambda: cycles.append(1))
-        worker = GpsWorker(make_settings(), gps, None, state)
-        worker.step()
-        assert cycles == [1]
+        state.set_gps(30.38, -97.99, 209.5, 12)
+        gps, _ = self._run([None, None], state=state)
+        assert gps.calls == ["wake", "get_fix", "resync", "get_fix", "sleep"]
+        assert "power_cycle" not in gps.calls
+
+
+class TestGpsCadenceBounds:
+    """At most once a day, at least once every fifteen days (founder, 2026-08-21).
+
+    A WQM-1 is bolted to a structure. Its coordinate changes only if somebody
+    physically moves the unit, so the old ten-minute default spent solar budget
+    re-deriving a constant.
+    """
+
+    def test_the_default_is_daily(self):
+        from utils.config import Settings
+
+        assert Settings().gps_fix_s == 86_400
+
+    def test_the_bounds_are_one_day_to_fifteen_days(self):
+        from utils.config import GPS_FIX_MAX_S, GPS_FIX_MIN_S, SETTINGS_SCHEMA
+
+        spec = SETTINGS_SCHEMA["gps_fix_s"]
+        assert spec.min == GPS_FIX_MIN_S == 86_400
+        assert spec.max == GPS_FIX_MAX_S == 1_296_000
+
+    def test_a_deployed_unit_carrying_the_old_600_is_rejected_not_honoured(self):
+        """It must land on the default and SAY so, not keep the old rate.
+
+        The validator rejects out-of-range values and falls back, so an
+        existing config.yaml with the ten-minute cadence produces a logged
+        error rather than a unit that quietly keeps draining its pack.
+        """
+        from utils.config import validate_values
+
+        accepted, errors = validate_values({"gps_fix_s": 600})
+        assert "gps_fix_s" not in accepted
+        assert any("gps_fix_s" in e for e in errors)
 
 
 class TestUnequippedUnitRecordsNothing:

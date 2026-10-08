@@ -373,6 +373,17 @@ class SimGPS:
     def last_fix(self) -> GPSFix | None:
         return self._last
 
+    # The daily-fix worker drives the receiver's power-save toggle. A virtual
+    # receiver has no power state to save, so these are no-ops.
+    def wake(self) -> None:
+        pass
+
+    def sleep(self) -> None:
+        pass
+
+    def resync(self) -> None:
+        pass
+
     def power_cycle(self) -> None:
         self.power_cycles += 1
 

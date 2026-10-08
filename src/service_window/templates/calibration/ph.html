@@ -4,19 +4,32 @@
 <h1>pH Two-Point Calibration</h1>
 
 <div class="wizard">
-    <p>1. Place the probe in <strong>pH 4.0 buffer</strong>, wait 60 seconds for stability, read the voltage.</p>
-    <p>2. Place the probe in <strong>pH 7.0 buffer</strong>, wait 60 seconds, read the voltage.</p>
-    <p>3. Enter both voltages below.</p>
+    <p>1. Rinse the probe in distilled water, immerse in <strong>pH 7.00 buffer</strong>,
+       wait 60 seconds for the live reading to settle, and record it below.</p>
+    <p>2. Rinse again, immerse in <strong>pH 4.00 buffer</strong>, wait 60 seconds, record it.</p>
+    <p>3. Save, then verify: back in pH 7.00 the dashboard should read 6.95–7.05.</p>
+
+    {% with channel='ph', fields=[{'name': 'v_ph7', 'label': 'Use as pH 7.00'},
+                                  {'name': 'v_ph4', 'label': 'Use as pH 4.00'}] %}
+      {% include "calibration/_live.html" %}
+    {% endwith %}
 
     <form method="post">
-        <label>Voltage at pH 4.0 (V):
-            <input type="number" name="v_ph4" step="0.001" value="{{ cal.get('ph_v_at_4', 1.04) }}" required>
-        </label>
-        <label>Voltage at pH 7.0 (V):
+        <label>Voltage at pH 7.00 (V):
             <input type="number" name="v_ph7" step="0.001" value="{{ cal.get('ph_v_at_7', 1.50) }}" required>
+        </label>
+        <label>Voltage at pH 4.00 (V):
+            <input type="number" name="v_ph4" step="0.001" value="{{ cal.get('ph_v_at_4', 1.04) }}" required>
         </label>
         <button type="submit" class="btn">Save Calibration</button>
     </form>
+
+    <p class="health-message">
+        The values shown are this unit's current constants. Until you save real buffer
+        readings they are factory nominals, not measurements — an uncalibrated electrode
+        is routinely 1–2 pH out from its offset alone, and nothing on the dashboard
+        distinguishes a nominal reading from a calibrated one.
+    </p>
 </div>
 
 <a href="{{ url_for('calibration.index') }}">&larr; Back</a>
