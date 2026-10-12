@@ -36,8 +36,10 @@ Approximate cost: **~$147 per unit at 10-unit quantity.**
 
 ## Flow-meter pulse harness (2.3.0) — install-day note, not a board feature
 
-Fin_3 has no flow-meter header. BCM **6, 7 and 26** are the unused lines on
-the Pi's 40-pin header; the firmware defaults to **26** (`flow_pulse_gpio`).
+The green alpha Fin_3 has no flow-meter header; the blue production board
+(2026-09-21) brings BCM **6, 7 and 26** out on its 2×5 expansion header (IO0/IO1/
+IO26/IO7/IO6/IO21). On either board these are the unused lines on the Pi's
+40-pin header; the firmware defaults to **26** (`flow_pulse_gpio`).
 Most inline hall-effect meters (YF-S201 class) are **5 V open-collector**
 sensors with a 5 V supply pin:
 

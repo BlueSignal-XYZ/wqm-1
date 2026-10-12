@@ -205,13 +205,13 @@ Zero 2W with the WQM-1 HAT attached.
    the filesystem and applies your WiFi/SSH settings).
 4. Find the Pi on your network:
    ```bash
-   ping wqm1.local
+   ping <hostname>.local      # the hostname you set in Imager; the bench Pi is wqmbench
    ```
    If mDNS does not work on your network, check your router's DHCP
    lease table for the Pi's IP address.
 5. SSH into the Pi:
    ```bash
-   ssh pi@wqm1.local
+   ssh pi@<hostname>.local
    ```
 
 ---
@@ -254,7 +254,8 @@ it with before/after state, a config and database backup, and a diagnostics run
 
 Everything in Step 4 can be done from a phone browser instead, and on a new
 unit that is the intended path. Power the unit, join its network, and open
-`http://wqm1.local:8080`. Until setup is finished the unit serves only the
+`http://<hostname>.local:8080` (on the setup hotspot the page opens by itself).
+Until setup is finished the unit serves only the
 wizard:
 
 | Step | What it settles |

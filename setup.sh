@@ -24,6 +24,41 @@ CURRENT_LINK="$INSTALL_DIR/current"
 
 echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 
+# --- Golden-image mode: `sudo bash setup.sh --golden` ---
+# Run on unit 1 of a bench run, immediately before its card is pulled and
+# imaged for the other units. Installs nothing. It removes only what is unit
+# 1's and not the run's: the readings database (rows carry no device id, so a
+# card cut from an image that holds them would upload unit 1's bench samples
+# under its own label the moment its key is consumed), the cached water
+# profile, the OTA/reboot request flags, the first-boot marker and the
+# journal. Config (probes, variant, the factory PIN, setup not finished) and
+# the Wi-Fi the run checks in over stay. Mirrors ops -> Units -> "Bench a
+# WQM-1 run" -> Capture the master image.
+if [ "${1:-}" = "--golden" ]; then
+    for f in /boot/firmware/bluesignal-identity.json /boot/firmware/bluesignal-cloud.json \
+             /boot/bluesignal-identity.json /boot/bluesignal-cloud.json; do
+        if [ -f "$f" ]; then
+            echo "[golden] REFUSING: $f is on this card. A golden image carries no unit's identity." >&2
+            exit 1
+        fi
+    done
+    if sudo grep -Eq "setup_completed: *(true|yes)" /etc/bluesignal/config.yaml 2>/dev/null; then
+        echo "[golden] REFUSING: setup was finished in the wizard on this unit. Every card cut from" >&2
+        echo "         this image would skip first setup on site. Re-flash unit 1 and declare again." >&2
+        exit 1
+    fi
+    echo "[golden] Stopping the firmware and the service window..."
+    sudo systemctl stop bluesignal-wqm.service bluesignal-service-window.service 2>/dev/null || true
+    echo "[golden] Removing unit 1's state from the image..."
+    sudo rm -f /var/lib/bluesignal/wqm1.db /var/lib/bluesignal/wqm1.db-wal /var/lib/bluesignal/wqm1.db-shm
+    sudo rm -f /var/lib/bluesignal/water-profile.json /var/lib/bluesignal/ota-check-now /var/lib/bluesignal/reboot-request
+    sudo rm -f /etc/bluesignal/.provisioned
+    sudo journalctl --rotate 2>/dev/null || true
+    sudo journalctl --vacuum-time=1s 2>/dev/null || true
+    echo "[golden] Done. Power off now (sudo poweroff), move the card to the Mac, run: npm run bench -- golden /dev/diskN"
+    exit 0
+fi
+
 # --- Host board detection (mirrors src/platform_support/board.py) ---
 # Raspberry Pi hosts get the full direct-header stack (I2C/SPI/1-Wire/GPIO,
 # boot overlays, RPi Python libs). The Orange Pi Zero 3W gets the same stack
@@ -300,6 +335,14 @@ else
 fi
 sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$RELEASE_DIR/scripts/"
 sudo chmod +x "$RELEASE_DIR/scripts/diagnostics.sh"
+# The two root oneshots below (bluesignal-card.service, bluesignal-ap-fallback.service)
+# run these out of /opt/bluesignal/current/scripts/. They were enabled without
+# being copied until 2026-10-12, so no carded unit ever consumed its key or
+# raised its setup hotspot; tests/test_setup_installs_service_scripts.py pins
+# every ExecStart in systemd/ to a copy line here.
+for svc_script in wqm1-consume-card.py wqm1-ap-fallback.py; do
+    sudo cp "$SCRIPT_DIR/scripts/$svc_script" "$RELEASE_DIR/scripts/"
+done
 if [ -f "$SCRIPT_DIR/scripts/host-pins.py" ]; then
     sudo cp "$SCRIPT_DIR/scripts/host-pins.py" "$RELEASE_DIR/scripts/"
 fi

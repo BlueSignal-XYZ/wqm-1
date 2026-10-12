@@ -1,6 +1,7 @@
 # Site flow v2: the phone joins the unit, one pass, no typing
 
-Added 2026-10-03, stacked on the 2.4.0 commissioning branch (#120). The
+Added 2026-10-03 on the 2.4.0 commissioning branch; on master since #126
+(2026-10-07). No real unit has booted it yet — see the checklist below. The
 design and the reasoning live in the marketplace repo,
 `docs/operations/wqm1-bench-and-site-commissioning.md`. This page covers
 the firmware half and what still has to be proved on a real Pi.
