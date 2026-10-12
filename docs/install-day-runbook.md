@@ -50,18 +50,18 @@ Settings**:
 
 | Setting | Value | Why it matters |
 |---|---|---|
-| Hostname | `wqm1` | every command here addresses `wqm1.local` |
+| Hostname | `wqmbench` | every command here addresses `wqmbench.local`. Never `wqm1`: the field unit answers to that on the shop network (2026-10-07) |
 | Username | `pi` | `setup.sh` adapts to any user, but the commands below assume `pi@` |
 | Wireless LAN | **the site's SSID + password + country** | see T6 — this is the only chance to set it |
 | SSH | enabled, password auth | break-glass access |
 
 Re-using a card? Clear the stale host key or SSH shows a mismatch instead of a
-prompt: `ssh-keygen -R wqm1.local`
+prompt: `ssh-keygen -R wqmbench.local`
 
 ### 1.2 Install the firmware
 
 ```bash
-ssh pi@wqm1.local
+ssh pi@wqmbench.local
 sudo apt-get update && sudo apt-get install -y git
 git clone https://github.com/bluesignal-xyz/wqm-1.git
 cd wqm-1 && sudo bash setup.sh
@@ -100,7 +100,7 @@ Capture and store all three before closing the page:
 
 ### 1.5 Walk the Service Window wizard as far as the bench allows
 
-Power the unit, join its network, open `http://wqm1.local:8080`. Until setup
+Power the unit, join its network, open `http://wqmbench.local:8080`. Until setup
 completes the unit serves only the wizard:
 
 `welcome → pin → identity → network → cloud → sensors → done`
