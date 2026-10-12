@@ -12,3 +12,18 @@
 /src/radio/lorawan.py  @BlueSignal-XYZ/firmware
 /src/radio/sx1262.py   @BlueSignal-XYZ/firmware
 SECURITY.md            @BlueSignal-XYZ/firmware
+
+# Launch upgrade v2 (§Z.10): the update path to field units and the files a
+# weaker agent must not weaken without the Captain. TODO(JACQUES): confirm the
+# handle (@jacquesdjean runs this repo's workflows).
+/src/ota/                         @jacquesdjean @BlueSignal-XYZ/firmware
+/config/ota_public_key.pem        @jacquesdjean @BlueSignal-XYZ/firmware
+/.github/workflows/release.yml    @jacquesdjean @BlueSignal-XYZ/firmware
+/docs/ota-runbook.md              @jacquesdjean @BlueSignal-XYZ/firmware
+/docs/ota-hold.md                 @jacquesdjean @BlueSignal-XYZ/firmware
+/src/utils/config.py              @jacquesdjean @BlueSignal-XYZ/firmware
+/setup.sh                         @jacquesdjean @BlueSignal-XYZ/firmware
+/systemd/                         @jacquesdjean @BlueSignal-XYZ/firmware
+/VERSION                          @jacquesdjean @BlueSignal-XYZ/firmware
+/AGENTS.md                        @jacquesdjean
+/CLAUDE.md                        @jacquesdjean
