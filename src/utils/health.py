@@ -92,6 +92,13 @@ class HealthReporter:
         self._started_at = clock()
         self._last_rssi: int | None = None
         self._last_seen: int = 0
+        # Optional heartbeat contributors (integrations). Each returns a
+        # small dict or raises; a failure omits the key, never the heartbeat.
+        self._apple_home: Any = None
+
+    def set_apple_home(self, bridge: Any) -> None:
+        """Register the Apple Home bridge; its heartbeat() is {enabled, paired}."""
+        self._apple_home = bridge
 
     def update_rssi(self, rssi_dbm: int) -> None:
         """Update last known RSSI from LoRa radio."""
@@ -177,4 +184,7 @@ class HealthReporter:
             hb["configVersion"] = config_version
         if ota_phase:
             hb["otaPhase"] = ota_phase
+        if self._apple_home is not None:
+            with contextlib.suppress(Exception):
+                hb["appleHome"] = self._apple_home.heartbeat()
         return hb

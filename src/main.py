@@ -46,6 +46,7 @@ from control.irrigation_hold import IrrigationHold
 from control.led import StatusLEDs
 from control.relay import RelayController
 from control.rules import RulesEngine
+from integrations.apple_home import AppleHomeBridge
 from radio.cayenne import encode as cayenne_encode
 from radio.lorawan import FPORT_APP, LoRaWANMAC, LoRaWANSession
 from radio.sx1262 import SX1262
@@ -553,6 +554,18 @@ class WQM1App:
         self._hold = IrrigationHold(hold_relays)
         self._hold.configure(self._settings)
 
+        # --- Apple Home ---
+        # Opt-in HomeKit accessory on the LAN: readings out, nothing in. Built
+        # here so the sampling worker can hand it every cycle; it starts
+        # advertising only once apple_home_enabled is true.
+        self._apple_home = AppleHomeBridge(
+            self._device_id,
+            FW_VERSION,
+            Path(self._settings.db_path).parent,
+        )
+        self._apple_home.configure(self._settings)
+        self._health.set_apple_home(self._apple_home)
+
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
         self._rules.set_reserved_channels_provider(self._hold.reserved_channels)
@@ -642,6 +655,7 @@ class WQM1App:
                 adaptive=self._adaptive,
                 clock_source=self._clock.source,
                 irrigation_hold=self._hold,
+                apple_home=self._apple_home,
             )
         ]
         if self._gps is not None:
@@ -791,11 +805,17 @@ class WQM1App:
         if action == "config_reload":
             self._config.reload()
             self._reconfigure_hold()
+            self._reconfigure_apple_home()
             return {"ok": True, "configVersion": self._config.remote_version}
         if action == "irrigation_hold_status":
             if self._hold is None:
                 return {"ok": False, "error": "irrigation hold not initialised"}
             return {"ok": True, **self._hold.status()}
+        if action == "apple_home_status":
+            # Service Window only (LAN, logged in): carries the setup code.
+            if self._apple_home is None:
+                return {"ok": False, "error": "apple home not initialised"}
+            return {"ok": True, **self._apple_home.status()}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
         if action in ("awg_set", "circuit_set"):
@@ -1068,6 +1088,14 @@ class WQM1App:
             except Exception as e:  # noqa: BLE001 — a reload must not fail on this
                 logger.error("Irrigation hold reconfigure failed: %s", e)
 
+    def _reconfigure_apple_home(self) -> None:
+        """Start or stop the HomeKit accessory after a reload."""
+        if getattr(self, "_apple_home", None) is not None:
+            try:
+                self._apple_home.configure(self._settings)
+            except Exception as e:  # noqa: BLE001 — a reload must not fail on this
+                logger.error("Apple Home reconfigure failed: %s", e)
+
     def _irrigation_hold_payload(self) -> dict[str, Any] | None:
         """metadata.irrigationHold at upload time; None omits the key."""
         return self._hold.payload() if self._hold is not None else None
@@ -1139,6 +1167,7 @@ class WQM1App:
                     sock_path.unlink()
         for obj, method in [
             (self._cloud, "stop"),
+            (getattr(self, "_apple_home", None), "stop"),
             (self._leds, "heartbeat_stop"),
             (self._smart_breaker, "shutdown"),
             (self._relays, "all_off"),

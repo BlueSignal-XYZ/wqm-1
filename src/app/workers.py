@@ -111,7 +111,8 @@ class SamplingWorker(Worker):
     ``monitor`` (SensorMonitor: flatline/spike/drift events + rule
     suspension), ``adaptive`` (AdaptiveSampler: dynamic cadence),
     ``irrigation_hold`` (IrrigationHold: evaluated once per cycle, right
-    after the rules).
+    after the rules), ``apple_home`` (AppleHomeBridge: handed the reading and
+    the hold's state after both, so the Home app sees what the unit stored).
     """
 
     name = "sampling"
@@ -133,10 +134,12 @@ class SamplingWorker(Worker):
         now_utc: Callable[[], datetime] | None = None,
         clock_source: Callable[[], str] | None = None,
         irrigation_hold: Any = None,
+        apple_home: Any = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
         self.irrigation_hold = irrigation_hold
+        self.apple_home = apple_home
         self._sensors = sensors  # {"temperature": DS18B20, "ph": ..., "tds": ..., ...}
         # Which clock the timestamp below can be trusted to — 'ntp', 'gps' or
         # 'unsynced' (utils.clock.ClockDiscipline.source). Without a provider
@@ -382,6 +385,21 @@ class SamplingWorker(Worker):
                 )
             except Exception as e:  # noqa: BLE001 — the hold must not stop sampling
                 logger.error("Irrigation hold evaluation error: %s", e)
+
+        if self.apple_home is not None:
+            try:
+                # Same contract as the hold: configure() is hot and cheap, and
+                # the accessory is told what the unit measured this cycle plus
+                # the hold's contact state. It takes nothing back.
+                self.apple_home.configure(self._settings())
+                hold_payload = (
+                    self.irrigation_hold.payload() if self.irrigation_hold is not None else None
+                )
+                self.apple_home.update(
+                    reading, hold_payload, suspended if self.monitor is not None else set()
+                )
+            except Exception as e:  # noqa: BLE001 — the accessory must not stop sampling
+                logger.error("Apple Home update error: %s", e)
 
         if self.adaptive is not None:
             try:

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Apple Home{% endblock %}
+{% block content %}
+<h1>Apple Home</h1>
+<p class="lead">Show this unit's readings in the Home app on an iPhone, iPad or Apple HomeView.
+The unit advertises one accessory on this Wi-Fi network. Readings go out; nothing comes in —
+no relay, setting or hold can be changed from the Home app.</p>
+
+{% if status.available %}
+<div class="grid">
+    <div class="card">
+        <div class="card-label">Accessory</div>
+        <div class="card-value">{{ status.name }}</div>
+        <div class="card-value-sm">{% if status.enabled %}{% if status.running %}advertising on port {{ status.port }}{% else %}enabled, not running{% endif %}{% else %}off{% endif %}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Pairing</div>
+        <div class="card-value" id="apple-home-paired">{% if status.paired %}Paired{% elif status.running %}Not paired{% else %}—{% endif %}</div>
+        <div class="card-value-sm">{% if status.error %}{{ status.error }}{% elif status.running %}{{ status.pushes }} updates sent this boot{% endif %}</div>
+    </div>
+</div>
+
+{% if status.error == 'library_missing' %}
+<p class="warn">HAP-python is not installed on this unit. Run <code>setup.sh</code> again, or
+<code>pip3 install -r requirements-apple-home.txt</code>, then turn the feature off and on.</p>
+{% endif %}
+
+{% if status.running and not status.paired and status.setupCode %}
+<h2>Pair</h2>
+<p>On the iPhone that runs the home: open <strong>Home</strong> → <strong>+</strong> →
+<strong>Add Accessory</strong> and scan this code, or choose <em>More options…</em> and enter the
+setup code. The Home app will say the accessory is uncertified — that is expected: BlueSignal is
+not in Apple's MFi program and the firmware is open source. Tap <em>Add Anyway</em>.</p>
+<div class="grid">
+    <div class="card">
+        <div class="card-label">Setup code</div>
+        <div class="card-value" id="apple-home-code">{{ status.setupCode }}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">QR</div>
+        <img src="{{ url_for('apple_home.qr_svg') }}" alt="Apple Home setup QR" width="200" height="200">
+    </div>
+</div>
+{% endif %}
+
+{% if status.paired %}
+<p>Paired. To pair with a different home, remove the accessory from the Home app first; the
+unit forgets the pairing when the Home app does.</p>
+{% endif %}
+
+<h2>What the Home app shows</h2>
+<ul>
+    {% for s in status.services %}<li><strong>{{ s.name }}</strong> ({{ s.type }})</li>{% endfor %}
+    <li>pH, TDS, turbidity and flow rate travel as custom values. Apple's Home app does not
+    display them; third-party HomeKit apps such as Eve or Home+ do.</li>
+</ul>
+<p>"Irrigation hold" reports the relay contact (open = holding), never the water.</p>
+{% else %}
+<p class="warn">The firmware did not answer{% if status.error %}: {{ status.error }}{% endif %}.
+Is the bluesignal-wqm1 service running?</p>
+{% endif %}
+
+<h2>Turn {{ 'off' if enabled else 'on' }}</h2>
+<form method="post" action="{{ url_for('apple_home.enable') }}">
+    <input type="hidden" name="enabled" value="{{ '0' if enabled else '1' }}">
+    <button class="btn {{ 'btn-off' if enabled else 'btn-on' }}" type="submit">
+        {{ 'Turn Apple Home off' if enabled else 'Turn Apple Home on' }}
+    </button>
+</form>
+{% endblock %}

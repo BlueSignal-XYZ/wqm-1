@@ -443,6 +443,12 @@ class Settings:
     irrigation_hold_release_min: int = 10  # minutes every condition stays clear
     irrigation_hold_on_fault: str = "release"  # release | hold
 
+    # Apple Home (integrations/apple_home). Off by default; when on, the unit
+    # advertises one HomeKit accessory on the LAN — readings out, nothing in.
+    # The owner pairs from the Service Window; the cloud never sees the code.
+    apple_home_enabled: bool = False
+    apple_home_port: int = 51826  # HAP listen port; local-only key
+
     # Automation rules
     rules: list[dict[str, Any]] = field(default_factory=list)
 
@@ -610,6 +616,12 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "irrigation_hold_on_fault": SettingSpec(
         str, hot=True, max_length=8, choices=IRRIGATION_HOLD_ON_FAULT_MODES
     ),
+    # Apple Home. `enabled` is hot and remote (the owner flips it from the
+    # Cloud device page or the Service Window; the bridge starts/stops on the
+    # next cycle). The port is local-only: a remote config must not be able
+    # to move a LAN listener. Mirrored in functions/v2/deviceTelemetry.js.
+    "apple_home_enabled": SettingSpec(bool, hot=True),
+    "apple_home_port": SettingSpec(int, hot=False, min=1024, max=65535, remote=False),
 }
 
 _SETTINGS_FIELDS = {f.name for f in fields(Settings)}
