@@ -146,6 +146,10 @@ sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/req
 # every host so turning it on is one switch, not a pip step on site.
 sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-apple-home.txt" \
     || echo "WARN: HAP-python did not install; Apple Home will report library_missing"
+# Same for the Home Assistant MQTT publisher (src/integrations/home_assistant):
+# off until mqtt_enabled, library on every host.
+sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-home-assistant.txt" \
+    || echo "WARN: paho-mqtt did not install; Home Assistant will report library_missing"
 if [ "$IS_RPI" = "1" ]; then
     sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-rpi.txt"
 elif [ "$IS_OPI" = "1" ]; then
@@ -308,7 +312,7 @@ sudo mkdir -p /etc/bluesignal
 echo "[5/9] Installing firmware to $RELEASE_DIR..."
 sudo cp -r "$SCRIPT_DIR/src" "$RELEASE_DIR/"
 sudo cp "$SCRIPT_DIR/requirements.txt" "$RELEASE_DIR/"
-for extra in requirements-rpi.txt requirements-gpiochip.txt requirements-apple-home.txt; do
+for extra in requirements-rpi.txt requirements-gpiochip.txt requirements-apple-home.txt requirements-home-assistant.txt; do
     if [ -f "$SCRIPT_DIR/$extra" ]; then
         sudo cp "$SCRIPT_DIR/$extra" "$RELEASE_DIR/"
     fi

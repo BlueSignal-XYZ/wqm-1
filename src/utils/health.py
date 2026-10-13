@@ -95,6 +95,12 @@ class HealthReporter:
         # Optional heartbeat contributors (integrations). Each returns a
         # small dict or raises; a failure omits the key, never the heartbeat.
         self._apple_home: Any = None
+        self._home_assistant: Any = None
+
+    def set_home_assistant(self, publisher: Any) -> None:
+        """Register the MQTT publisher so the heartbeat can say whether the
+        feature is on and connected — and nothing else about it."""
+        self._home_assistant = publisher
 
     def set_apple_home(self, bridge: Any) -> None:
         """Register the Apple Home bridge; its heartbeat() is {enabled, paired}."""
@@ -187,4 +193,7 @@ class HealthReporter:
         if self._apple_home is not None:
             with contextlib.suppress(Exception):
                 hb["appleHome"] = self._apple_home.heartbeat()
+        if self._home_assistant is not None:
+            with contextlib.suppress(Exception):
+                hb["homeAssistant"] = self._home_assistant.heartbeat()
         return hb

@@ -1,0 +1,5 @@
+# Optional: the Home Assistant MQTT publisher, src/integrations/home_assistant.
+# Installed by setup.sh on every host; the feature stays off until the owner
+# enables mqtt_enabled and names their broker. paho-mqtt is EPL-2.0/EDL-1.0
+# and pure Python with no dependencies.
+paho-mqtt==2.1.0

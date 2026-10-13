@@ -119,6 +119,7 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
     from service_window.routes.awg import awg_bp
     from service_window.routes.calibration import calibration_bp
     from service_window.routes.diagnostics import diagnostics_bp
+    from service_window.routes.home_assistant import home_assistant_bp
     from service_window.routes.lora import lora_bp
     from service_window.routes.provision import provision_bp
     from service_window.routes.relays import relays_bp
@@ -140,6 +141,7 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
     app.register_blueprint(settings_bp)
     app.register_blueprint(awg_bp)
     app.register_blueprint(apple_home_bp)
+    app.register_blueprint(home_assistant_bp)
 
     # The sidebar is already long, so the AWG page only earns a nav entry once
     # a smart breaker (or relay-only load) is actually bound. Before that it

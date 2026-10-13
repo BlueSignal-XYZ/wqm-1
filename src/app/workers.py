@@ -135,11 +135,13 @@ class SamplingWorker(Worker):
         clock_source: Callable[[], str] | None = None,
         irrigation_hold: Any = None,
         apple_home: Any = None,
+        home_assistant: Any = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
         self.irrigation_hold = irrigation_hold
         self.apple_home = apple_home
+        self.home_assistant = home_assistant
         self._sensors = sensors  # {"temperature": DS18B20, "ph": ..., "tds": ..., ...}
         # Which clock the timestamp below can be trusted to — 'ntp', 'gps' or
         # 'unsynced' (utils.clock.ClockDiscipline.source). Without a provider
@@ -400,6 +402,20 @@ class SamplingWorker(Worker):
                 )
             except Exception as e:  # noqa: BLE001 — the accessory must not stop sampling
                 logger.error("Apple Home update error: %s", e)
+
+        if self.home_assistant is not None:
+            try:
+                # Same contract again: the publisher is told what was measured
+                # and the hold's contact state, and takes nothing back.
+                self.home_assistant.configure(self._settings())
+                hold_payload = (
+                    self.irrigation_hold.payload() if self.irrigation_hold is not None else None
+                )
+                self.home_assistant.update(
+                    reading, hold_payload, suspended if self.monitor is not None else set()
+                )
+            except Exception as e:  # noqa: BLE001 — the publisher must not stop sampling
+                logger.error("Home Assistant update error: %s", e)
 
         if self.adaptive is not None:
             try:

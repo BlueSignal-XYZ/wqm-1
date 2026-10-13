@@ -47,6 +47,7 @@ from control.led import StatusLEDs
 from control.relay import RelayController
 from control.rules import RulesEngine
 from integrations.apple_home import AppleHomeBridge
+from integrations.home_assistant import HomeAssistantPublisher
 from radio.cayenne import encode as cayenne_encode
 from radio.lorawan import FPORT_APP, LoRaWANMAC, LoRaWANSession
 from radio.sx1262 import SX1262
@@ -566,6 +567,14 @@ class WQM1App:
         self._apple_home.configure(self._settings)
         self._health.set_apple_home(self._apple_home)
 
+        # --- Home Assistant ---
+        # Opt-in MQTT discovery to the owner's broker: readings out, nothing
+        # in. Same shape as the Apple Home bridge; connects only once
+        # mqtt_enabled is true and a host is set.
+        self._home_assistant = HomeAssistantPublisher(self._device_id, FW_VERSION)
+        self._home_assistant.configure(self._settings)
+        self._health.set_home_assistant(self._home_assistant)
+
         # --- Rules engine ---
         self._rules = RulesEngine(self._relays)
         self._rules.set_reserved_channels_provider(self._hold.reserved_channels)
@@ -656,6 +665,7 @@ class WQM1App:
                 clock_source=self._clock.source,
                 irrigation_hold=self._hold,
                 apple_home=self._apple_home,
+                home_assistant=self._home_assistant,
             )
         ]
         if self._gps is not None:
@@ -806,6 +816,7 @@ class WQM1App:
             self._config.reload()
             self._reconfigure_hold()
             self._reconfigure_apple_home()
+            self._reconfigure_home_assistant()
             return {"ok": True, "configVersion": self._config.remote_version}
         if action == "irrigation_hold_status":
             if self._hold is None:
@@ -816,6 +827,11 @@ class WQM1App:
             if self._apple_home is None:
                 return {"ok": False, "error": "apple home not initialised"}
             return {"ok": True, **self._apple_home.status()}
+        if action == "home_assistant_status":
+            # Service Window only: names the broker, never the password.
+            if getattr(self, "_home_assistant", None) is None:
+                return {"ok": False, "error": "home assistant not initialised"}
+            return {"ok": True, **self._home_assistant.status()}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
         if action in ("awg_set", "circuit_set"):
@@ -1096,6 +1112,14 @@ class WQM1App:
             except Exception as e:  # noqa: BLE001 — a reload must not fail on this
                 logger.error("Apple Home reconfigure failed: %s", e)
 
+    def _reconfigure_home_assistant(self) -> None:
+        """Start, restart or stop the MQTT publisher after a reload."""
+        if getattr(self, "_home_assistant", None) is not None:
+            try:
+                self._home_assistant.configure(self._settings)
+            except Exception as e:  # noqa: BLE001 — a reload must not fail on this
+                logger.error("Home Assistant reconfigure failed: %s", e)
+
     def _irrigation_hold_payload(self) -> dict[str, Any] | None:
         """metadata.irrigationHold at upload time; None omits the key."""
         return self._hold.payload() if self._hold is not None else None
@@ -1168,6 +1192,7 @@ class WQM1App:
         for obj, method in [
             (self._cloud, "stop"),
             (getattr(self, "_apple_home", None), "stop"),
+            (getattr(self, "_home_assistant", None), "stop"),
             (self._leds, "heartbeat_stop"),
             (self._smart_breaker, "shutdown"),
             (self._relays, "all_off"),

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Home Assistant{% endblock %}
+{% block content %}
+<h1>Home Assistant</h1>
+<p class="lead">Publish this unit's readings to your own MQTT broker so Home Assistant discovers them
+as entities — and, through Home Assistant, Google Home, Alexa or SmartThings. Readings go out;
+nothing comes in — the unit subscribes to no topic, so no relay, setting or hold can be changed
+from a dashboard.</p>
+
+{% if status.available %}
+<div class="grid">
+    <div class="card">
+        <div class="card-label">Broker</div>
+        <div class="card-value">{% if status.host %}{{ status.host }}:{{ status.port }}{% else %}not set{% endif %}</div>
+        <div class="card-value-sm">{% if status.enabled %}{% if status.connected %}connected{% elif status.running %}connecting…{% else %}enabled, not running{% endif %}{% else %}off{% endif %}{% if status.tls %} · TLS{% endif %}</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Entities</div>
+        <div class="card-value" id="ha-announced">{% if status.announced %}Announced{% elif status.connected %}Announcing…{% else %}—{% endif %}</div>
+        <div class="card-value-sm">{% if status.error %}{{ status.error }}{% elif status.connected %}{{ status.pushes }} updates sent this boot{% endif %}</div>
+    </div>
+</div>
+
+{% if status.error == 'library_missing' %}
+<p class="warn">paho-mqtt is not installed on this unit. Run <code>setup.sh</code> again, or
+<code>pip3 install -r requirements-home-assistant.txt</code>, then save this page again.</p>
+{% endif %}
+
+<h2>What Home Assistant discovers</h2>
+<ul>
+    {% for e in status.entities %}<li><strong>{{ e.name }}</strong>{% if e.unit %} ({{ e.unit }}){% endif %}</li>{% endfor %}
+</ul>
+<p>"Irrigation hold" reports the relay contact (on = holding), never the water. A probe the unit
+has suspended is left out of the next update, so its entity reads <em>unknown</em> rather than
+the last number it saw.</p>
+<p class="card-value-sm">State topic <code>{{ status.stateTopic }}</code> · availability
+<code>{{ status.availabilityTopic }}</code> · discovery prefix <code>{{ status.discoveryPrefix }}</code></p>
+{% else %}
+<p class="warn">The firmware did not answer{% if status.error %}: {{ status.error }}{% endif %}.
+Is the bluesignal-wqm1 service running?</p>
+{% endif %}
+
+<h2>Broker</h2>
+<p>In Home Assistant: Settings → Add-ons → Mosquitto broker (or your own broker). Create a user
+for this unit there and enter it below. The password is stored on this unit only and is never
+shown again.</p>
+<form method="post" action="{{ url_for('home_assistant.save') }}">
+    <label><input type="checkbox" name="mqtt_enabled" {% if values.mqtt_enabled %}checked{% endif %}> Publish to Home Assistant</label>
+    <label>Broker address
+        <input type="text" name="mqtt_host" value="{{ values.mqtt_host }}" placeholder="homeassistant.local" maxlength="253" autocomplete="off">
+    </label>
+    <label>Port <span class="card-value-sm">(blank = 1883, or 8883 with TLS)</span>
+        <input type="number" name="mqtt_port" value="{{ values.mqtt_port if values.mqtt_port else '' }}" min="0" max="65535">
+    </label>
+    <label>Username
+        <input type="text" name="mqtt_username" value="{{ values.mqtt_username }}" maxlength="128" autocomplete="off">
+    </label>
+    <label>Password <span class="card-value-sm">({% if values.password_set %}set — leave blank to keep{% else %}not set{% endif %})</span>
+        <input type="password" name="mqtt_password" value="" maxlength="256" autocomplete="new-password">
+    </label>
+    <label><input type="checkbox" name="clear_password"> Clear the stored password</label>
+    <label><input type="checkbox" name="mqtt_tls" {% if values.mqtt_tls %}checked{% endif %}> Use TLS</label>
+    <label>Discovery prefix
+        <input type="text" name="mqtt_discovery_prefix" value="{{ values.mqtt_discovery_prefix }}" maxlength="64">
+    </label>
+    <button class="btn btn-on" type="submit">Save and apply</button>
+</form>
+{% endblock %}

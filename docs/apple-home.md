@@ -96,3 +96,7 @@ BlueSignal has neither today, so:
   HomeKit pairing is observed in the field.
 - Per-channel HomeKit alerts for pH / TDS / turbidity thresholds: a
   threshold on Apple's screen is a verdict by another name; readings only.
+
+See `docs/home-assistant.md` for the unit's second smart-home door: MQTT
+discovery to the owner's own broker, which Home Assistant bridges to Google
+Home, Alexa and SmartThings.
