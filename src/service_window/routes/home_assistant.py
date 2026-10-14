@@ -89,7 +89,7 @@ def save() -> ResponseReturnValue:
         # Blank keeps the stored password; "clear" in the dedicated box empties it.
         raw["mqtt_password"] = password
     if request.form.get("clear_password") == "on":
-        raw["mqtt_password"] = ""
+        raw["mqtt_password"] = ""  # nosec B105 — clearing the stored password, not setting one
     if raw["mqtt_enabled"] and not raw["mqtt_host"]:
         flash("Enter the broker's address before turning Home Assistant on.", "error")
         return redirect(url_for("home_assistant.index"))
