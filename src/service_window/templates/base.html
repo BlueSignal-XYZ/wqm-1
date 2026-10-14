@@ -18,6 +18,8 @@
         {% if awg_bound %}
         <a href="{{ url_for('awg.index') }}" {% if '/awg' in request.path %}class="active"{% endif %}>AWG circuit</a>
         {% endif %}
+        <a href="{{ url_for('apple_home.index') }}" {% if '/apple-home' in request.path %}class="active"{% endif %}>Apple Home</a>
+        <a href="{{ url_for('home_assistant.index') }}" {% if '/home-assistant' in request.path %}class="active"{% endif %}>Home Assistant</a>
         <a href="{{ url_for('diagnostics.index') }}" {% if '/diagnostics' in request.path %}class="active"{% endif %}>Diagnostics</a>
         <a href="{{ url_for('provision.index') }}" {% if '/provision' in request.path %}class="active"{% endif %}>Provisioning</a>
         <a href="{{ url_for('settings.index') }}" {% if '/settings' in request.path %}class="active"{% endif %}>Settings</a>

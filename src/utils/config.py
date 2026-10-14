@@ -443,6 +443,25 @@ class Settings:
     irrigation_hold_release_min: int = 10  # minutes every condition stays clear
     irrigation_hold_on_fault: str = "release"  # release | hold
 
+    # Apple Home (integrations/apple_home). Off by default; when on, the unit
+    # advertises one HomeKit accessory on the LAN — readings out, nothing in.
+    # The owner pairs from the Service Window; the cloud never sees the code.
+    apple_home_enabled: bool = False
+    apple_home_port: int = 51826  # HAP listen port; local-only key
+
+    # Home Assistant (integrations/home_assistant). Off by default; when on,
+    # the unit publishes MQTT discovery configs and one state document per
+    # cycle to the OWNER'S broker — readings out, nothing in (it subscribes
+    # to no topic). Everything but the switch is local-only: a remote config
+    # can never point the unit at a broker or hand it a credential.
+    mqtt_enabled: bool = False
+    mqtt_host: str = ""
+    mqtt_port: int = 0  # 0 = 1883, or 8883 when mqtt_tls
+    mqtt_username: str = ""
+    mqtt_password: str = ""  # local-only; the Service Window writes it, never shows it
+    mqtt_tls: bool = False
+    mqtt_discovery_prefix: str = "homeassistant"
+
     # Automation rules
     rules: list[dict[str, Any]] = field(default_factory=list)
 
@@ -610,6 +629,23 @@ SETTINGS_SCHEMA: dict[str, SettingSpec] = {
     "irrigation_hold_on_fault": SettingSpec(
         str, hot=True, max_length=8, choices=IRRIGATION_HOLD_ON_FAULT_MODES
     ),
+    # Apple Home. `enabled` is hot and remote (the owner flips it from the
+    # Cloud device page or the Service Window; the bridge starts/stops on the
+    # next cycle). The port is local-only: a remote config must not be able
+    # to move a LAN listener. Mirrored in functions/v2/deviceTelemetry.js.
+    "apple_home_enabled": SettingSpec(bool, hot=True),
+    "apple_home_port": SettingSpec(int, hot=False, min=1024, max=65535, remote=False),
+    # Home Assistant. `enabled` is hot and remote, like apple_home_enabled.
+    # The broker address, port, credentials, TLS and discovery prefix are
+    # hot (the publisher reconnects on the next cycle) but local-only.
+    # Mirrored in functions/v2/deviceTelemetry.js.
+    "mqtt_enabled": SettingSpec(bool, hot=True),
+    "mqtt_host": SettingSpec(str, hot=True, max_length=253, remote=False),
+    "mqtt_port": SettingSpec(int, hot=True, min=0, max=65535, remote=False),
+    "mqtt_username": SettingSpec(str, hot=True, max_length=128, remote=False),
+    "mqtt_password": SettingSpec(str, hot=True, max_length=256, remote=False),
+    "mqtt_tls": SettingSpec(bool, hot=True, remote=False),
+    "mqtt_discovery_prefix": SettingSpec(str, hot=True, max_length=64, remote=False),
 }
 
 _SETTINGS_FIELDS = {f.name for f in fields(Settings)}
