@@ -21,6 +21,7 @@ from flask.typing import ResponseReturnValue
 from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.config_editor import read_config, update_config
+from service_window.health import board_fault_banner, hardware_report
 
 provision_bp = Blueprint("provision", __name__, url_prefix="/provision")
 
@@ -79,11 +80,13 @@ def index() -> str:
         "ingest_url": config.get("cloud_ingest_url") or _DEFAULT_INGEST_URL,
         "command_url": config.get("cloud_command_url") or _DEFAULT_COMMAND_URL,
     }
+    report = hardware_report(current_app.config["CMD_SOCK"])
     return render_template(
         "provision/index.html",
         identity=identity,
         is_provisioned=is_provisioned,
         cloud=cloud,
+        board_fault=board_fault_banner(report),
     )
 
 

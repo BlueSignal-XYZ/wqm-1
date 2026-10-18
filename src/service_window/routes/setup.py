@@ -44,7 +44,14 @@ from service_window.auth import login_required
 from service_window.cmd_client import send_command
 from service_window.config_editor import read_config, update_config, update_config_section
 from service_window.db_reader import DBReader
-from service_window.health import sensor_cards, system_cards, worst_status
+from service_window.health import (
+    apply_board_fault,
+    board_fault_banner,
+    hardware_report,
+    sensor_cards,
+    system_cards,
+    worst_status,
+)
 
 setup_bp = Blueprint("setup", __name__, url_prefix="/setup")
 
@@ -455,7 +462,11 @@ def sensors() -> ResponseReturnValue:
         readings = db.get_readings(limit=30)
     except Exception:
         readings = []
-    cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
+    report = hardware_report(current_app.config["CMD_SOCK"])
+    cards = apply_board_fault(
+        sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config),
+        report,
+    )
     ready = all(c["status"] in ("ok", "disabled") for c in cards.values())
     # Absent key = fitted for the core four ONLY, matching health.py — a unit
     # upgrading from before these keys existed must not appear to have lost
@@ -479,6 +490,7 @@ def sensors() -> ResponseReturnValue:
         probes=FITTABLE_PROBES,
         fitment=fitment,
         carded=is_carded(config),
+        board_fault=board_fault_banner(report),
     )
 
 
@@ -495,7 +507,11 @@ def done() -> ResponseReturnValue:
     except Exception:
         readings, count, pending, session = [], 0, 0, None
 
-    s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
+    report = hardware_report(current_app.config["CMD_SOCK"])
+    s_cards = apply_board_fault(
+        sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config),
+        report,
+    )
     sys_cards = system_cards(readings, config, session, count, pending=pending)
     checklist = {**s_cards, **sys_cards}
     overall = worst_status(checklist)

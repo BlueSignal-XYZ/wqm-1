@@ -105,6 +105,13 @@ logger = logging.getLogger("wqm1")
 
 FW_VERSION = FIRMWARE_VERSION
 
+# How often a failed ADS1115 (or other sensor) init is tried again. The first
+# failure is logged once; retries are silent until the part answers or the
+# process restarts. 60s is long enough that a wedged I2C bus is not polled
+# into a log flood, and short enough that reseating the board at the bench
+# shows up without a reboot.
+ADC_RETRY_S = 60.0
+
 # The OTA agent (separate service) polls this flag file for "check now" nudges
 # from the command channel / otaPending hints.
 OTA_CHECK_FLAG = Path("/var/lib/bluesignal/ota-check-now")
@@ -183,6 +190,14 @@ class WQM1App:
         self._leds: Any = None
         self._fan: Any = None
         self._adc: Any = None
+        # Set when the converter did not answer. None means "not tried" or
+        # "up". Distinct from a headerless board, which never sets it.
+        self._adc_error: str | None = None
+        self._adc_next_retry: float = 0.0
+        self._faulted_channels: set[str] = set()
+        self._fault_logged: set[str] = set()
+        self._sensor_map: dict[str, Any] | None = None
+        self._sampler: Any = None
         self._temp: Any = None
         self._gps: Any = None
         self._radio: Any = None
@@ -283,15 +298,30 @@ class WQM1App:
             )
 
         # --- GPIO outputs (direct-header boards only) ---
+        # A missing board must not take the process down. GPIO lives on the
+        # Pi, so this usually succeeds with the HAT unseated; if it does not,
+        # relays and lamps stay off and the rest of the unit still boots.
         if direct:
-            self._relays = RelayController()
-            self._relays.all_off()
-            self._leds = StatusLEDs()
-            self._leds.startup_test()
-            self._fan = FanController(
-                on_temp=self._settings.fan_on_temp_c,
-                off_temp=self._settings.fan_off_temp_c,
-            )
+            try:
+                self._relays = RelayController()
+                self._relays.all_off()
+            except Exception as e:  # noqa: BLE001 — degraded boot, not a crash loop
+                self._relays = None
+                logger.error("Relay init failed — relays left off, continuing: %s", e)
+            try:
+                self._leds = StatusLEDs()
+                self._leds.startup_test()
+            except Exception as e:  # noqa: BLE001
+                self._leds = None
+                logger.error("Status LED init failed — continuing: %s", e)
+            try:
+                self._fan = FanController(
+                    on_temp=self._settings.fan_on_temp_c,
+                    off_temp=self._settings.fan_off_temp_c,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._fan = None
+                logger.error("Fan init failed — continuing: %s", e)
 
         # --- ADC + sensors (direct-header boards only) ---
         self._cal = CalibrationManager()
@@ -302,30 +332,13 @@ class WQM1App:
             self._turbidity = self._sim.turbidity
             self._flow = self._sim.flow
         if direct:
-            self._adc = ADS1115(bus=self._pins.i2c_bus)
-            # Only build a sensor for a probe that is declared FITTED. An
-            # undeclared channel is left as None, and SamplingWorker skips a
-            # None sensor — so an open input can never be read, converted, and
-            # published as a measurement. The alternative (read everything and
-            # try to spot nonsense downstream) is what let a probe-less unit
-            # emit pH for nine hours and raise 38 threshold alerts.
-            s0 = self._settings
-            self._temp = DS18B20() if s0.temperature_enabled else None
-            self._ph = PHSensor(self._adc) if s0.ph_enabled else None
-            self._tds = TDSSensor(self._adc) if s0.tds_enabled else None
-            self._turbidity = TurbiditySensor(self._adc) if s0.turbidity_enabled else None
-            for name, fitted in (
-                ("temperature", s0.temperature_enabled),
-                ("pH", s0.ph_enabled),
-                ("TDS", s0.tds_enabled),
-                ("turbidity", s0.turbidity_enabled),
-            ):
-                if not fitted:
-                    logger.info("%s probe not fitted (declared in config) — not sampled", name)
-            if self._settings.orp_enabled and not self._settings.rs485_orp_enabled:
-                self._orp = ORPSensor(self._adc)
-            elif not self._settings.rs485_orp_enabled:
-                logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
+            # ADS1115 init used to raise out of start() and systemd restarted
+            # the service forever (field: 37 exits, "Input/output error" on
+            # read_word_data, no setup page because nothing else mattered
+            # once the process was down). A missing or unseated board now
+            # leaves the analog channels faulted and the process up.
+            self._bring_up_adc()
+            self._init_direct_sensors(log_fitment=True)
 
         # --- RS485 (Modbus) sensors — Honde probes on the shared USB bus.
         # The digital ORP supersedes the analog one; the 5-in-1's pH/TDS/temp
@@ -337,52 +350,41 @@ class WQM1App:
             or s.rs485_multi_enabled
             or s.rs485_flow_enabled
         ):
-            from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
-            from sensors.modbus import ModbusBus
+            try:
+                from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
+                from sensors.modbus import ModbusBus
 
-            self._modbus_bus = ModbusBus(s.rs485_port, baudrate=s.rs485_baud)
-            if s.rs485_flow_enabled and not s.flow_pulse_enabled:
-                from sensors.flow import ModbusFlowMeter
+                self._modbus_bus = ModbusBus(s.rs485_port, baudrate=s.rs485_baud)
+                if s.rs485_flow_enabled and not s.flow_pulse_enabled:
+                    from sensors.flow import ModbusFlowMeter
 
-                self._flow = ModbusFlowMeter(
-                    self._modbus_bus, s.rs485_flow_addr, model=s.rs485_flow_model
-                )
+                    self._flow = ModbusFlowMeter(
+                        self._modbus_bus, s.rs485_flow_addr, model=s.rs485_flow_model
+                    )
+                    logger.info(
+                        "Flow meter: %s over RS485 addr %d", s.rs485_flow_model, s.rs485_flow_addr
+                    )
+                if s.rs485_chlorine_enabled:
+                    self._chlorine = HondeChlorineSensor(self._modbus_bus, s.rs485_chlorine_addr)
+                if s.rs485_orp_enabled:
+                    self._orp = HondeOrpSensor(self._modbus_bus, s.rs485_orp_addr)
+                    logger.info("Digital ORP (RS485 addr %d) supersedes analog", s.rs485_orp_addr)
+                if s.rs485_multi_enabled:
+                    self._multi = HondeMultiSensor(self._modbus_bus, s.rs485_multi_addr)
                 logger.info(
-                    "Flow meter: %s over RS485 addr %d", s.rs485_flow_model, s.rs485_flow_addr
+                    "RS485 bus on %s @ %d (chlorine=%s orp=%s multi=%s flow=%s)",
+                    s.rs485_port,
+                    s.rs485_baud,
+                    s.rs485_chlorine_enabled,
+                    s.rs485_orp_enabled,
+                    s.rs485_multi_enabled,
+                    s.rs485_flow_enabled,
                 )
-            if s.rs485_chlorine_enabled:
-                self._chlorine = HondeChlorineSensor(self._modbus_bus, s.rs485_chlorine_addr)
-            if s.rs485_orp_enabled:
-                self._orp = HondeOrpSensor(self._modbus_bus, s.rs485_orp_addr)
-                logger.info("Digital ORP (RS485 addr %d) supersedes analog", s.rs485_orp_addr)
-            if s.rs485_multi_enabled:
-                self._multi = HondeMultiSensor(self._modbus_bus, s.rs485_multi_addr)
-            logger.info(
-                "RS485 bus on %s @ %d (chlorine=%s orp=%s multi=%s flow=%s)",
-                s.rs485_port,
-                s.rs485_baud,
-                s.rs485_chlorine_enabled,
-                s.rs485_orp_enabled,
-                s.rs485_multi_enabled,
-                s.rs485_flow_enabled,
-            )
+            except Exception as e:  # noqa: BLE001 — a dead bus must not kill boot
+                logger.error("RS485 init failed — digital probes faulted, continuing: %s", e)
+                self._modbus_bus = None
 
-        # Apply calibration to the analog sensors (digital probes hold their
-        # own calibration state on the probe itself)
-        cal = self._cal.data
-        if self._ph:
-            # A never-calibrated electrode publishes nothing (status
-            # "uncalibrated") — the factory placeholders do not describe the
-            # LMP91200 front-end and would print inverted, offset pH.
-            self._ph.set_calibration(
-                cal.ph_v_at_4, cal.ph_v_at_7, calibrated=self._cal.is_calibrated("ph")
-            )
-        if self._tds:
-            self._tds.set_calibration(cal.tds_k)
-        if self._turbidity:
-            self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
-        if self._orp and hasattr(self._orp, "set_offset"):
-            self._orp.set_offset(cal.orp_offset_mv, 0.0)
+        self._apply_analog_calibration()
 
         # --- Database ---
         self._db = WQM1Database()
@@ -403,7 +405,7 @@ class WQM1App:
                 flow_chip, flow_line = self._pins.line(self._settings.flow_pulse_gpio)
                 self._flow = PulseFlowMeter(
                     gpio=self._settings.flow_pulse_gpio,
-                    k_ppg=cal.flow_k_ppg,
+                    k_ppg=self._cal.data.flow_k_ppg,
                     initial_count=int(saved) if saved else 0,
                     persist=lambda n: db.set_meta("flow_pulse_count", str(n)),
                     chip=flow_chip,
@@ -631,6 +633,241 @@ class WQM1App:
         atexit.register(self._shutdown)
 
         logger.info("All subsystems initialised")
+        self.publish_boot_status(fatal="none")
+
+    def _bring_up_adc(self) -> None:
+        """Open the ADS1115. A failure marks the analog channels faulted.
+
+        Logged once per outage. A retry that fails the same way is debug,
+        so a missing board cannot fill the log the way the old crash loop did.
+        """
+        try:
+            self._adc = ADS1115(bus=self._pins.i2c_bus)
+        except Exception as e:  # noqa: BLE001 — degraded boot, not fatal
+            self._adc = None
+            # The driver already says "ADS1115 init failed: ...". Prefixing
+            # it again made the log line say it twice.
+            message = str(e)
+            self._adc_error = message
+            self._adc_next_retry = time.monotonic() + ADC_RETRY_S
+            self._mark_analog_faulted()
+            if "adc" not in self._fault_logged:
+                self._fault_logged.add("adc")
+                logger.error(
+                    "%s — analog channels faulted; the rest of the unit is up and will retry",
+                    message,
+                )
+            else:
+                logger.debug("ADS1115 still not responding: %s", e)
+            return
+        recovered = "adc" in self._fault_logged or self._adc_error is not None
+        self._adc_error = None
+        self._fault_logged.discard("adc")
+        self._clear_analog_faults()
+        if recovered:
+            logger.info("ADS1115 is responding — analog channels restored")
+
+    def _mark_analog_faulted(self) -> None:
+        """Enabled analog channels that have no converter are faulted.
+
+        A channel declared not fitted stays not fitted. Temperature and the
+        digital probes are not analog and are left alone.
+        """
+        s0 = self._settings
+        faulted: set[str] = set()
+        if s0.ph_enabled:
+            faulted.add("ph")
+        if s0.tds_enabled:
+            faulted.add("tds")
+        if s0.turbidity_enabled:
+            faulted.add("turbidity")
+        if s0.orp_enabled and not s0.rs485_orp_enabled:
+            faulted.add("orp")
+        kept = {
+            name for name in self._faulted_channels if name not in ("ph", "tds", "turbidity", "orp")
+        }
+        self._faulted_channels = kept | faulted
+        self._ph = None
+        self._tds = None
+        self._turbidity = None
+        if not s0.rs485_orp_enabled:
+            self._orp = None
+
+    def _clear_analog_faults(self) -> None:
+        self._faulted_channels -= {"ph", "tds", "turbidity", "orp"}
+
+    def _try_channel(self, name: str, build: Any) -> Any:
+        """Construct one sensor. A constructor that raises faults that channel."""
+        try:
+            sensor = build()
+        except Exception as e:  # noqa: BLE001 — one sensor must not stop the others
+            self._faulted_channels.add(name)
+            if name not in self._fault_logged:
+                self._fault_logged.add(name)
+                logger.error("%s init failed — that channel is faulted, continuing: %s", name, e)
+            return None
+        self._faulted_channels.discard(name)
+        self._fault_logged.discard(name)
+        return sensor
+
+    def _init_direct_sensors(self, *, log_fitment: bool) -> None:
+        """Build the direct-header sensors. Analog ones need a live ADC.
+
+        An undeclared channel is left as None, and SamplingWorker skips a
+        None sensor — so an open input can never be read, converted, and
+        published as a measurement. The alternative (read everything and try
+        to spot nonsense downstream) is what let a probe-less unit emit pH
+        for nine hours and raise 38 threshold alerts.
+        """
+        s0 = self._settings
+        if self._sim is None and s0.temperature_enabled and self._temp is None:
+            self._temp = self._try_channel("temperature", DS18B20)
+        elif not s0.temperature_enabled:
+            self._temp = None
+        if self._adc is None:
+            self._mark_analog_faulted()
+        else:
+            self._ph = (
+                self._try_channel("ph", lambda: PHSensor(self._adc)) if s0.ph_enabled else None
+            )
+            self._tds = (
+                self._try_channel("tds", lambda: TDSSensor(self._adc)) if s0.tds_enabled else None
+            )
+            self._turbidity = (
+                self._try_channel("turbidity", lambda: TurbiditySensor(self._adc))
+                if s0.turbidity_enabled
+                else None
+            )
+            if not s0.ph_enabled:
+                self._faulted_channels.discard("ph")
+            if not s0.tds_enabled:
+                self._faulted_channels.discard("tds")
+            if not s0.turbidity_enabled:
+                self._faulted_channels.discard("turbidity")
+            if s0.orp_enabled and not s0.rs485_orp_enabled:
+                self._orp = self._try_channel("orp", lambda: ORPSensor(self._adc))
+            elif not s0.rs485_orp_enabled:
+                self._orp = None
+                self._faulted_channels.discard("orp")
+        if log_fitment:
+            for name, fitted in (
+                ("temperature", s0.temperature_enabled),
+                ("pH", s0.ph_enabled),
+                ("TDS", s0.tds_enabled),
+                ("turbidity", s0.turbidity_enabled),
+            ):
+                if not fitted:
+                    logger.info("%s probe not fitted (declared in config) — not sampled", name)
+            if not s0.orp_enabled and not s0.rs485_orp_enabled:
+                logger.info("ORP disabled (orp_enabled=false); AIN3 is spare on PCBA Fin_3")
+
+    def _apply_analog_calibration(self) -> None:
+        """Push the stored calibration into whichever analog sensors exist.
+
+        Digital probes hold their own calibration on the probe. Called at
+        boot and again when a retry finally constructs the analog sensors.
+        """
+        if self._cal is None:
+            return
+        cal = self._cal.data
+        if self._ph:
+            # A never-calibrated electrode publishes nothing (status
+            # "uncalibrated") — the factory placeholders do not describe the
+            # LMP91200 front-end and would print inverted, offset pH.
+            self._ph.set_calibration(
+                cal.ph_v_at_4, cal.ph_v_at_7, calibrated=self._cal.is_calibrated("ph")
+            )
+        if self._tds:
+            self._tds.set_calibration(cal.tds_k)
+        if self._turbidity:
+            self._turbidity.set_clear_water_voltage(cal.turbidity_v_clear)
+        if self._orp and hasattr(self._orp, "set_offset"):
+            self._orp.set_offset(cal.orp_offset_mv, 0.0)
+
+    def _hardware_note(self) -> str | None:
+        if self._adc_error:
+            return f"{self._adc_error} — analog channels faulted; the unit is up and will retry"
+        return None
+
+    def _sync_sampler(self) -> None:
+        """Push sensors built by a retry into the worker that already holds them."""
+        if self._sensor_map is not None:
+            self._sensor_map.update(
+                {
+                    "temperature": self._temp,
+                    "ph": self._ph,
+                    "tds": self._tds,
+                    "turbidity": self._turbidity,
+                    "orp": self._orp,
+                    "chlorine": self._chlorine,
+                    "multi485": self._multi,
+                    "flow": self._flow,
+                }
+            )
+        if self._sampler is not None:
+            self._sampler.hardware_note = self._hardware_note()
+            if self._adc is not None:
+                self._sampler._no_sensor_cycles = 0
+                self._sampler._empty_cycles = 0
+
+    def _retry_deferred_sensors(self) -> None:
+        """Try the ADS1115 again. Sampling calls this; it does not raise."""
+        if self._pins is None or self._adc is not None or not self._adc_error:
+            return
+        now = time.monotonic()
+        if now < self._adc_next_retry:
+            return
+        self._bring_up_adc()
+        if self._adc is None:
+            return
+        self._init_direct_sensors(log_fitment=False)
+        self._apply_analog_calibration()
+        self._sync_sampler()
+        self.publish_boot_status(fatal="none")
+
+    def publish_boot_status(self, fatal: str | None = None) -> None:
+        """Write the FAT/status snapshot. Never raises into the caller."""
+        try:
+            from diagnostics.boot_status import write_boot_status
+
+            board = None
+            profile = getattr(self, "_board", None)
+            if profile is not None:
+                board = f"{profile.name} ({profile.id})"
+            if self._adc is not None:
+                adc = "ok"
+            elif self._adc_error:
+                adc = "faulted"
+            elif self._pins is None:
+                adc = "absent"
+            else:
+                adc = "unknown"
+            write_boot_status(
+                board=board,
+                adc=adc,
+                adc_error=self._adc_error or "",
+                faulted=sorted(self._faulted_channels),
+                fatal=fatal if fatal is not None else "none",
+            )
+        except Exception as e:  # noqa: BLE001 — status is diagnostic, not load-bearing
+            logger.warning("Could not write boot status: %s", e)
+
+    def hardware_status(self) -> dict[str, Any]:
+        """What the Service Window shows when the board did not come up."""
+        if self._adc is not None:
+            adc = "ok"
+        elif self._adc_error:
+            adc = "faulted"
+        elif self._pins is None:
+            adc = "absent"
+        else:
+            adc = "unknown"
+        return {
+            "adc": adc,
+            "adcError": self._adc_error,
+            "faulted": sorted(self._faulted_channels),
+            "fatal": None,
+        }
 
     def _build_workers(self) -> list[Worker]:
         sampler_cls: Any = SamplingWorker
@@ -640,34 +877,37 @@ class WQM1App:
 
             sampler_cls = SimSamplingWorker
             sampler_args = (self._sim,)
-        workers: list[Worker] = [
-            sampler_cls(
-                *sampler_args,
-                self._settings_provider,
-                sensors={
-                    "temperature": self._temp,
-                    "ph": self._ph,
-                    "tds": self._tds,
-                    "turbidity": self._turbidity,
-                    "orp": self._orp,
-                    "chlorine": self._chlorine,
-                    "multi485": self._multi,
-                    "flow": self._flow,
-                },
-                db=self._db,
-                rules=self._rules,
-                relays=self._relays,
-                leds=self._leds,
-                health=self._health,
-                state=self._state,
-                monitor=self._monitor,
-                adaptive=self._adaptive,
-                clock_source=self._clock.source,
-                irrigation_hold=self._hold,
-                apple_home=self._apple_home,
-                home_assistant=self._home_assistant,
-            )
-        ]
+        self._sensor_map = {
+            "temperature": self._temp,
+            "ph": self._ph,
+            "tds": self._tds,
+            "turbidity": self._turbidity,
+            "orp": self._orp,
+            "chlorine": self._chlorine,
+            "multi485": self._multi,
+            "flow": self._flow,
+        }
+        sampler = sampler_cls(
+            *sampler_args,
+            self._settings_provider,
+            sensors=self._sensor_map,
+            db=self._db,
+            rules=self._rules,
+            relays=self._relays,
+            leds=self._leds,
+            health=self._health,
+            state=self._state,
+            monitor=self._monitor,
+            adaptive=self._adaptive,
+            clock_source=self._clock.source,
+            irrigation_hold=self._hold,
+            apple_home=self._apple_home,
+            home_assistant=self._home_assistant,
+            maintenance=self._retry_deferred_sensors,
+        )
+        sampler.hardware_note = self._hardware_note()
+        self._sampler = sampler
+        workers: list[Worker] = [sampler]
         if self._gps is not None:
             workers.append(
                 GpsWorker(
@@ -834,6 +1074,8 @@ class WQM1App:
             return {"ok": True, **self._home_assistant.status()}
         if action == "health":
             return {"ok": True, "health": self._health.get_report()}
+        if action == "hardware_status":
+            return {"ok": True, **self.hardware_status()}
         if action in ("awg_set", "circuit_set"):
             # "AWG circuit on/off" — vendor-agnostic. Goes through the smart
             # breaker controller (interlock relay + breaker), never straight to
@@ -887,6 +1129,8 @@ class WQM1App:
         wizard can never be arithmetically out of step with the measurement.
         """
         if self._adc is None:
+            if self._adc_error:
+                return {"ok": False, "error": self._adc_error}
             return {"ok": False, "error": "no ADC on this board"}
         channels: dict[str, dict] = {}
         for name, ch in self._ADC_CHANNELS:
@@ -1267,6 +1511,10 @@ def main() -> None:
         app.run()
     except Exception as e:
         logger.critical("Fatal error: %s", e, exc_info=True)
+        try:
+            app.publish_boot_status(fatal=f"{type(e).__name__}: {e}")
+        except Exception:  # noqa: BLE001 — the process is already exiting
+            logger.debug("boot status was not written on the way out", exc_info=True)
         sys.exit(1)
 
 

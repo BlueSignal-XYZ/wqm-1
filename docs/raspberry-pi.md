@@ -39,6 +39,17 @@ are a CYW43455; the Zero 2 W is its own module on the same driver). The
 firmware never branches on the chip. `nmcli` is asked for an AP on `wlan0`
 either way.
 
+`bluesignal-ap-fallback.service` raises that hotspot. It does not wait on
+`bluesignal-wqm` and it does not wait on `network-online.target`. An
+unconfigured unit has no connection for that target to report, and this
+service is what creates the network. The script unblocks the radio (a Pi
+leaves Wi-Fi soft-blocked until a regulatory domain is set, so `wlan0`
+stays down), skips the station grace period when no Wi-Fi profile is saved,
+and retries the hotspot if the interface is still unavailable. A failed
+sensor init must not stop it. The golden image's `wqm1-firstboot` does the
+radio unblock as well; the fallback does not depend on that script, because
+`setup.sh` does not install it.
+
 **Pi 3 and Pi 4 hotspot behaviour is unverified on hardware.** The Zero 2 W
 path is the one field units already use.
 

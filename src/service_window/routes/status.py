@@ -11,7 +11,15 @@ from service_window.auth import login_required
 from service_window.cmd_client import send_command
 from service_window.config_editor import read_config
 from service_window.db_reader import DBReader
-from service_window.health import sensor_cards, smart_breaker_card, system_cards, worst_status
+from service_window.health import (
+    apply_board_fault,
+    board_fault_banner,
+    hardware_report,
+    sensor_cards,
+    smart_breaker_card,
+    system_cards,
+    worst_status,
+)
 
 status_bp = Blueprint("status", __name__)
 
@@ -32,7 +40,11 @@ def index() -> str:
     latest = readings[0] if readings else None
     config = read_config(current_app.config["CONFIG_PATH"])
 
-    s_cards = sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config)
+    report = hardware_report(current_app.config["CMD_SOCK"])
+    s_cards = apply_board_fault(
+        sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config),
+        report,
+    )
     sys_cards = system_cards(readings, config, session, count, pending=pending)
     if config.get("smart_breaker_vendor") == "ableedge":
         # Live snapshot, not SQLite: only asked for when a breaker is bound so
@@ -65,4 +77,5 @@ def index() -> str:
         hostname=platform.node(),
         uptime_s=int(time.monotonic() - _START_TIME),
         irrigation_hold=irrigation_hold,
+        board_fault=board_fault_banner(report),
     )
