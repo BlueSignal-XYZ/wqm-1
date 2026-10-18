@@ -78,10 +78,15 @@ radio unblock as well; the fallback does not depend on that script, because
 **Pi 3, Pi 4 and Pi 5 hotspot behaviour is unverified on hardware.** The
 Zero 2 W path is the one field units already use.
 
-The captive-portal redirect is an `iptables` NAT rule. Trixie Lite does not
-install `iptables` (it ships nftables). `setup.sh` installs it. Without that
-package the rule fails open and the phone does not open the setup page by
-itself.
+The setup hotspot's captive portal listens on `192.168.4.1:80` while the
+AP is up (`bluesignal-captive-portal.service`, the install user with
+`CAP_NET_BIND_SERVICE`). Probe URLs redirect to `http://192.168.4.1/setup/`.
+The Service Window stays on 8080, and that port still answers on the site
+LAN after the join. The listener closes when the station associates, so it
+does not sit on the customer's network. A unit imaged before this change
+may still have an iptables NAT rule that sends port 80 to 8080. `setup.sh`
+installs iptables so that rule can be deleted; Trixie Lite does not ship
+it. `wqm1-status.txt` says `portal: up (80)` or `portal: down: <reason>`.
 
 ## The 40-pin cable
 

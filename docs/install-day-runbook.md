@@ -330,8 +330,12 @@ silently falls behind.
 fallback shipped, a unit that cannot associate with any known network within 45 s
 of NetworkManager starting raises `WQM1-<last four of the serial>` (WPA2, the
 per-unit passphrase from the bench print-out or the enclosure label) with the
-Service Window at `http://192.168.4.1:8080`. That is how you reach a unit whose
-flashed SSID does not exist at this site, and how service reaches it next year.
+Service Window opens by itself at `http://192.168.4.1/setup/` (the phone's
+captive-portal sheet; port 80). `http://192.168.4.1:8080/setup/` still works
+if the sheet does not. That is how you reach a unit whose flashed SSID does
+not exist at this site, and how service reaches it next year. After the unit
+joins the site network, use `http://<unit-ip>:8080` — port 80 is only the
+hotspot.
 Joining the site network from that page turns the AP off for the join; a failed
 join brings it straight back — reconnect and try again. Declare on the same page
 what the unit IS (Wi-Fi / LTE / no network; LoRa and GPS fitted or not): the

@@ -8,9 +8,11 @@ The service does not wait for ``bluesignal-wqm`` and does not wait for
 unconfigured unit has no network for that target to announce. This script
 unblocks the radio, brings ``wlan0`` up, waits out the station grace period
 only when a Wi-Fi profile is actually saved, and retries the hotspot if the
-interface is still down. An installer with a phone then reaches the Service
-Window at http://192.168.4.1:8080 — at a well head with no Wi-Fi, or with a
-card flashed for a network that does not exist here.
+interface is still down. An installer with a phone then gets the captive
+sheet at http://192.168.4.1/setup/ (port 80). The Service Window on 8080
+stays up for a unit already on the site LAN. At a well head with no Wi-Fi,
+or with a card flashed for a network that does not exist here, the hotspot
+is how the phone reaches the unit.
 
 The SSID is ``WQM1-`` + the last four characters of the device id
 (utils.identity.ap_name) and the passphrase comes from the provisioned
@@ -81,38 +83,54 @@ def hotspot_failure_status(detail: object, passphrase: str) -> str:
     return f"failed: {error or 'unknown'}"
 
 
-def _write_status(*, hotspot: str, ssid: str) -> None:
+def _write_status(*, hotspot: str, ssid: str, portal: str) -> None:
     """Best-effort. A status-file failure must not decide whether the AP
     stays up — the file is how a pulled card is read, not the hotspot."""
     try:
         from diagnostics.boot_status import write_boot_status
 
-        write_boot_status(hotspot=hotspot, ssid=ssid)
+        write_boot_status(hotspot=hotspot, ssid=ssid, portal=portal)
     except Exception as e:  # noqa: BLE001 — never fail the AP over the status file
         logger.error("Could not write boot status: %s", e)
 
 
 def main() -> int:
-    from utils.netctl import ensure_captive_redirect, ensure_reachable
+    from utils.captive_portal import (
+        ensure_dnsmasq_conf,
+        ensure_portal_service,
+        wait_until_reachable,
+    )
+    from utils.netctl import ensure_reachable, remove_legacy_captive_nat
 
-    # The captive-portal NAT rule is installed every boot, whatever happens
-    # next: it matches only hotspot clients, so it is inert on a unit that
-    # joins its saved network, and in place the moment the AP comes up —
-    # including when a failed join in the setup wizard brings the AP back.
-    ensure_captive_redirect(service_window_port())
+    # Shared-mode DNS (wildcard + DHCP option 114) before the AP comes up,
+    # so the first lease the phone gets already names the portal. The legacy
+    # NAT rule is removed first: it would steal port 80 from the listener
+    # and send the phone to :8080. A station link does not get either one.
+    ensure_dnsmasq_conf()
+    remove_legacy_captive_nat(service_window_port())
     ssid, passphrase = resolve_credentials()
     result = ensure_reachable(ssid, passphrase)
     if result.get("mode") == "station":
         logger.info("Station link present — AP not needed")
-        _write_status(hotspot="station", ssid=ssid)
+        _write_status(hotspot="station", ssid=ssid, portal="down: station")
         return 0
     if result.get("ap"):
+        # ensure_reachable already armed the listener. Start the unit (root
+        # copies it on an image that has not re-run setup.sh) and then probe
+        # port 80. A portal that does not answer is a commissioning failure
+        # in the status file; it is not a reason to tear the AP down and
+        # blink the SSID.
         logger.warning("No station link — setup AP %s is up at 192.168.4.1", ssid)
-        _write_status(hotspot="up", ssid=ssid)
+        started = ensure_portal_service()
+        if not started.get("ok"):
+            logger.warning("Captive portal service: %s", started.get("error"))
+        portal = wait_until_reachable()
+        logger.info("Captive portal: %s", portal)
+        _write_status(hotspot="up", ssid=ssid, portal=portal)
         return 0
     failure = hotspot_failure_status(result.get("detail"), passphrase)
     logger.error("No station link and the AP could not be raised: %s", failure)
-    _write_status(hotspot=failure, ssid=ssid)
+    _write_status(hotspot=failure, ssid=ssid, portal="down: hotspot down")
     return 1
 
 

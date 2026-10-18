@@ -209,6 +209,7 @@ class TestBootStatusFile:
             i2c="bus not enumerated",
             wlan0="down",
             hotspot="up",
+            portal="up (80)",
             adc="faulted",
             power="ok",
             adc_error="ADS1115 init failed: [Errno 5] Input/output error",

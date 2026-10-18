@@ -1,0 +1,30 @@
+[Unit]
+Description=BlueSignal WQM-1 setup captive portal (port 80, hotspot only)
+# Binds 192.168.4.1:80 while the setup AP is armed and closes that socket
+# when the mode file says the station joined. Not After= the AP fallback:
+# the fallback starts this unit, and an After= on itself would deadlock.
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+# Port 80 as the install user. Ambient capabilities are how this binds
+# without running as root. NoNewPrivileges must stay unset: systemd drops
+# ambient capabilities when it is set, and a root Flask is the thing this
+# unit exists to avoid.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+RuntimeDirectory=bluesignal
+RuntimeDirectoryMode=0755
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 -m utils.captive_portal
+# Ignore failure: the rule is absent on a unit that never had the NAT
+# redirect. "+" runs this as root before the process drops to User=.
+ExecStartPre=-+/usr/sbin/iptables -t nat -D PREROUTING -i wlan0 -s 192.168.4.0/24 -d 192.168.4.1 -p tcp --dport 80 -j REDIRECT --to-ports 8080
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -4,10 +4,12 @@ Captive portal for the setup hotspot (site flow v2).
 When a phone joins ``WQM1-xxxx``, it asks a known URL whether the network has
 internet (iOS ``captive.apple.com/hotspot-detect.html``, Android
 ``/generate_204``, Windows ``/connecttest.txt``…). The hotspot's dnsmasq
-answers every name with 192.168.4.1 and a NAT rule sends port 80 here
-(``setup.sh``, ``utils.netctl.ensure_captive_redirect``), so the probe lands
-on this app — and anything but the expected answer makes the phone open the
-setup page by itself. The installer types no address.
+answers every name with 192.168.4.1 and ``utils.captive_portal`` serves port
+80 on that address, so the probe lands on the setup page. The same routes
+are mounted here on 8080: a probe that still reaches this process (a
+bookmark, or a leftover NAT rule) is sent to ``http://192.168.4.1/setup/``
+with no port, which is port 80. A redirect to ``:8080`` is what makes some
+handsets skip the captive sheet.
 
 Two pieces, both inert unless the hotspot is up:
 
@@ -26,23 +28,24 @@ from __future__ import annotations
 import ipaddress
 import time
 
-from flask import Blueprint, current_app, redirect, request
+from flask import Blueprint, redirect, request
 from werkzeug.wrappers import Response
 
-captive_bp = Blueprint("captive", __name__)
+from utils.captive_portal import PORTAL_URL, PROBE_PATHS
 
-PROBE_PATHS = (
-    "/hotspot-detect.html",
-    "/library/test/success.html",
-    "/generate_204",
-    "/gen_204",
-    "/connecttest.txt",
-    "/ncsi.txt",
-    "/redirect",
-    "/canonical.html",
-    "/success.txt",
-    "/check_network_status.txt",
-)
+# app.py imports PROBE_PATHS so a captive check is allowed through the
+# setup gate. The tuple itself lives in utils.captive_portal.
+__all__ = [
+    "PROBE_PATHS",
+    "captive_bp",
+    "foreign_host_redirect",
+    "from_hotspot",
+    "hotspot_up",
+    "reset_cache",
+    "setup_url",
+]
+
+captive_bp = Blueprint("captive", __name__)
 
 _AP_CACHE_S = 5.0
 _ap_cache: dict[str, float | bool] = {"at": 0.0, "value": False}
@@ -77,10 +80,9 @@ def _virtual() -> bool:
 def setup_url() -> str:
     if _virtual():
         return "/setup/"
-    from utils.netctl import AP_ADDRESS
-
-    port = int(current_app.config.get("SERVICE_PORT") or 8080)
-    return f"http://{AP_ADDRESS}:{port}/setup/"
+    # Port 80, no ``:8080``. The phone's captive sheet will not follow a
+    # redirect onto another port. 8080 still serves this app directly.
+    return PORTAL_URL
 
 
 def from_hotspot() -> bool:

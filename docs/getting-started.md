@@ -349,8 +349,12 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 ## First-boot setup (v2.2+)
 
 New units are commissioned entirely from a phone browser — no SSH, no config
-files. Power the unit, join its network, and open `http://<unit-ip>:8080`.
-Until setup is completed the unit shows only the guided wizard:
+files. Power the unit. If it cannot see a known Wi-Fi network it raises
+`WQM1-xxxx`; join that hotspot and the phone's captive-portal sheet opens
+`http://192.168.4.1/setup/` on its own. `http://192.168.4.1:8080/setup/` is
+the same wizard if the sheet does not appear. Once the unit is on the site
+network, use `http://<unit-ip>:8080`. Until setup is completed the unit
+shows only the guided wizard:
 
 1. **PIN** — replace the factory PIN (1234 is refused).
 2. **Identity** — device ID + DevEUI with a QR code for your install records.

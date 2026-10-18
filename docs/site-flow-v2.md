@@ -27,9 +27,10 @@ the page that reopens says what went wrong.
 
 | Piece | File |
 |---|---|
-| Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) | `setup.sh` → `/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf` |
-| Port 80 → Service Window NAT rule, hotspot traffic only | `utils/netctl.ensure_captive_redirect`, installed each boot by `scripts/wqm1-ap-fallback.py` (root) |
-| Probe paths + foreign-host redirect | `service_window/captive.py` |
+| Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) | `utils/captive_portal.dnsmasq_shared_config`, written by `setup.sh` and each boot by `scripts/wqm1-ap-fallback.py` into `/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf` (shared mode only) |
+| Port 80 captive listener, hotspot only | `utils/captive_portal`, `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Closes when the station joins. |
+| Service Window, including setup, still on 8080 | `service_window` — the port-80 process proxies the setup UI here so the phone never sees `:8080` |
+| Probe paths + foreign-host redirect | `utils/captive_portal` on port 80, and `service_window/captive.py` on 8080 (same target: `http://192.168.4.1/setup/`) |
 | No factory PIN on the hotspot during first setup | `service_window/auth._first_setup_on_hotspot` |
 | Network-last wizard; join finishes setup | `service_window/routes/setup.py` |
 | Forget every other saved Wi-Fi | `utils/netctl.forget_saved_wifi` |
@@ -54,10 +55,15 @@ networks.
 
 ## Not yet proved on hardware: the bench checklist for unit #1
 
-- [ ] **iPhone opens the page by itself** after joining `WQM1-xxxx`. If it does
-      not, check that `/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf`
-      exists, then run `sudo iptables -t nat -S PREROUTING` and confirm the
-      redirect rule is listed.
+- [ ] **iPhone opens the page by itself** after joining `WQM1-xxxx`, and one
+      Android phone does the same. The sheet should load
+      `http://192.168.4.1/setup/` with no `:8080`. If it does not, confirm
+      `wqm1-status.txt` says `portal: up (80)`, that
+      `/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf` exists, and
+      that `ss -ltnp | grep ':80'` shows the captive-portal process. The
+      legacy NAT rule should be absent (`sudo iptables -t nat -S PREROUTING`).
+      After the unit joins the site Wi-Fi, port 80 on the unit must not
+      answer. Unverified on hardware.
 - [ ] **The `pi` user can delete NetworkManager profiles.** The Service
       Window runs as `pi`, and `forget_saved_wifi` calls
       `nmcli connection delete`. The join already needs the same polkit

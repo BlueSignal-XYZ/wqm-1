@@ -31,13 +31,15 @@ Two more since site flow v2 (2026-10-03):
   profile). The golden image remembers the shop network; a unit in the field
   must not, both because every card would otherwise carry the shop password
   and because a unit near the shop would prefer it to the customer's.
-* **The captive portal.** ``ensure_captive_redirect(port)`` installs one NAT
-  rule — hotspot clients' port 80 to the Service Window port — so the phone's
-  captive-network check lands on the setup page by itself. The DNS half (every
-  name answers 192.168.4.1) is a dnsmasq-shared drop-in ``setup.sh`` writes.
-  The rule matches only traffic from the hotspot subnet to the hotspot
-  address, so it is inert whenever the AP is down. Root only: it is called
-  from the boot-time AP fallback, never from the Service Window.
+* **The captive portal.** While the AP is up, ``utils.captive_portal`` listens
+  on 192.168.4.1:80 (not as root) and answers captive probes with a redirect
+  to ``http://192.168.4.1/setup/``. ``start_ap`` arms that listener;
+  ``join_network`` disarms it the moment a station joins, so port 80 is not
+  left open on the site LAN. The DNS half (every name answers 192.168.4.1,
+  DHCP option 114) is a dnsmasq-shared drop-in, which NetworkManager does
+  not load for a station link. ``remove_legacy_captive_nat`` deletes the old
+  port-80 NAT redirect: that rule stole the packets from the listener and
+  sent phones to ``:8080``. Root only, from the boot-time AP fallback.
 
 Everything shells NetworkManager's ``nmcli`` with a fixed argv and no shell,
 the same tool ``netinfo`` already reads through. Every call returns a result
@@ -293,8 +295,12 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
     if not passphrase or len(passphrase) < 8:
         return {"ok": False, "error": "passphrase must be at least 8 characters"}
     if netsim.is_virtual():
-        return netsim.start_ap(ssid, passphrase)
+        result = netsim.start_ap(ssid, passphrase)
+        if result.get("ok"):
+            _arm_portal()
+        return result
     if ap_active(iface):
+        _arm_portal()
         return {"ok": True, "ssid": ssid, "already": True}
     # A profile left by an older image (or by a failed activation that
     # never reached autoconnect=no) has the security this firmware rejects.
@@ -332,6 +338,7 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
         logger.error("AP start failed: %s", reason)
         return {"ok": False, "error": reason}
     logger.info("Setup AP up: %s on %s", ssid, iface)
+    _arm_portal()
     return {"ok": True, "ssid": ssid, "address": AP_SUBNET.split("/")[0]}
 
 
@@ -392,10 +399,16 @@ def join_network(
     if not _SSID_RE.match(ssid or ""):
         return {"ok": False, "connected": False, "ap_restored": False, "error": "invalid ssid"}
     if netsim.is_virtual():
-        return netsim.join_network(ssid, password, ap_ssid, ap_passphrase)
+        result = netsim.join_network(ssid, password, ap_ssid, ap_passphrase)
+        _portal_after_join(result)
+        return result
     had_ap = ap_active(iface)
     if had_ap:
         stop_ap(iface)
+        # The address is about to disappear. Close port 80 before the join
+        # so a phone that is still associated is not kept on our portal,
+        # and a successful join cannot leave the listener up.
+        _disarm_portal("joining")
     argv = ["device", "wifi", "connect", ssid, "ifname", iface]
     if password:
         argv += ["password", password]
@@ -410,6 +423,7 @@ def join_network(
         # A wrong password leaves a half-made profile behind; a good join
         # leaves a profile NM autoconnects at next boot, which is the point.
         logger.info("Joined %s", ssid)
+        _disarm_portal("station")
         return {"ok": True, "connected": True, "ap_restored": False, "error": None}
     reason = err or out or f"nmcli rc {rc}"
     logger.warning("Join %s failed: %s", ssid, reason)
@@ -425,6 +439,8 @@ def join_network(
             if restored or attempt + 1 >= AP_ATTEMPTS:
                 break
             sleep(2)
+    if not restored:
+        _disarm_portal("hotspot down")
     return {"ok": False, "connected": False, "ap_restored": restored, "error": reason}
 
 
@@ -455,14 +471,19 @@ def ensure_reachable(
     """
     prepare_wifi_radio(iface)
     radio_deadline = clock() + radio_wait_s
+
+    def _station() -> dict[str, Any]:
+        _disarm_portal("station")
+        return {"ok": True, "mode": "station", "ap": False}
+
     while True:
         if station_connected(iface):
-            return {"ok": True, "mode": "station", "ap": False}
+            return _station()
         if iface_usable(iface) or clock() >= radio_deadline:
             break
         sleep(2)
     if station_connected(iface):
-        return {"ok": True, "mode": "station", "ap": False}
+        return _station()
     # None saved profiles → do not burn the grace period. A failure to list
     # profiles (nmcli missing or not up yet) also returns an empty list;
     # trying the AP is the point of this service, and the attempts below
@@ -471,13 +492,13 @@ def ensure_reachable(
     started = clock()
     while clock() - started < grace:
         if station_connected(iface):
-            return {"ok": True, "mode": "station", "ap": False}
+            return _station()
         sleep(3)
     last: dict[str, Any] = {}
     attempts = max(1, ap_attempts)
     for attempt in range(attempts):
         if station_connected(iface):
-            return {"ok": True, "mode": "station", "ap": False}
+            return _station()
         if not iface_usable(iface):
             prepare_wifi_radio(iface)
         last = start_ap(ap_ssid, ap_passphrase, iface)
@@ -546,6 +567,28 @@ def forget_saved_wifi(keep: str | None, iface: str = DEFAULT_WIFI_IFACE) -> dict
     return {"ok": not failed, "forgotten": forgotten, "failed": failed, "kept": keep}
 
 
+def _arm_portal() -> None:
+    from utils.captive_portal import arm_portal
+
+    arm_portal()
+
+
+def _disarm_portal(reason: str) -> None:
+    from utils.captive_portal import disarm_portal
+
+    disarm_portal(reason)
+
+
+def _portal_after_join(result: dict[str, Any]) -> None:
+    """A joined station closes port 80. A restored AP opens it again."""
+    if result.get("connected"):
+        _disarm_portal("station")
+    elif result.get("ap_restored"):
+        _arm_portal()
+    else:
+        _disarm_portal("hotspot down")
+
+
 def _captive_rule(port: int, iface: str) -> list[str]:
     return [
         "-t",
@@ -568,23 +611,44 @@ def _captive_rule(port: int, iface: str) -> list[str]:
     ]
 
 
-def ensure_captive_redirect(port: int = 8080, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
-    """Install (idempotently) the hotspot's port-80 → Service Window rule.
+def remove_captive_redirect(port: int = 8080, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Delete the legacy port-80 NAT redirect if it is installed.
 
-    Root only. A failure is logged and returned, never raised: without the
-    rule the phone simply does not open the page by itself, and the printed
-    setup card still carries the address.
+    Idempotent. The portal listens on 192.168.4.1:80 itself; a REDIRECT to
+    the Service Window port steals those packets and the phone is sent to
+    ``:8080``. Missing iptables means there is no rule to delete.
     """
     if netsim.is_virtual():
         return {"ok": True, "virtual": True}
     rule = _captive_rule(port, iface)
     table, chain, match = rule[:2], rule[2], rule[3:]
-    rc, _, _ = _run(["iptables", *table, "-C", chain, *match])
-    if rc == 0:
-        return {"ok": True, "already": True}
-    rc, out, err = _run(["iptables", *table, "-A", chain, *match])
+    rc, _, err = _run(["iptables", *table, "-C", chain, *match])
+    if rc == 127:
+        return {"ok": True, "skipped": err or "iptables not found"}
     if rc != 0:
-        logger.warning("Captive redirect not installed: %s", err or out or f"rc {rc}")
+        return {"ok": True, "absent": True}
+    rc, out, err = _run(["iptables", *table, "-D", chain, *match])
+    if rc != 0:
+        logger.warning("Captive NAT rule not removed: %s", err or out or f"rc {rc}")
         return {"ok": False, "error": err or out or f"iptables rc {rc}"}
-    logger.info("Captive redirect: hotspot port 80 -> %s", port)
-    return {"ok": True}
+    logger.info("Removed legacy captive NAT redirect to port %s", port)
+    return {"ok": True, "removed": True}
+
+
+def remove_legacy_captive_nat(port: int = 8080, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Delete the NAT redirect for ``port`` and for the old default 8080."""
+    ports = [port] if int(port) == 8080 else [int(port), 8080]
+    results = [remove_captive_redirect(p, iface) for p in ports]
+    failed = [r for r in results if not r.get("ok")]
+    if failed:
+        return failed[0]
+    return {"ok": True, "results": results}
+
+
+def ensure_captive_redirect(port: int = 8080, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Used to install the NAT redirect. It now removes it.
+
+    Callers from before the port-80 listener still invoke this at boot.
+    Adding the rule back would hide the listener from the phone.
+    """
+    return remove_captive_redirect(port, iface)

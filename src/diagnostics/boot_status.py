@@ -8,8 +8,8 @@ state changes. The first line is the commissioning verdict
 (``COMMISSION: READY`` or ``COMMISSION: FAIL: <reason>``). The rest names
 the firmware, the board and its revision code, the kernel, the Wi-Fi chip
 and firmware, undervoltage, the I2C buses the kernel enumerated, wlan0,
-the setup hotspot (SSID and the last AP error), ADC, 1-Wire, GPS, uptime,
-and the last fatal error.
+the setup hotspot (SSID and the last AP error), the port-80 captive
+portal, ADC, 1-Wire, GPS, uptime, and the last fatal error.
 
 No secrets. A line that looks like a key, a passphrase, or a private key
 is replaced before the file is written. The hotspot passphrase is never a
@@ -42,6 +42,7 @@ _KEYS = (
     "wlan0",
     "ssid",
     "hotspot",
+    "portal",
     "adc",
     "onewire",
     "gps",
@@ -160,6 +161,19 @@ def read_hotspot_state() -> str:
         return "unknown"
     active = any(line.startswith(f"{AP_CONNECTION_NAME}:") for line in out.splitlines())
     return "up" if active else "down"
+
+
+def _portal_line(hotspot: str) -> str:
+    """``up (80)`` or ``down: <reason>``. A probe failure must not raise."""
+    try:
+        from utils.captive_portal import portal_line_for_hotspot
+
+        return portal_line_for_hotspot(hotspot)
+    except Exception as e:  # noqa: BLE001 — the status file is still written
+        logger.debug("portal state failed: %s", e)
+        if (hotspot or "").startswith("up"):
+            return f"down: {e}"
+        return "down: hotspot down"
 
 
 def read_revision() -> str:
@@ -368,6 +382,13 @@ def commission_verdict(fields: dict[str, str]) -> str:
         reasons.append(detail or "hotspot failed")
     elif not reachable:
         reasons.append("hotspot down")
+    # The portal is only required while the hotspot is up. A station link
+    # has closed port 80 on purpose; that is not a commissioning failure.
+    hotspot_up = hotspot == "up" or hotspot.startswith("up ")
+    if hotspot_up:
+        portal = (fields.get("portal") or "").strip()
+        if not portal.startswith("up"):
+            reasons.append(f"portal {portal}" if portal else "portal down")
     power = (fields.get("power") or "").strip()
     if power.startswith("now "):
         reasons.append(power)
@@ -507,6 +528,7 @@ def write_boot_status(
     uptime: str | None = None,
     faulted: list[str] | None = None,
     fatal: str | None = None,
+    portal: str | None = None,
 ) -> str:
     """Refresh the status file and return the text that was written.
 
@@ -532,6 +554,14 @@ def write_boot_status(
         ssid_text = prev["ssid"]
     else:
         ssid_text = _read_ssid()
+    if portal is not None:
+        portal_text = portal
+    elif hotspot_text == "up" or str(hotspot_text).startswith("up "):
+        portal_text = _portal_line(hotspot_text)
+    elif prev.get("portal"):
+        portal_text = prev["portal"]
+    else:
+        portal_text = _portal_line(hotspot_text)
     fields = {
         "firmware": _firmware_version(),
         "board": board or prev.get("board") or read_board_model(),
@@ -543,6 +573,7 @@ def write_boot_status(
         "wlan0": wlan0 if wlan0 is not None else read_wlan_state(),
         "ssid": ssid_text,
         "hotspot": hotspot_text,
+        "portal": portal_text,
         "adc": adc if adc is not None else prev.get("adc", "unknown"),
         "onewire": _kept(onewire, prev.get("onewire", ""), read_onewire_state()),
         "gps": _kept(gps, prev.get("gps", ""), read_gps_state()),
