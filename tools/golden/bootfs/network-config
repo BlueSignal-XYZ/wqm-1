@@ -1,0 +1,4 @@
+# WQM-1: no network configuration on the card, and never any Wi-Fi.
+# Wi-Fi is set in the installer flow on the unit's WQM1-XXXX setup hotspot.
+network:
+  version: 2

@@ -1,7 +1,9 @@
 # Getting Started
 
 Step-by-step instructions for deploying the WQM-1 firmware onto a
-Raspberry Pi Zero 2W with the WQM-1 HAT.
+Raspberry Pi Zero 2W with the WQM-1 HAT. Zero W, Pi 3 and Pi 4 use the
+same firmware and one 32-bit card; the cable and the power budget are in
+[raspberry-pi.md](raspberry-pi.md). Pi 5 is not supported.
 
 > Running on an Orange Pi Zero 3W? The HAT seats on its Pi-layout header and
 > the full stack runs there — see the Orange Pi section of

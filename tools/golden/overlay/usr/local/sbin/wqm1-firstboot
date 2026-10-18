@@ -1,0 +1,46 @@
+#!/bin/bash
+# WQM-1 golden image: per-boot radio setup + once-per-card identity.
+# Installed by the offline golden build (build-golden.sh); not part of setup.sh.
+#  - every boot: Wi-Fi radio unblocked, regulatory domain US (before the
+#    setup hotspot service decides whether to raise WQM1-XXXX)
+#  - first boot of each card: hostname wqm1-xxxx, the same last four the
+#    firmware uses for the hotspot SSID (utils.identity.ap_name)
+set -u
+log() { echo "[wqm1-firstboot] $*"; }
+
+# The image does not name a board. The model string is the kernel's, read
+# again by the firmware (platform_support/board.py) when the service starts.
+model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
+if [ -n "$model" ]; then
+  log "board: $model"
+else
+  log "board: device tree model missing"
+fi
+
+rfkill unblock wlan 2>/dev/null || true
+iw reg set US 2>/dev/null || true
+nmcli radio wifi on 2>/dev/null || true
+
+MARK=/var/lib/wqm1-firstboot/identity-done
+if [ ! -e "$MARK" ]; then
+  name="$(cd /opt/bluesignal/current/src 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import ap_name; print(ap_name().lower())' 2>/dev/null)"
+  if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+    ser="$(awk -F': *' '/^Serial/ {print tolower($2)}' /proc/cpuinfo | tail -c 5)"
+    name="wqm1-${ser:-0000}"
+    log "firmware id unavailable, hostname from cpuinfo serial"
+  fi
+  if printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+    hostnamectl set-hostname "$name" 2>/dev/null || { echo "$name" > /etc/hostname; hostname "$name"; }
+    if grep -q '^127\.0\.1\.1' /etc/hosts; then
+      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$name/" /etc/hosts
+    else
+      printf '127.0.1.1\t%s\n' "$name" >> /etc/hosts
+    fi
+    systemctl try-restart avahi-daemon.service 2>/dev/null || true
+    mkdir -p "${MARK%/*}" && touch "$MARK"
+    log "hostname set to $name"
+  else
+    log "could not derive a hostname; will retry next boot"
+  fi
+fi
+exit 0

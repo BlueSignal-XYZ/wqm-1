@@ -2,9 +2,12 @@
 
 The WQM-1 firmware runs on more than one Linux host board. The reference
 platform is the **Raspberry Pi Zero 2 W** with the WQM-1 HAT. The same
-full stack runs on the **Orange Pi Zero 3W** (Allwinner A733) through the
-kernel's gpiochips, and the firmware runs **digital-first** on the
-**Arduino UNO Q** and the upcoming **Arduino VENTUNO Q**.
+header stack, on one 32-bit Raspberry Pi OS Lite image, also targets the
+**Pi Zero W**, **Pi 3** and **Pi 4** — see [raspberry-pi.md](raspberry-pi.md).
+The **Pi 5** is detected and unsupported. The same full stack runs on the
+**Orange Pi Zero 3W** (Allwinner A733) through the kernel's gpiochips, and
+the firmware runs **digital-first** on the **Arduino UNO Q** and the
+upcoming **Arduino VENTUNO Q**.
 
 ## Why boards differ
 
@@ -57,19 +60,26 @@ which the analog stack never had.
 ## How detection works
 
 - `src/platform_support/board.py` reads `/proc/device-tree/model` at startup
-  and resolves a `BoardProfile`. The `board` config setting (default `auto`)
-  can pin a profile explicitly (`rpi-zero-2w`, `orangepi-zero-3w`,
-  `arduino-uno-q`, `arduino-ventuno-q`, `generic-linux`).
+  and resolves a `BoardProfile`. If that file is missing it reads the
+  `Model` line in `/proc/cpuinfo`, then the new-style `Revision` type field.
+  The `board` config setting (default `auto`) can pin a profile explicitly
+  (`rpi-zero-w`, `rpi-zero-2w`, `rpi-3`, `rpi-4`, `rpi-5`,
+  `orangepi-zero-3w`, `arduino-uno-q`, `arduino-ventuno-q`, `generic-linux`).
+  `rpi-5` is a real id and it is not a supported host: `has_direct_headers`
+  is false, so the header stack does not start.
 - The Orange Pi match is on the compacted model string (`orangepizero3w`),
   because Orange Pi images have printed the same board as "OrangePi Zero3",
   "Orange Pi Zero 3" and "orangepi-zero3" across releases. **Other Orange Pi
   boards are deliberately not claimed** — a different board has a different
   pin table, and driving the Zero 3W's lines on it would energise the wrong
   pins.
-- Unrecognized or missing model strings fall back to the **Raspberry Pi**
-  profile on purpose: every field unit today is a Pi, and an OTA update must
-  never demote a working analog deployment to digital-only because a model
-  string changed shape.
+- A Raspberry Pi model we do not name specifically (a Pi 2, a Compute
+  Module, a string that only says "Raspberry Pi") still resolves to
+  `rpi-zero-2w`. So does a missing or unrecognized model string.
+  Every field unit today is a Pi, and an OTA update must never demote a
+  working analog deployment to digital-only because a model string changed
+  shape. Zero W, Zero 2 W, Pi 3, Pi 4 and Pi 5 are named; see
+  [raspberry-pi.md](raspberry-pi.md).
 - `main.py` calls `set_active_board()` with the resolved profile, then gates
   hardware construction on `profile.has_direct_headers`: relays, LEDs, fan,
   hardware watchdog, ADS1115 + analog sensors, the pulse flow meter and the

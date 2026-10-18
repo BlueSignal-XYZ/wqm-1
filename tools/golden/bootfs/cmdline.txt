@@ -1,0 +1,1 @@
+console=tty1 root=PARTUUID=4c032286-02 rootfstype=ext4 fsck.repair=yes rootwait resize cfg80211.ieee80211_regdom=US

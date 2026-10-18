@@ -1,10 +1,12 @@
 #!/bin/bash
 # WQM-1 Firmware Setup Script
-# Reference host: Raspberry Pi Zero 2W with Raspberry Pi OS Lite.
+# Reference host: a 40-pin Raspberry Pi (Zero W, Zero 2 W, Pi 3, Pi 4) on
+# one 32-bit Raspberry Pi OS Lite image. See docs/raspberry-pi.md.
 # Full direct-header stack also on the Orange Pi Zero 3W (Allwinner A733,
 # Pi-layout 40-pin header; GPIO through lgpio on the kernel gpiochips).
 # Runs digital-first on Debian hosts without direct header access
-# (Arduino UNO Q / VENTUNO Q). See docs/platforms.md.
+# (Arduino UNO Q / VENTUNO Q, and a Raspberry Pi 5 — detected, unsupported).
+# See docs/platforms.md.
 set -euo pipefail
 
 INSTALL_DIR="/opt/bluesignal"
@@ -61,11 +63,25 @@ fi
 
 # --- Host board detection (mirrors src/platform_support/board.py) ---
 # Raspberry Pi hosts get the full direct-header stack (I2C/SPI/1-Wire/GPIO,
-# boot overlays, RPi Python libs). The Orange Pi Zero 3W gets the same stack
-# through the kernel's gpiochips (lgpio) with its own overlay file and
-# console. Anything else — Arduino UNO Q / VENTUNO Q, generic Debian — runs
+# boot overlays, RPi Python libs). The package set is the same for Zero W,
+# Zero 2 W, Pi 3 and Pi 4; the firmware names the model at boot from the
+# device tree. The Orange Pi Zero 3W gets the same stack through the
+# kernel's gpiochips (lgpio) with its own overlay file and console.
+# Anything else — Arduino UNO Q / VENTUNO Q, generic Debian — runs
 # digital-first: RS485-USB probes, USB GPS, Wi-Fi sync.
-BOARD_MODEL="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo unknown)"
+#
+# A real boot reads the device tree. The golden-image build runs this script
+# in a chroot that has none, and passes WQM1_BOARD_MODEL for that one
+# install. The variable is not written to the card. A unit never sets it,
+# so the model a unit reports comes from the board, not from the image.
+if [ -r /proc/device-tree/model ]; then
+    BOARD_MODEL="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo unknown)"
+elif [ -n "${WQM1_BOARD_MODEL:-}" ]; then
+    BOARD_MODEL="$WQM1_BOARD_MODEL"
+    echo "Host: no device tree; WQM1_BOARD_MODEL selects the install path for this run only"
+else
+    BOARD_MODEL="unknown"
+fi
 BOARD_COMPACT="$(echo "$BOARD_MODEL" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')"
 IS_RPI=0
 IS_OPI=0
@@ -89,7 +105,8 @@ if [ "$IS_OPI" = "1" ]; then
     # RPi.GPIO here — it only knows Broadcom silicon.
     sudo apt-get install -y -qq \
         python3-pip python3-venv python3-dev \
-        i2c-tools swig build-essential
+        i2c-tools swig build-essential \
+        iptables
     echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
     sudo modprobe i2c-dev 2>/dev/null || true
     # The service unit asks for these supplementary groups; Raspberry Pi OS
@@ -121,11 +138,15 @@ elif [ "$IS_RPI" = "1" ]; then
     # the last known time at boot (so the clock starts plausible rather than
     # at the epoch) and timesyncd disciplines it the moment a link exists.
     # GPS RMC is the fallback for a dark site (src/utils/clock.py).
+    # iptables: the setup hotspot's port-80 redirect (utils/netctl.py).
+    # Trixie Lite ships nftables and not iptables; without this package the
+    # captive portal fails open and the phone does not open the setup page.
     sudo apt-get install -y -qq \
         python3-pip python3-venv python3-dev \
         i2c-tools python3-smbus \
         swig liblgpio-dev \
         fake-hwclock systemd-timesyncd \
+        iptables \
         "$GPIOD_PKG"
     sudo systemctl enable --now fake-hwclock 2>/dev/null || true
     sudo systemctl enable --now systemd-timesyncd 2>/dev/null || true
@@ -135,25 +156,28 @@ elif [ "$IS_RPI" = "1" ]; then
     echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf > /dev/null
     sudo modprobe i2c-dev 2>/dev/null || true
 else
-    sudo apt-get install -y -qq python3-pip python3-venv python3-dev
+    sudo apt-get install -y -qq python3-pip python3-venv python3-dev iptables
 fi
 
 # --- Python dependencies ---
 echo "[2/9] Installing Python packages..."
-sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements.txt"
+# --prefer-binary: a Pi Zero W is ARMv6. Building a C or Rust extension from
+# source there takes the card out for a long time and often fails. Use a
+# wheel when one exists; pip still builds from source when it does not.
+sudo pip3 install --break-system-packages --ignore-installed --prefer-binary -r "$SCRIPT_DIR/requirements.txt"
 # The Apple Home accessory (src/integrations/apple_home) is optional at
 # runtime — off until apple_home_enabled — but its library is installed on
 # every host so turning it on is one switch, not a pip step on site.
-sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-apple-home.txt" \
+sudo pip3 install --break-system-packages --ignore-installed --prefer-binary -r "$SCRIPT_DIR/requirements-apple-home.txt" \
     || echo "WARN: HAP-python did not install; Apple Home will report library_missing"
 # Same for the Home Assistant MQTT publisher (src/integrations/home_assistant):
 # off until mqtt_enabled, library on every host.
-sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-home-assistant.txt" \
+sudo pip3 install --break-system-packages --ignore-installed --prefer-binary -r "$SCRIPT_DIR/requirements-home-assistant.txt" \
     || echo "WARN: paho-mqtt did not install; Home Assistant will report library_missing"
 if [ "$IS_RPI" = "1" ]; then
-    sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-rpi.txt"
+    sudo pip3 install --break-system-packages --ignore-installed --prefer-binary -r "$SCRIPT_DIR/requirements-rpi.txt"
 elif [ "$IS_OPI" = "1" ]; then
-    sudo pip3 install --break-system-packages --ignore-installed -r "$SCRIPT_DIR/requirements-gpiochip.txt"
+    sudo pip3 install --break-system-packages --ignore-installed --prefer-binary -r "$SCRIPT_DIR/requirements-gpiochip.txt"
 fi
 
 # --- Boot overlays: Orange Pi (/boot/orangepiEnv.txt) ---
