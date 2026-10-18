@@ -57,9 +57,11 @@ unless bound from the Service Window's **AWG circuit** page — see
 **Supported platforms:**
 
 Tested on Debian Trixie (13), kernels 6.12–6.18, Pi Zero 2W (aarch64).
-The card for a Zero W, Zero 2 W, Pi 3 or Pi 4 is one 32-bit (armhf) Trixie
-Lite image; Pi 5 is unsupported. Cable, power and what has not been run on
-hardware: [docs/raspberry-pi.md](docs/raspberry-pi.md).
+The Zero W takes the 32-bit (armhf) Trixie Lite card only. Zero 2 W, Pi 3
+and Pi 4 can take that card or the 64-bit (arm64) card. Pi 5 takes the
+64-bit card; its header GPIO goes through lgpio, and the 5 V rail is a
+caution that has not been metered. Cable, power and what has not been run
+on hardware: [docs/raspberry-pi.md](docs/raspberry-pi.md).
 `setup.sh` handles Bookworm and Trixie automatically. The full stack also
 runs on the **Orange Pi Zero 3W** (Allwinner A733, Pi-layout 40-pin header;
 GPIO through lgpio on the kernel gpiochips) — built and tested against the

@@ -196,7 +196,7 @@ class TestCpuinfo:
 
 
 class TestPiHeaderPath:
-    """Supported Pis share the Zero 2 W header behaviour. Pi 5 does not."""
+    """Supported Pis other than the Pi 5 share the Zero 2 W header behaviour."""
 
     def test_zero_2w_profile_is_unchanged(self):
         profile = PROFILES["rpi-zero-2w"]
@@ -229,18 +229,44 @@ class TestPiHeaderPath:
         path = _model_file(tmp_path, "Raspberry Pi Zero 2 W Rev 1.0")
         assert detect_board(model_path=path).id == "rpi-zero-2w"
 
-    def test_pi_5_is_named_and_not_given_the_header(self, tmp_path):
+    def test_pi_5_is_named_and_uses_the_rp1_backend(self, tmp_path, caplog):
+        import logging
+
+        from platform_support.board import RPI_DIRECT_HEADER_IDS
         from platform_support.hostpins import pins_for_board
 
         path = _model_file(tmp_path, "Raspberry Pi 5 Model B Rev 1.1")
-        profile = detect_board(model_path=path)
+        with caplog.at_level(logging.WARNING):
+            profile = detect_board(model_path=path)
         assert profile.id == "rpi-5"
-        assert profile.supported is False
-        assert profile.has_direct_headers is False
-        assert profile.gpio_backend == "none"
-        pins = pins_for_board("rpi-5")
-        assert pins.backend == "none"
-        assert pins.lines == {}
+        assert profile.supported is True
+        assert profile.has_direct_headers is True
+        assert profile.gpio_backend == "rp1"
+        assert "rpi-5" not in RPI_DIRECT_HEADER_IDS
+        assert any("unverified" in rec.message.lower() for rec in caplog.records)
+        # No lgpio injected: do not guess a chip index.
+        pins = pins_for_board("rpi-5", lgpio_module=None)
+        assert pins.backend == "rp1"
+        assert pins.lines[17] is None
+
+    def test_arm64_userspace_on_a_zero_w_is_logged(self, tmp_path, caplog):
+        import logging
+
+        path = _model_file(tmp_path, "Raspberry Pi Zero W Rev 1.1")
+        with caplog.at_level(logging.ERROR):
+            profile = detect_board(model_path=path, machine="aarch64")
+        assert profile.id == "rpi-zero-w"
+        assert profile.gpio_backend == "rpi"
+        assert any("armhf" in rec.message for rec in caplog.records)
+
+    def test_arm64_userspace_on_a_zero_2w_is_not_an_error(self, tmp_path, caplog):
+        import logging
+
+        path = _model_file(tmp_path, "Raspberry Pi Zero 2 W Rev 1.0")
+        with caplog.at_level(logging.ERROR):
+            profile = detect_board(model_path=path, machine="aarch64")
+        assert profile.id == "rpi-zero-2w"
+        assert not caplog.records
 
     def test_nul_terminated_pi_4_model(self, tmp_path):
         path = _model_file(tmp_path, "", raw=b"Raspberry Pi 4 Model B Rev 1.2\x00")

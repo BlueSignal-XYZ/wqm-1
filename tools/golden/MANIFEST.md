@@ -1,28 +1,39 @@
 # WQM-1 golden image
 
-One 32-bit (armhf) Raspberry Pi OS Lite Trixie card for every supported Pi
-(Zero W, Zero 2 W, Pi 3, Pi 4). The Pi 5 is not a target; see
-[docs/raspberry-pi.md](../../docs/raspberry-pi.md).
+Two cards from one script and one overlay. Both are Raspberry Pi OS Lite
+(Trixie). The 32-bit (armhf) card is the only one a Zero W can boot. The
+64-bit (arm64) card is for the Zero 2 W, Pi 3, Pi 4 and Pi 5. Which board
+gets which card: [docs/raspberry-pi.md](../../docs/raspberry-pi.md).
 
 The board name is **not** written into the image. `build-golden.sh` runs
 `setup.sh` inside a chroot that has no device tree, and passes
 `WQM1_BOARD_MODEL=Raspberry Pi` only so the installer takes the
 direct-header package path. That string is not stored. On a real boot
 `wqm1-firstboot` logs `/proc/device-tree/model`, and the firmware resolves
-the profile from the same file.
+the profile from the same file. A 64-bit userspace on a Zero W, and a
+32-bit userspace on a Pi 5, are logged as the wrong card.
 
 No Wi-Fi credentials are in `bootfs/` or `overlay/`. Wi-Fi is set later, on
-the unit, from the setup hotspot.
+the unit, from the setup hotspot. The overlay is not copied per arch.
 
-## Base image
+## Base images
 
-Raspberry Pi OS Lite (32-bit), Trixie, 2026-10-06:
+Both dated 2026-10-06. The sha256 is the official sidecar
+(`*.img.xz.sha256` on downloads.raspberrypi.com), checked before the build.
+
+Raspberry Pi OS Lite (32-bit), Trixie:
 
 - File: `2026-10-06-raspios-trixie-armhf-lite.img.xz`
-- URL: https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2026-10-06/2026-10-06-raspios-trixie-armhf-lite.img.xz
+- URL: https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2026-10-06/2026-10-06-raspios-trixie-armhf-lite.img.xz
 - sha256: `2c302771f34c67a0b7ae7aa2e0dcdd3eac660504be59193c011ba79d412e1632`
 
-Decompress it before building. The script wants the raw `.img`.
+Raspberry Pi OS Lite (64-bit), Trixie:
+
+- File: `2026-10-06-raspios-trixie-arm64-lite.img.xz`
+- URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
+- sha256: `483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843`
+
+Decompress before building. The script wants the raw `.img`.
 
 ## Build
 
@@ -33,18 +44,23 @@ On a Debian (or Ubuntu) x86_64 box, as root, with `qemu-user-static`,
 sudo bash tools/golden/build-golden.sh \
   /path/to/2026-10-06-raspios-trixie-armhf-lite.img \
   /path/to/this/checkout
+
+sudo bash tools/golden/build-golden.sh --arch arm64 \
+  /path/to/2026-10-06-raspios-trixie-arm64-lite.img \
+  /path/to/this/checkout
 ```
 
-`QEMU_CPU=arm1176` is set so pip selects ARMv6 wheels. The script rewrites
+`QEMU_CPU=arm1176` is set for the armhf build so pip selects ARMv6 wheels.
+The arm64 build does not set it (`qemu-aarch64` binfmt). The script rewrites
 apt sources to HTTPS for the build and restores them before the image is
-sealed. Output defaults to `./wqm1-golden.img` (override with `OUT=`).
+sealed. Output defaults to `./wqm1-golden.img` for armhf and
+`./wqm1-golden-arm64.img` for arm64 (override with `OUT=`).
 
 An earlier offline build (2026-10-18, firmware `b2c9fcf`) hardcoded
 `BOARD_MODEL` to "Raspberry Pi Zero W" because the chroot has no board.
-This script does not. A later qemu-user-static run of this script against
-the base image above completed with exit 0; that image is not in git, and
-it was not booted on a Pi. **Unverified on hardware.** Treat any hash from
-the earlier hardcoded-name build as a different tree.
+This script does not. Images built by this script are not in git, and they
+have not been booted on a Pi. **Unverified on hardware.** Treat any hash
+from the earlier hardcoded-name build as a different tree.
 
 ## What the overlay does
 

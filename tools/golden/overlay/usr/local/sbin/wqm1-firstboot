@@ -17,6 +17,29 @@ else
   log "board: device tree model missing"
 fi
 
+# Wrong card. The arm64 image ships no ARMv6 kernel, so a Zero W usually
+# never gets this far; if a 64-bit userspace is somehow up on that board,
+# say so. The mirror is a 32-bit userspace on a Pi 5.
+mach="$(uname -m 2>/dev/null || true)"
+bits="$(getconf LONG_BIT 2>/dev/null || true)"
+if [ -n "$mach" ]; then
+  if [ -n "$bits" ]; then
+    log "userspace: $mach (${bits}-bit)"
+  else
+    log "userspace: $mach"
+  fi
+fi
+if printf '%s' "$model" | grep -Eq 'Zero W'; then
+  if [ "$mach" = "aarch64" ] || [ "$mach" = "arm64" ] || [ "$bits" = "64" ]; then
+    log "ERROR: 64-bit card on a Pi Zero W or Zero WH. That board is 32-bit only. Use the armhf card."
+  fi
+fi
+if printf '%s' "$model" | grep -Eq 'Pi 5'; then
+  if [ "$bits" = "32" ] || [ "$mach" = "armv6l" ] || [ "$mach" = "armv7l" ]; then
+    log "ERROR: 32-bit card on a Pi 5. Use the arm64 card."
+  fi
+fi
+
 rfkill unblock wlan 2>/dev/null || true
 iw reg set US 2>/dev/null || true
 nmcli radio wifi on 2>/dev/null || true

@@ -41,6 +41,19 @@ def test_firstboot_reads_the_device_tree_model():
     assert "/proc/device-tree/model" in text
     assert "Raspberry Pi Zero W" not in text
     assert "Raspberry Pi Zero 2 W" not in text
+    assert "64-bit card on a Pi Zero W" in text
+    assert "32-bit card on a Pi 5" in text
+
+
+def test_build_selects_arch_without_a_second_script():
+    script = (GOLDEN / "build-golden.sh").read_text()
+    assert "--arch" in script
+    assert "qemu-aarch64" in script
+    assert "QEMU_CPU=arm1176" in script
+    # arm64 must not be forced onto the ARMv6 CPU the armhf build uses.
+    assert 'if [ "$ARCH" = "armhf" ]' in script
+    assert "wqm1-golden-arm64.img" in script
+    assert "wqm1-golden.img" in script
 
 
 def test_no_wifi_credentials_anywhere_in_the_tree():

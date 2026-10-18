@@ -4,7 +4,10 @@
 # Arduino UNO Q / VENTUNO Q, where the headers belong to the STM32 MCU.
 # See docs/platforms.md.
 RPi.GPIO==0.7.1
-lgpio
+# 0.2.2.0 is the lgpio that speaks /dev/gpiochip. An unrelated 0.0.0.2 wheel
+# on piwheels is a different project; --prefer-binary would pick it on
+# arm64, where 0.2.2.0 has no wheel, and the Pi 5 backend would not run.
+lgpio==0.2.2.0
 smbus2==0.6.1
 spidev==3.8
 w1thermsensor==2.3.0

@@ -9,7 +9,12 @@ picks the backend from the active board profile:
   this module existed: ``RPi.GPIO`` in BCM mode for setup/output/input, and
   ``lgpio`` on gpiochip 0 for edge alerts (RPi.GPIO's ``add_event_detect``
   is broken on kernel 6.6+, which is why the SX1262 and the pulse meter
-  already used lgpio there). A field unit sees no change.
+  already used lgpio there). A field unit sees no change. The Pi 5 does
+  not use this path.
+* ``rp1`` — Raspberry Pi 5 only. ``RPi.GPIO`` cannot drive the RP1, so
+  ``lgpio`` does setup, output, input and alerts on the chip
+  :func:`platform_support.hostpins.find_rp1_gpiochip` resolved (label
+  ``pinctrl-rp1``; line N is BCM N).
 * ``gpiochip`` — any Linux host whose header is a plain gpiochip (the
   Orange Pi Zero 3W): ``lgpio`` for everything, with the BCM number
   translated through :mod:`platform_support.hostpins` into the host's
@@ -33,6 +38,9 @@ from platform_support.hostpins import HostPins
 logger = logging.getLogger("wqm1.gpio")
 
 _MISSING = object()
+
+# Backends that claim lines through lgpio. "rpi" uses lgpio for alerts only.
+_LGPIO_BACKENDS = frozenset({"gpiochip", "rp1"})
 
 #: lgpio's alert callback signature: (chip, gpio, level, tick).
 AlertCallback = Callable[[int, int, int, int], None]
@@ -77,8 +85,10 @@ class HostGpio:
         if self._backend == "rpi":
             if self._rpi is None:
                 raise RuntimeError("RPi.GPIO not installed — no direct GPIO on this host")
-        elif self._backend == "gpiochip":
+        elif self._backend in _LGPIO_BACKENDS:
             if self._lg is None:
+                if self._backend == "rp1":
+                    raise RuntimeError("lgpio not installed — Pi 5 RP1 GPIO is unavailable")
                 raise RuntimeError("lgpio not installed — no gpiochip access on this host")
         else:
             raise RuntimeError(f"no direct GPIO on this host ({pins.board_id})")
@@ -112,6 +122,9 @@ class HostGpio:
         return self._pins.line(bcm)
 
     # --- public API --------------------------------------------------------
+
+    def _uses_lgpio(self) -> bool:
+        return self._backend in _LGPIO_BACKENDS
 
     def setup_output(self, bcm: int, initial: bool = False) -> None:
         if self._backend == "rpi":
@@ -183,8 +196,8 @@ class HostGpio:
         return AlertHandle(_cancel)
 
     def release(self, bcm: int) -> None:
-        """Free a claimed line (gpiochip backend); a no-op on RPi.GPIO."""
-        if self._backend != "gpiochip":
+        """Free a claimed line (lgpio backends); a no-op on RPi.GPIO."""
+        if not self._uses_lgpio():
             return
         with self._lock:
             claimed = self._claimed.pop(bcm, None)
@@ -196,7 +209,7 @@ class HostGpio:
 
     def close(self) -> None:
         """Free every line and chip handle this facade holds."""
-        if self._backend != "gpiochip":
+        if not self._uses_lgpio():
             return
         with self._lock:
             claimed = list(self._claimed.items())
