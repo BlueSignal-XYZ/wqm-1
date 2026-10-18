@@ -15,6 +15,11 @@ Description=BlueSignal WQM-1 setup access point (raised only when no Wi-Fi netwo
 # installed. After= on a unit that is not in this boot is ignored.
 After=NetworkManager.service wqm1-firstboot.service
 Wants=NetworkManager.service
+# Start limits belong in [Unit]. systemd ignores them in [Service]
+# ("Unknown key StartLimitIntervalSec in section [Service]") and the
+# failed hotspot then restarts without a cap, so the SSID blinks.
+StartLimitIntervalSec=600
+StartLimitBurst=8
 
 [Service]
 Type=oneshot
@@ -28,12 +33,10 @@ RemainAfterExit=yes
 # stays under two minutes on an unconfigured unit (no station grace).
 TimeoutStartSec=180
 # A radio that appears late (Pi Zero W SDIO) gets another pass. A success
-# stays active because of RemainAfterExit. The burst cap stops a unit with
-# no radio at all from restarting for ever.
+# stays active because of RemainAfterExit. The burst cap is StartLimitBurst
+# in [Unit]; it stops a unit with no radio at all from restarting for ever.
 Restart=on-failure
 RestartSec=15
-StartLimitIntervalSec=600
-StartLimitBurst=8
 
 [Install]
 WantedBy=multi-user.target

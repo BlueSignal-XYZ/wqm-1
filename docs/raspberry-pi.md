@@ -53,7 +53,16 @@ to the onboard radio of each supported Pi. The chip is not the same part
 (Zero W and Pi 3B are an older Broadcom SDIO radio; Pi 3B+, Pi 3A+ and Pi 4
 are a CYW43455; the Zero 2 W is its own module on the same driver). The
 firmware never branches on the chip. `nmcli` is asked for an AP on `wlan0`
-either way.
+either way, with one security profile every chip has to accept: WPA2-PSK
+only (`proto=rsn`, CCMP, PMF off) and Wi-Fi power save disabled. Firmware
+7.45.98 (TOB) on the Zero W's BCM43430/1 rejects NetworkManager's default
+hotspot (the kernel logs `brcmf_vif_set_mgmt_ie: vndr ie set error : -52`
+and the SSID blinks). 7.45.96.s1 accepts both; the image uses the stricter
+set. The address is `192.168.4.1` before the profile is activated.
+
+Every boot rewrites `wqm1-status.txt` on the boot partition. The first line
+is `COMMISSION: READY` or `COMMISSION: FAIL: <reason>`. A ten-minute bench
+check is [burn-in.md](burn-in.md).
 
 `bluesignal-ap-fallback.service` raises that hotspot. It does not wait on
 `bluesignal-wqm` and it does not wait on `network-online.target`. An
