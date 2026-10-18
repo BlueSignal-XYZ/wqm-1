@@ -253,6 +253,7 @@ class TestTeardown:
         fake = FakeNm()
         fake.ap = True
         monkeypatch.setattr(netctl, "_run", fake.run)
+        monkeypatch.setattr(netctl, "reach_gateway_or_dns", lambda *a, **k: fake.reach)
         arm_portal()
         joined = netctl.join_network(
             "PondHouse",

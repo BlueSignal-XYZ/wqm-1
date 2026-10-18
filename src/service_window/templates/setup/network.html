@@ -6,8 +6,7 @@
 
 {% if last_join %}
 <div class="flash error" role="alert">
-    Could not join <b>{{ last_join.ssid }}</b>: {{ last_join.error }}
-    Check the password with the owner and try again.
+    Could not join <b>{{ last_join.ssid }}</b>. {{ last_join.error }}
 </div>
 {% endif %}
 
@@ -56,8 +55,9 @@
     <label class="inline-check"><input type="checkbox" id="show-password"> Show password</label>
     {% if on_ap %}
     <p class="skip-note">This page goes away when you tap Join: the unit turns off its
-    setup network and your phone drops back to its usual connection. A wrong password
-    brings this page back within a minute, with the reason.</p>
+    setup network and your phone drops back to its usual connection. If the password
+    is wrong, the router does not give the unit an address, or the unit cannot reach
+    the router, this page comes back within a minute and says which one happened.</p>
     {% endif %}
     <div class="setup-actions">
         <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join and finish</button>
@@ -96,7 +96,7 @@
   if (form && join) {
     form.addEventListener('submit', function (e) {
       if (e.submitter !== join) return;
-      // The join takes up to 40 s and usually takes this page with it.
+      // The join takes up to about a minute and usually takes this page with it.
       // Say so, and stop a second tap from starting a second join.
       setTimeout(function () {
         join.disabled = true;

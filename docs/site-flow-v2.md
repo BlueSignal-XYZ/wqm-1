@@ -15,13 +15,45 @@ the firmware half and what still has to be proved on a real Pi.
 3. Set a PIN, then watch the probes. A carded unit skips the identity and
    cloud-key steps because the bench card supplied both.
 4. **Network, last:** the owner picks their Wi-Fi and types the password.
-   *Join and finish* completes setup on the unit. Other saved Wi-Fi,
-   including the shop network, is forgotten, setup is recorded, and the
-   firmware restarts.
+   *Join and finish* completes setup on the unit only after the checks
+   below. Other saved Wi-Fi, including the shop network, is forgotten,
+   setup is recorded, and the firmware restarts.
 5. Scan the **box label QR**, which opens the claim page in BlueSignal Cloud.
 
-A wrong password brings the hotspot back. The reason is kept on the unit, so
-the page that reopens says what went wrong.
+The page tells the installer, before Join is tapped, that the setup network
+will drop. It comes back within about a minute if the join does not succeed,
+and it says which check failed. The sentence is stored before the hotspot
+is raised again, so it is already there when the phone rejoins.
+
+## When the join counts as success
+
+`join_network` polls for about 55 seconds. Success is all three:
+
+1. `wlan0` is associated to the SSID the installer chose (not the setup hotspot).
+2. `wlan0` has a usable IPv4 address from the router. A link-local address
+   (`169.254.x`) is not one.
+3. The unit can reach that network's gateway (TCP/443 or TCP/80, including
+   a refusal, which means the host answered) or a DNS server (a UDP query).
+
+Otherwise the setup page says, in plain words, which of these failed:
+
+| What happened | Status file | What the page says |
+|---|---|---|
+| Password rejected | `station: fail: wrong password` | The password was not accepted |
+| Network not in range | `station: fail: network not found` | That network was not found |
+| Associated, no DHCP lease, or only `169.254.x` | `station: fail: no address` | The router did not give the unit an address |
+| Address, but no gateway and no DNS | `station: fail: no internet` | The unit cannot reach the router or DNS |
+
+On every one of those, the hotspot and the port-80 portal come back (the
+same re-arm as a wrong password, including the three AP attempts). Setup is
+not marked complete, and other saved networks are not forgotten. A success
+writes `station: ok <ip>`, closes port 80, and does not leave the portal
+listening on the site LAN.
+
+At boot, `scripts/wqm1-ap-fallback.py` keeps a station only when `wlan0`
+already has a usable IPv4 address. It does not require the gateway: an
+outage while a commissioned unit reboots must not turn the site Wi-Fi off
+and raise the setup hotspot instead. The setup join is stricter.
 
 ## Where it lives
 
@@ -70,6 +102,22 @@ networks.
       permission. If a delete is refused, the log line `Could not forget
       saved Wi-Fi` says so, and the shop network stays saved.
 - [ ] **Wrong password, then right password.** The hotspot returns within a
-      minute, iOS rejoins it, and the reopened page names the failure.
+      minute, iOS rejoins it, and the reopened page says the password was
+      not accepted. `wqm1-status.txt` shows `station: fail: wrong password`
+      after the failure and `station: ok <ip>` after the success.
+      `portal: up (80)` while the hotspot is back; `portal: down: station`
+      after the success. Unverified on hardware.
+- [ ] **Right password, no DHCP.** Turn the router's DHCP off, or join a
+      network that does not hand out addresses. The page says the unit did
+      not get an address. The hotspot and `http://192.168.4.1/setup/` (no
+      `:8080`) come back. `station: fail: no address`. Unverified on hardware.
+- [ ] **Link-local only.** A lease of `169.254.x` is the same failure. The
+      page names that address. Unverified on hardware.
+- [ ] **Slow DHCP.** A lease that arrives within about a minute still
+      finishes setup. `station: ok <that ip>`. Unverified on hardware.
+- [ ] **Address, no route.** DHCP works and the gateway does not answer.
+      The page says the unit cannot reach the router or DNS. The hotspot
+      comes back. `station: fail: no internet`. Unverified on hardware.
 - [ ] **After the join,** `nmcli connection show` lists only the owner's
-      network and `wqm1-setup-ap`.
+      network and `wqm1-setup-ap`. `ip -4 addr show dev wlan0` shows the
+      same address as `station: ok`, and it is not `169.254`.

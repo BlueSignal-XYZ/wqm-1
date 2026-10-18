@@ -20,9 +20,12 @@ Two jobs (commissioning plan, PR 4):
   unassociated, which is also how a permanently-offline well head is reached
   next year.
 * **The Wi-Fi join.** From the Service Window's network step: list networks,
-  join one. Joining tears the AP down, so ``join_network`` brings the AP
-  straight back on failure — an installer locked out by a typo is worse than
-  no feature.
+  join one. Success is association to that SSID, a usable IPv4 address
+  (not link-local), and a gateway or DNS that answers, within about a
+  minute. Joining tears the AP down, so ``join_network`` brings the AP and
+  the port-80 portal straight back on failure — an installer locked out by
+  a typo, a missing DHCP lease, or a router that does not answer is worse
+  than no feature.
 
 Two more since site flow v2 (2026-10-03):
 
@@ -53,12 +56,16 @@ cannot scan or reconnect that laptop's own Wi-Fi.
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import ipaddress
 import logging
 import re
 import shutil
+import socket
 import subprocess  # nosec B404 - fixed argv, no shell, resolved binaries only
 import time
+from collections.abc import Callable
 from typing import Any
 
 from utils import netsim
@@ -95,7 +102,50 @@ AP_ADDRESS = "192.168.4.1"
 AP_NETWORK = "192.168.4.0/24"
 DEFAULT_WIFI_IFACE = "wlan0"
 JOIN_TIMEOUT_S = 40
+# Whole join, including association, DHCP, and a gateway or DNS probe.
+# nmcli's own activation timeout is JOIN_TIMEOUT_S and sits inside this budget.
+ADDRESS_WAIT_S = 55.0
+ADDRESS_POLL_S = 2.0
+PROBE_TIMEOUT_S = 0.8
 _SSID_RE = re.compile(r"^[^\x00-\x1f]{1,32}$")
+_INET_RE = re.compile(r"\binet\s+(\d+\.\d+\.\d+\.\d+)")
+_GW_RE = re.compile(r"^default\s+via\s+(\d+\.\d+\.\d+\.\d+)", re.MULTILINE)
+
+# Short tails for ``wqm1-status.txt`` (``station: fail: <this>``). The setup
+# page uses the longer sentences in ``_JOIN_MESSAGES``.
+_STATION_FAIL = {
+    "wrong_password": "wrong password",  # nosec B105 — failure word, not a secret
+    "not_found": "network not found",
+    "no_dhcp": "no address",
+    "no_internet": "no internet",
+    "no_association": "could not join",
+    "invalid_ssid": "invalid network name",
+}
+_JOIN_MESSAGES = {
+    "wrong_password": (
+        "The password was not accepted (wrong password). "  # nosec B105 — failure sentence, not a secret
+        "Check it with the owner and try again."
+    ),
+    "not_found": ("That network was not found. Move the unit closer to the router and scan again."),
+    "no_dhcp": (
+        "The unit joined the Wi-Fi but did not get an address from the router (no DHCP). "
+        "Check that the router is handing out addresses, then try again."
+    ),
+    "no_dhcp_link_local": (
+        "The unit joined the Wi-Fi but only has a link-local address (169.254.x), "
+        "not one from the router. Check that the router is handing out addresses, "
+        "then try again."
+    ),
+    "no_internet": (
+        "The unit has an address but cannot reach the router or DNS (no internet). "
+        "Check the router's connection, then try again."
+    ),
+    "no_association": (
+        "The unit could not join that network. Check the password and that the router "
+        "is on, then try again."
+    ),
+    "invalid_ssid": "That network name cannot be used. Pick one from the list.",
+}
 
 
 def _run(argv: list[str], timeout: float = 15.0) -> tuple[int, str, str]:
@@ -381,6 +431,275 @@ def scan_networks(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, Any]]:
     return sorted(seen.values(), key=lambda n: -n["signal"])
 
 
+def usable_ipv4(addr: str) -> bool:
+    """True for a DHCP (or static) IPv4 address an installer can reach.
+
+    Link-local ``169.254.x`` is what the stack invents when no one answered
+    DHCP. Loopback, ``0.0.0.0``, and multicast are not a site address either.
+    """
+    text = (addr or "").split("/", 1)[0].strip()
+    try:
+        ip = ipaddress.IPv4Address(text)
+    except (ValueError, ipaddress.AddressValueError):
+        return False
+    return not (ip.is_link_local or ip.is_loopback or ip.is_unspecified or ip.is_multicast)
+
+
+def _is_link_local(addr: str) -> bool:
+    text = (addr or "").split("/", 1)[0].strip()
+    try:
+        return ipaddress.IPv4Address(text).is_link_local
+    except (ValueError, ipaddress.AddressValueError):
+        return False
+
+
+def parse_ipv4_addrs(text: str) -> list[str]:
+    """IPv4 addresses from ``ip -4 -o addr`` output, in order."""
+    return _INET_RE.findall(text or "")
+
+
+def parse_default_gateway(text: str) -> str | None:
+    """The ``default via`` address on one interface's route table, if any."""
+    match = _GW_RE.search(text or "")
+    return match.group(1) if match else None
+
+
+def _redact_secret(text: str, secret: str | None) -> str:
+    cleaned = " ".join((text or "").split())
+    if secret and len(secret) >= 4 and secret in cleaned:
+        cleaned = cleaned.replace(secret, "[redacted]")
+    return cleaned
+
+
+def _classify_connect_error(text: str) -> str | None:
+    """A fast failure from nmcli's own text, before the address wait.
+
+    DHCP and route failures are not decided here: the poll is what tells
+    a late lease from a dead router.
+    """
+    low = (text or "").lower()
+    if "secret" in low or "wrong password" in low or "invalid password" in low:
+        return "wrong_password"
+    if "no network with ssid" in low or "ssid not found" in low:
+        return "not_found"
+    return None
+
+
+def _join_message(kind: str, link_local: list[str]) -> str:
+    if kind == "no_dhcp" and link_local:
+        return _JOIN_MESSAGES["no_dhcp_link_local"]
+    return _JOIN_MESSAGES.get(kind, _JOIN_MESSAGES["no_association"])
+
+
+def _join_result(
+    *,
+    ok: bool,
+    connected: bool,
+    ap_restored: bool,
+    error: str | None,
+    message: str | None = None,
+    reason: str | None = None,
+    ip: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "connected": connected,
+        "ap_restored": ap_restored,
+        "error": error,
+        "message": message,
+        "reason": reason,
+        "ip": ip,
+    }
+
+
+def associated_ssid(iface: str = DEFAULT_WIFI_IFACE) -> str | None:
+    """SSID of the active station on ``iface``, or None when it is the AP
+    or there is no association."""
+    if netsim.is_virtual():
+        return netsim.current_ssid()
+    rc, out, _ = _nmcli("-t", "-f", "DEVICE,STATE,CONNECTION", "device", "status")
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 3 and parts[0] == iface and parts[1] == "connected":
+            name = parts[2]
+            if not name or name in ("--", AP_CONNECTION_NAME):
+                return None
+            rc2, ssid, _ = _nmcli("-g", "802-11-wireless.ssid", "connection", "show", name)
+            return (ssid or name) if rc2 == 0 else name
+    return None
+
+
+def read_iface_net(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Association, IPv4 addresses, gateway, and DNS for ``iface``.
+
+    Never raises. A simulated unit reports the virtual station address and
+    does not read the laptop's routes.
+    """
+    empty: dict[str, Any] = {
+        "ssid": None,
+        "usable": [],
+        "link_local": [],
+        "gateway": None,
+        "dns": [],
+    }
+    if netsim.is_virtual():
+        ssid = netsim.current_ssid()
+        if not ssid:
+            return empty
+        return {
+            "ssid": ssid,
+            "usable": ["192.168.1.57"],
+            "link_local": [],
+            "gateway": "192.168.1.1",
+            "dns": ["192.168.1.1"],
+        }
+    ssid = associated_ssid(iface)
+    rc, out, _ = _run(["ip", "-4", "-o", "addr", "show", "dev", iface])
+    addrs = parse_ipv4_addrs(out if rc == 0 else "")
+    usable = [addr for addr in addrs if usable_ipv4(addr)]
+    link_local = [addr for addr in addrs if _is_link_local(addr)]
+    rc2, routes, _ = _run(["ip", "-4", "route", "show", "dev", iface])
+    gateway = parse_default_gateway(routes if rc2 == 0 else "")
+    dns: list[str] = []
+    rc3, dns_out, _ = _nmcli("-g", "IP4.DNS", "device", "show", iface)
+    if rc3 == 0:
+        for line in (dns_out or "").splitlines():
+            host = line.strip().split("/", 1)[0]
+            if host and host != "--" and usable_ipv4(host):
+                dns.append(host)
+    return {
+        "ssid": ssid,
+        "usable": usable,
+        "link_local": link_local,
+        "gateway": gateway,
+        "dns": dns,
+    }
+
+
+def _tcp_answered(host: str, port: int, timeout: float) -> bool:
+    """True when ``host`` accepts the TCP connection or refuses it.
+
+    A refusal means the host is on the network and answered. A timeout or
+    an unreachable route does not.
+    """
+    if not host:
+        return False
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(timeout)
+        rc = sock.connect_ex((host, int(port)))
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return rc in (0, errno.ECONNREFUSED)
+
+
+def _dns_query() -> bytes:
+    """One recursive A query for example.com. Any DNS reply counts."""
+    header = b"\x00\x01\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    question = b"\x07example\x03com\x00\x00\x01\x00\x01"
+    return header + question
+
+
+def _dns_answered(host: str, timeout: float) -> bool:
+    if not host:
+        return False
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(timeout)
+        sock.sendto(_dns_query(), (host, 53))
+        data, _addr = sock.recvfrom(512)
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return len(data) >= 12
+
+
+def reach_gateway_or_dns(
+    gateway: str | None,
+    dns: list[str],
+    *,
+    timeout: float = PROBE_TIMEOUT_S,
+    clock: Any = time.monotonic,
+    deadline: float | None = None,
+) -> bool:
+    """True when the gateway answers TCP/80 or TCP/443, or a DNS server answers.
+
+    Stops at ``deadline`` so a dead router cannot stretch the join past
+    ``ADDRESS_WAIT_S``. Connection refused counts: the host is there.
+    """
+
+    def pending() -> bool:
+        return deadline is None or clock() < deadline
+
+    if (
+        gateway
+        and pending()
+        and (_tcp_answered(gateway, 443, timeout) or _tcp_answered(gateway, 80, timeout))
+    ):
+        return True
+    targets: list[str] = []
+    for host in [*(dns or []), gateway or ""]:
+        if host and host not in targets:
+            targets.append(host)
+    for host in targets:
+        if not pending():
+            return False
+        if _dns_answered(host, timeout):
+            return True
+    return False
+
+
+def _publish_station(**fields: Any) -> None:
+    """Best-effort ``wqm1-status.txt`` update. A failed write must not decide
+    whether the join, or the hotspot that follows it, succeeded."""
+    try:
+        from diagnostics.boot_status import write_boot_status
+
+        write_boot_status(**fields)
+    except Exception as e:  # noqa: BLE001 — the join result is the status, not the file
+        logger.error("Could not record station status: %s", e)
+
+
+def _station_ready(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any] | None:
+    """Station link plus a usable IPv4, or None.
+
+    Used at boot. Gateway reachability is deliberately not required: an
+    ISP outage during reboot must not drop a commissioned unit off the
+    site Wi-Fi and raise the setup hotspot in its place. ``join_network``
+    is the stricter check.
+    """
+    if not station_connected(iface):
+        return None
+    snap = read_iface_net(iface)
+    if not snap.get("usable"):
+        return None
+    return snap
+
+
+def _restore_ap(
+    had_ap: bool,
+    ap_ssid: str | None,
+    ap_passphrase: str | None,
+    iface: str,
+    sleep: Any,
+) -> bool:
+    """Bring the setup hotspot back. ``start_ap`` arms the portal."""
+    if not (had_ap and ap_ssid and ap_passphrase):
+        return False
+    restored = False
+    for attempt in range(max(1, AP_ATTEMPTS)):
+        restored = bool(start_ap(ap_ssid, ap_passphrase, iface).get("ok"))
+        if restored or attempt + 1 >= AP_ATTEMPTS:
+            break
+        sleep(2)
+    return restored
+
+
 def join_network(
     ssid: str,
     password: str | None,
@@ -388,60 +707,196 @@ def join_network(
     ap_passphrase: str | None = None,
     iface: str = DEFAULT_WIFI_IFACE,
     sleep: Any = time.sleep,
+    clock: Any = time.monotonic,
+    address_wait_s: float = ADDRESS_WAIT_S,
+    on_failure: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Join ``ssid``. On failure, bring the setup AP back (when its name and
-    passphrase are given) so the installer is never locked out.
+    """Join ``ssid`` and report success only when the unit is actually on it.
 
-    Returns ``{"ok": bool, "connected": bool, "ap_restored": bool, "error": str|None}``.
-    The caller MUST have warned the user before calling this: the AP goes
-    down the moment the join starts.
+    Success requires all three, polled until ``address_wait_s`` (about a
+    minute): ``wlan0`` is associated to this SSID, it has a usable IPv4
+    address (a DHCP or static lease — not link-local ``169.254.x``), and
+    that network's gateway or a DNS server answers.
+
+    On any failure the setup hotspot is raised again when its name and
+    passphrase were given, which also arms the port-80 portal. ``on_failure``
+    runs after the reason is known and before that raise, so the setup page
+    can store the sentence the phone will show the moment the hotspot is back.
+
+    Returns ``ok``, ``connected``, ``ap_restored``, ``error`` (nmcli text, or
+    None), ``message`` (installer sentence, or None), ``reason`` (short code,
+    or None), and ``ip``. The caller MUST have warned the user before calling
+    this: the AP goes down the moment the join starts.
     """
     if not _SSID_RE.match(ssid or ""):
-        return {"ok": False, "connected": False, "ap_restored": False, "error": "invalid ssid"}
+        return _join_result(
+            ok=False,
+            connected=False,
+            ap_restored=False,
+            error="invalid ssid",
+            message=_JOIN_MESSAGES["invalid_ssid"],
+            reason="invalid_ssid",
+        )
     if netsim.is_virtual():
         result = netsim.join_network(ssid, password, ap_ssid, ap_passphrase)
+        if not result.get("connected"):
+            _notify_failure(on_failure, result)
         _portal_after_join(result)
+        if result.get("connected"):
+            _publish_station(
+                station=f"ok {result.get('ip') or ''}".strip(),
+                hotspot="station",
+                portal="down: station",
+            )
+        else:
+            short = _STATION_FAIL.get(str(result.get("reason") or ""), "could not join")
+            _publish_station(
+                station=f"fail: {short}",
+                hotspot="up" if result.get("ap_restored") else "down",
+                portal="up (80)" if result.get("ap_restored") else "down: hotspot down",
+            )
         return result
+    deadline = clock() + address_wait_s
     had_ap = ap_active(iface)
     if had_ap:
         stop_ap(iface)
         # The address is about to disappear. Close port 80 before the join
         # so a phone that is still associated is not kept on our portal,
-        # and a successful join cannot leave the listener up.
+        # and a successful join cannot leave the listener up (#136).
         _disarm_portal("joining")
     argv = ["device", "wifi", "connect", ssid, "ifname", iface]
     if password:
         argv += ["password", password]
-    rc, out, err = _nmcli(*argv, timeout=JOIN_TIMEOUT_S)
-    connected = rc == 0 and station_connected(iface)
-    if not connected:
-        # Give NM one more beat before judging — association can lag the
-        # command's return on this radio.
-        sleep(2)
-        connected = station_connected(iface)
-    if connected:
-        # A wrong password leaves a half-made profile behind; a good join
-        # leaves a profile NM autoconnects at next boot, which is the point.
-        logger.info("Joined %s", ssid)
-        _disarm_portal("station")
-        return {"ok": True, "connected": True, "ap_restored": False, "error": None}
-    reason = err or out or f"nmcli rc {rc}"
-    logger.warning("Join %s failed: %s", ssid, reason)
+    remaining = max(1.0, deadline - clock())
+    rc, out, err = _nmcli(*argv, timeout=min(float(JOIN_TIMEOUT_S), remaining))
+    nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
+    fast = _classify_connect_error(nm_text) if rc != 0 else None
+    if fast in ("wrong_password", "not_found"):
+        snap = read_iface_net(iface)
+        # A stale error string must not undo a link that is actually up.
+        if snap.get("ssid") != ssid or not snap.get("usable"):
+            return _fail_join(
+                ssid=ssid,
+                password=password,
+                kind=fast,
+                nm_text=nm_text,
+                link_local=list(snap.get("link_local") or []),
+                had_ap=had_ap,
+                ap_ssid=ap_ssid,
+                ap_passphrase=ap_passphrase,
+                iface=iface,
+                sleep=sleep,
+                on_failure=on_failure,
+            )
+    while True:
+        snap = read_iface_net(iface)
+        usable = list(snap.get("usable") or [])
+        on_target = snap.get("ssid") == ssid and bool(usable)
+        reached = on_target and reach_gateway_or_dns(
+            snap.get("gateway"),
+            list(snap.get("dns") or []),
+            clock=clock,
+            deadline=deadline,
+        )
+        if on_target and reached:
+            ip = str(usable[0])
+            logger.info("Joined %s at %s", ssid, ip)
+            _disarm_portal("station")
+            _publish_station(station=f"ok {ip}", hotspot="station", portal="down: station")
+            return _join_result(
+                ok=True,
+                connected=True,
+                ap_restored=False,
+                error=None,
+                ip=ip,
+            )
+        if clock() >= deadline:
+            kind = _failure_kind(ssid, snap, nm_text)
+            return _fail_join(
+                ssid=ssid,
+                password=password,
+                kind=kind,
+                nm_text=nm_text,
+                link_local=list(snap.get("link_local") or []),
+                had_ap=had_ap,
+                ap_ssid=ap_ssid,
+                ap_passphrase=ap_passphrase,
+                iface=iface,
+                sleep=sleep,
+                on_failure=on_failure,
+            )
+        sleep(ADDRESS_POLL_S)
+
+
+def _failure_kind(ssid: str, snap: dict[str, Any], nm_text: str) -> str:
+    if snap.get("ssid") == ssid and snap.get("usable"):
+        return "no_internet"
+    if snap.get("ssid") == ssid:
+        return "no_dhcp"
+    low = (nm_text or "").lower()
+    if "ip configuration" in low or "no available address" in low:
+        return "no_dhcp"
+    return _classify_connect_error(nm_text) or "no_association"
+
+
+def _notify_failure(
+    on_failure: Callable[[dict[str, Any]], None] | None, pending: dict[str, Any]
+) -> None:
+    if on_failure is None:
+        return
+    try:
+        on_failure(dict(pending))
+    except Exception:  # noqa: BLE001 — the hotspot still has to come back
+        logger.exception("Join failure hook failed")
+
+
+def _fail_join(
+    *,
+    ssid: str,
+    password: str | None,
+    kind: str,
+    nm_text: str,
+    link_local: list[str],
+    had_ap: bool,
+    ap_ssid: str | None,
+    ap_passphrase: str | None,
+    iface: str,
+    sleep: Any,
+    on_failure: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    """Record the reason, then raise the hotspot. The hook runs first so the
+    setup page has the sentence before the phone can rejoin."""
+    message = _join_message(kind, link_local)
+    short = _STATION_FAIL.get(kind, "could not join")
+    logger.warning("Join %s failed (%s): %s", ssid, kind, nm_text or message)
     # Drop the failed profile so NM does not keep retrying a bad password
     # and blocking the AP from coming back.
     _nmcli("connection", "delete", ssid)
-    restored = False
-    if had_ap and ap_ssid and ap_passphrase:
-        # One attempt is how an installer got locked out when the radio was
-        # still settling after the station join. Same budget as boot.
-        for attempt in range(max(1, AP_ATTEMPTS)):
-            restored = bool(start_ap(ap_ssid, ap_passphrase, iface).get("ok"))
-            if restored or attempt + 1 >= AP_ATTEMPTS:
-                break
-            sleep(2)
-    if not restored:
+    pending = _join_result(
+        ok=False,
+        connected=False,
+        ap_restored=False,
+        error=_redact_secret(nm_text, password) or message,
+        message=message,
+        reason=kind,
+    )
+    _publish_station(station=f"fail: {short}", portal="down: joining")
+    _notify_failure(on_failure, pending)
+    restored = _restore_ap(had_ap, ap_ssid, ap_passphrase, iface, sleep)
+    pending["ap_restored"] = restored
+    if restored:
+        from utils.captive_portal import wait_until_reachable
+
+        portal = wait_until_reachable(seconds=3.0, pause=sleep)
+    else:
         _disarm_portal("hotspot down")
-    return {"ok": False, "connected": False, "ap_restored": restored, "error": reason}
+        portal = "down: hotspot down"
+    _publish_station(
+        station=f"fail: {short}",
+        hotspot="up" if restored else "down",
+        portal=portal,
+    )
+    return pending
 
 
 def ensure_reachable(
@@ -471,19 +926,33 @@ def ensure_reachable(
     """
     prepare_wifi_radio(iface)
     radio_deadline = clock() + radio_wait_s
+    unusable_station = False
 
-    def _station() -> dict[str, Any]:
+    def _take_station() -> dict[str, Any] | None:
+        snap = _station_ready(iface)
+        if not snap:
+            return None
+        ip = str(snap["usable"][0])
         _disarm_portal("station")
-        return {"ok": True, "mode": "station", "ap": False}
+        return {"ok": True, "mode": "station", "ap": False, "ip": ip}
+
+    def _note_unusable() -> None:
+        nonlocal unusable_station
+        if station_connected(iface) and _station_ready(iface) is None:
+            unusable_station = True
 
     while True:
-        if station_connected(iface):
-            return _station()
+        taken = _take_station()
+        if taken:
+            return taken
+        _note_unusable()
         if iface_usable(iface) or clock() >= radio_deadline:
             break
         sleep(2)
-    if station_connected(iface):
-        return _station()
+    taken = _take_station()
+    if taken:
+        return taken
+    _note_unusable()
     # None saved profiles → do not burn the grace period. A failure to list
     # profiles (nmcli missing or not up yet) also returns an empty list;
     # trying the AP is the point of this service, and the attempts below
@@ -491,14 +960,26 @@ def ensure_reachable(
     grace = grace_s if saved_wifi(iface) else 0.0
     started = clock()
     while clock() - started < grace:
-        if station_connected(iface):
-            return _station()
+        taken = _take_station()
+        if taken:
+            return taken
+        _note_unusable()
         sleep(3)
+    # A station that associated and never got a lease still owns wlan0.
+    # Release it so the hotspot command is not refused.
+    if station_connected(iface) and _station_ready(iface) is None:
+        unusable_station = True
+        logger.warning(
+            "Station on %s has no usable IPv4 — releasing it to raise the setup AP",
+            iface,
+        )
+        _nmcli("device", "disconnect", iface)
     last: dict[str, Any] = {}
     attempts = max(1, ap_attempts)
     for attempt in range(attempts):
-        if station_connected(iface):
-            return _station()
+        taken = _take_station()
+        if taken:
+            return taken
         if not iface_usable(iface):
             prepare_wifi_radio(iface)
         last = start_ap(ap_ssid, ap_passphrase, iface)
@@ -513,7 +994,10 @@ def ensure_reachable(
             )
             sleep(2)
     ok = bool(last.get("ok"))
-    return {"ok": ok, "mode": "ap", "ap": ok, "detail": last}
+    result: dict[str, Any] = {"ok": ok, "mode": "ap", "ap": ok, "detail": last}
+    if unusable_station:
+        result["station_failure"] = "no address"
+    return result
 
 
 def saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]]:

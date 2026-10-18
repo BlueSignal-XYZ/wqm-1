@@ -84,6 +84,32 @@ Nothing below was re-checked on a HAT.
    and `COMMISSION: FAIL` when the hotspot is up and port 80 does not
    answer. Not re-checked on a phone.
 
+## Fixed in the address gate
+
+1. **A join could finish before the unit had an address.** This was item 6
+   in the audit before the port-80 change, and item 5 after it.
+   `station_connected` is NetworkManager state `connected`. That is often
+   after DHCP, and it is also what a link-local `169.254.x` address looks
+   like when the router never answers. `_finish_setup` then forgot every
+   other saved network, including the bench, with the hotspot already down.
+
+   `join_network` now polls for about 55 seconds and returns success only
+   when `wlan0` is associated to the SSID the installer chose, has a usable
+   IPv4 address (not link-local), and can reach that network's gateway or a
+   DNS server. Otherwise it returns a distinct reason — wrong password, the
+   network was not found, no address, or no internet — in a sentence the
+   setup page shows. The sentence is stored before the hotspot is raised
+   again, and that raise arms the port-80 portal the same way a wrong
+   password already did. `wqm1-status.txt` records `station: ok <ip>` or
+   `station: fail: <reason>`.
+
+   At boot, `wqm1-ap-fallback` treats a station as up only when `wlan0` has
+   a usable IPv4 address. A link-local or missing address still raises the
+   hotspot. An address with no gateway does not, on its own, drop a unit
+   that is already on the site network: an outage at reboot must not turn
+   the customer's Wi-Fi off. The setup join is the stricter of the two.
+   Not re-checked on a HAT.
+
 ## Still open
 
 ### 1. Undervoltage drops the AP and the ADC together
@@ -149,23 +175,7 @@ the field failure was a golden card, and a second writer of
 **Impact:** a one-off install, not a golden card. The SSID is still
 right; mDNS may not match the label.
 
-### 5. Join can finish before the unit has an address
-
-`station_connected` is NetworkManager state `connected`. That is usually
-after DHCP, and it is not a check that the address answers. `_finish_setup`
-then forgets every other saved network, including the bench, and the
-hotspot is already down. A unit that is "connected" with no route is
-reachable only by someone who is already on that L2 network, or by
-pulling the card.
-
-**Fix:** in `join_network`, require an IPv4 address on `wlan0` before
-returning connected, and do not call `_finish_setup` without one. On
-failure the existing restore path brings the AP back.
-
-**Impact:** the installer sees "Setup is finished", goes home, and the
-unit is not on the network. The card still has `wqm1-status.txt`.
-
-### 6. Nothing re-raises the hotspot after the fallback service has succeeded
+### 5. Nothing re-raises the hotspot after the fallback service has succeeded
 
 `bluesignal-ap-fallback.service` is a oneshot. It exits 0 when the AP is
 up or a station is associated. A later crash of NetworkManager, or a
@@ -181,7 +191,7 @@ retries in `join_network` cover the bad-password case only.
 the error on. The status file still has the last failure if the boot
 path was the one that failed.
 
-### 7. A saved profile whose name is not the SSID survives a bad password
+### 6. A saved profile whose name is not the SSID survives a bad password
 
 `join_network` deletes a connection named exactly the SSID. `nmcli
 device wifi connect` names the profile after the SSID, so the usual
@@ -196,7 +206,7 @@ matches and whose state is not connected, using the same listing
 **Impact:** only a card that already has a hand-named profile. Golden
 images ship with no Wi-Fi profiles.
 
-### 8. Power save is turned on by the driver before the profile exists
+### 7. Power save is turned on by the driver before the profile exists
 
 `prepare_wifi_radio` now runs `iw dev wlan0 set power_save off`, and the
 AP profile sets `802-11-wireless.powersave=2`. NetworkManager has
@@ -212,7 +222,7 @@ call is not a fix.
 **Impact:** the AP associates and then stalls under load. Looks like a
 weak signal.
 
-### 9. GPS and 1-Wire do not gate the verdict
+### 8. GPS and 1-Wire do not gate the verdict
 
 No GPS fix, and no DS18B20, are normal on the bench (indoor, probe not
 fitted). The status file reports them (`gps`, `onewire`) and
@@ -230,7 +240,8 @@ commissioning because the bench is indoors.
 
 - AP and station are never up together. `brcmfmac` concurrent AP+STA is
   the failure mode this design refuses. The phone loses the page when
-  the join starts; a wrong password brings the hotspot back.
+  the join starts; a failed join (wrong password, no address, no internet)
+  brings the hotspot and the portal back.
 - The station grace period is 45 s only when a Wi-Fi profile is already
   saved. An unconfigured unit does not wait.
 - The factory PIN is rejected before the radio is touched, so a join

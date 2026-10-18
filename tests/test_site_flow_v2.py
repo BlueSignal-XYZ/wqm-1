@@ -469,7 +469,8 @@ class TestSiteScenarios:
         c, app = self._client(tmp_path, mock_hardware)
         c.post("/setup/network", data={"action": "join", "ssid": "Barn-5G", "password": "x" * 10})
         page = c.get("/setup/network").data
-        assert b"No network named Barn-5G is in range" in page
+        assert b"Could not join <b>Barn-5G</b>" in page
+        assert b"That network was not found" in page
         assert json.loads(virtual_net.read_text())["ap"] is True
         assert not self._done(app)
 
@@ -594,7 +595,13 @@ class TestSiteScenarios:
         monkeypatch.setattr(
             netctl,
             "join_network",
-            lambda *a, **k: {"ok": True, "connected": True, "ap_restored": False, "error": None},
+            lambda *a, **k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
         )
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "cedar-river-42"))
         monkeypatch.setattr(

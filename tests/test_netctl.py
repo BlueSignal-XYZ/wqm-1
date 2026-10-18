@@ -25,6 +25,13 @@ class FakeNm:
         self.add_rc = 0
         self.saved: list[str] = []
         self.iface_state = ""
+        self.ipv4 = "192.168.1.50"
+        self.ipv4_script: list[str] | None = None
+        self.ipv4_i = 0
+        self._last_ipv4 = ""
+        self.gateway = "192.168.1.1"
+        self.dns = "192.168.1.1"
+        self.reach = True
 
     def run(self, argv, timeout=15.0):
         self.calls.append(argv)
@@ -74,7 +81,42 @@ class FakeNm:
             return 0, "", ""
         if a[:4] == ["-t", "-f", "SSID,SIGNAL,SECURITY", "device"]:
             return 0, "PondHouse:72:WPA2\nPondHouse:40:WPA2\nBarn:55:--\n:10:WPA2", ""
+        if a[:2] == ["device", "disconnect"]:
+            self.station = False
+            self.ap = False
+            return 0, "", ""
+        if a[:2] == ["-g", "IP4.DNS"]:
+            ip = self._last_ipv4
+            if not self.station or not ip or ip.startswith("169.254."):
+                return 0, "", ""
+            return 0, self.dns, ""
+        if a[:4] == ["ip", "-4", "-o", "addr"]:
+            ip = self._take_ipv4()
+            if not ip:
+                return 0, "", ""
+            scope = "link" if ip.startswith("169.254.") else "global"
+            return 0, f"2: wlan0 inet {ip}/24 scope {scope} dynamic wlan0", ""
+        if a[:4] == ["ip", "-4", "route", "show"]:
+            ip = self._last_ipv4
+            if not ip or ip.startswith("169.254.") or not self.gateway:
+                return 0, "", ""
+            return 0, f"default via {self.gateway} dev wlan0 proto dhcp src {ip}", ""
         return 0, "", ""
+
+    def _take_ipv4(self) -> str:
+        if not self.station:
+            self._last_ipv4 = ""
+            return ""
+        if self.ipv4_script is not None:
+            if self.ipv4_i < len(self.ipv4_script):
+                value = self.ipv4_script[self.ipv4_i]
+                self.ipv4_i += 1
+            else:
+                value = self.ipv4_script[-1]
+        else:
+            value = self.ipv4
+        self._last_ipv4 = value
+        return value
 
 
 @pytest.fixture
@@ -83,6 +125,7 @@ def nm(monkeypatch):
 
     fake = FakeNm()
     monkeypatch.setattr(netctl, "_run", fake.run)
+    monkeypatch.setattr(netctl, "reach_gateway_or_dns", lambda *a, **k: fake.reach)
     return fake
 
 
@@ -256,7 +299,12 @@ class TestJoin:
         r = join_network(
             "PondHouse", "hunter22", ap_ssid="WQM1-0001", ap_passphrase="river-cedar-42"
         )
-        assert r == {"ok": True, "connected": True, "ap_restored": False, "error": None}
+        assert r["ok"] is True
+        assert r["connected"] is True
+        assert r["ap_restored"] is False
+        assert r["error"] is None
+        assert r["ip"] == "192.168.1.50"
+        assert r["reason"] is None
         assert any(c[1:3] == ["connection", "down"] for c in nm.calls)
 
     def test_wrong_password_reraises_the_ap(self, nm):
@@ -307,6 +355,207 @@ class TestJoin:
         r = join_network("bad\x00ssid", "x")
         assert r["ok"] is False
         assert not any("connect" in c for c in nm.calls)
+
+
+def _clock():
+    t = [0.0]
+
+    def clock():
+        return t[0]
+
+    def sleep(seconds):
+        t[0] += float(seconds)
+
+    return t, clock, sleep
+
+
+class TestJoinWaitsForAnAddress:
+    """Success is association plus a DHCP address plus a gateway or DNS.
+    Every failure brings the hotspot and the portal back, and the reason
+    is stored before that raise."""
+
+    def _join(self, nm, tmp_path, monkeypatch, **kwargs):
+        from utils.captive_portal import read_mode
+        from utils.netctl import join_network
+
+        mode = tmp_path / "portal-mode"
+        status = tmp_path / "wqm1-status.txt"
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(mode))
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
+        nm.ap = True
+        seen = []
+        t, clock, sleep = _clock()
+
+        def on_failure(pending):
+            seen.append(
+                {
+                    "ap": nm.ap,
+                    "mode": read_mode(),
+                    "message": pending.get("message"),
+                    "reason": pending.get("reason"),
+                }
+            )
+
+        result = join_network(
+            "PondHouse",
+            kwargs.pop("password", "hunter22"),
+            ap_ssid="WQM1-0001",
+            ap_passphrase="river-cedar-42",
+            sleep=sleep,
+            clock=clock,
+            on_failure=on_failure,
+            **kwargs,
+        )
+        return result, seen, t, status, read_mode()
+
+    def test_associated_without_an_address_fails_and_restores(self, nm, tmp_path, monkeypatch):
+        nm.ipv4 = ""
+        result, seen, t, status, mode = self._join(nm, tmp_path, monkeypatch)
+        assert result["connected"] is False
+        assert result["reason"] == "no_dhcp"
+        assert "no DHCP" in result["message"]
+        assert result["ap_restored"] is True
+        assert nm.ap is True
+        assert mode == "up"
+        assert seen and seen[0]["ap"] is False
+        assert seen[0]["mode"] == "down: joining"
+        assert t[0] >= 55
+        text = status.read_text(encoding="utf-8")
+        assert "station: fail: no address" in text
+
+    def test_link_local_only_is_not_a_lease(self, nm, tmp_path, monkeypatch):
+        nm.ipv4 = "169.254.42.9"
+        result, seen, t, status, mode = self._join(nm, tmp_path, monkeypatch)
+        assert result["connected"] is False
+        assert result["reason"] == "no_dhcp"
+        assert "169.254" in result["message"]
+        assert result["ap_restored"] is True
+        assert nm.ap is True
+        assert mode == "up"
+        assert seen and seen[0]["mode"] == "down: joining"
+        assert t[0] >= 55
+        assert "station: fail: no address" in status.read_text(encoding="utf-8")
+
+    def test_a_late_dhcp_lease_within_the_timeout_succeeds(self, nm, tmp_path, monkeypatch):
+        from utils.netctl import ADDRESS_POLL_S
+
+        nm.ipv4_script = ["", "", "10.1.2.3"]
+        result, seen, t, status, mode = self._join(nm, tmp_path, monkeypatch)
+        assert result["connected"] is True
+        assert result["ip"] == "10.1.2.3"
+        assert result["ap_restored"] is False
+        assert nm.ap is False
+        assert mode == "down: station"
+        assert seen == []
+        assert t[0] < 55
+        assert t[0] >= ADDRESS_POLL_S
+        text = status.read_text(encoding="utf-8")
+        assert "station: ok 10.1.2.3" in text
+        assert "portal: down: station" in text
+
+    def test_wrong_password_fails_fast_and_restores(self, nm, tmp_path, monkeypatch):
+        nm.join_rc = 4
+        result, seen, t, status, mode = self._join(nm, tmp_path, monkeypatch, password="wrong")
+        assert result["connected"] is False
+        assert result["reason"] == "wrong_password"
+        assert "wrong password" in result["message"]
+        assert "Secrets were required" in result["error"]
+        assert result["ap_restored"] is True
+        assert nm.ap is True
+        assert mode == "up"
+        assert seen and seen[0]["ap"] is False
+        assert seen[0]["mode"] == "down: joining"
+        assert t[0] < 5
+        assert "station: fail: wrong password" in status.read_text(encoding="utf-8")
+
+    def test_no_gateway_fails_and_restores(self, nm, tmp_path, monkeypatch):
+        nm.reach = False
+        result, seen, t, status, mode = self._join(nm, tmp_path, monkeypatch)
+        assert result["connected"] is False
+        assert result["reason"] == "no_internet"
+        assert "no internet" in result["message"]
+        assert result["ip"] is None
+        assert result["ap_restored"] is True
+        assert nm.ap is True
+        assert mode == "up"
+        assert seen and seen[0]["mode"] == "down: joining"
+        assert t[0] >= 55
+        assert "station: fail: no internet" in status.read_text(encoding="utf-8")
+
+    def test_a_refusing_gateway_counts_as_reachable(self):
+        """Connection refused means the host answered. An empty target does not.
+        Nothing here leaves the machine."""
+        import socket
+        import threading
+
+        from utils.netctl import _dns_answered, _tcp_answered, reach_gateway_or_dns
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        threading.Thread(target=listener.accept, daemon=True).start()
+        try:
+            assert _tcp_answered("127.0.0.1", listener.getsockname()[1], 1.0) is True
+        finally:
+            listener.close()
+        closed = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        closed.bind(("127.0.0.1", 0))
+        refused = closed.getsockname()[1]
+        closed.close()
+        assert _tcp_answered("127.0.0.1", refused, 1.0) is True
+        assert _tcp_answered("", 80, 0.2) is False
+        assert _dns_answered("", 0.2) is False
+        assert reach_gateway_or_dns(None, [], deadline=0) is False
+        assert reach_gateway_or_dns("127.0.0.1", []) is True
+
+    def test_usable_ipv4_rejects_link_local_and_empty(self):
+        from utils.netctl import usable_ipv4
+
+        assert usable_ipv4("192.168.1.50")
+        assert usable_ipv4("10.0.0.8")
+        assert not usable_ipv4("169.254.1.1")
+        assert not usable_ipv4("0.0.0.0")
+        assert not usable_ipv4("")
+
+    def test_boot_does_not_treat_link_local_as_a_station(self, nm):
+        from utils.netctl import ensure_reachable
+
+        nm.station = True
+        nm.ipv4 = "169.254.8.8"
+        t, clock, sleep = _clock()
+        result = ensure_reachable(
+            "WQM1-0001",
+            "river-cedar-42",
+            grace_s=0,
+            radio_wait_s=0,
+            sleep=sleep,
+            clock=clock,
+        )
+        assert result["mode"] == "ap"
+        assert result["ap"] is True
+        assert result["station_failure"] == "no address"
+
+    def test_boot_records_a_station_that_has_an_address(self, nm, tmp_path, monkeypatch):
+        import importlib.util
+        from pathlib import Path
+
+        from utils import netctl
+
+        nm.station = True
+        spec = importlib.util.spec_from_file_location(
+            "ap_fallback_station", Path(__file__).parent.parent / "scripts" / "wqm1-ap-fallback.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        monkeypatch.setattr(netctl, "_run", nm.run)
+        monkeypatch.setattr(mod, "resolve_credentials", lambda: ("WQM1-4FD8", "river-cedar-42"))
+        status = tmp_path / "wqm1-status.txt"
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
+        assert mod.main() == 0
+        text = status.read_text(encoding="utf-8")
+        assert "hotspot: station" in text
+        assert "station: ok 192.168.1.50" in text
+        assert "portal: down: station" in text
 
 
 class TestApFallbackScript:

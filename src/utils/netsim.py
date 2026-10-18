@@ -167,19 +167,40 @@ def join_network(
         if ssid not in st["saved"]:
             st["saved"].append(ssid)
         _write(st)
-        return {"ok": True, "connected": True, "ap_restored": False, "error": None}
-    reason = (
-        f"No network named {ssid} is in range."
-        if target is None
-        else "Secrets were required, but not provided (wrong password)."
-    )
+        return {
+            "ok": True,
+            "connected": True,
+            "ap_restored": False,
+            "error": None,
+            "message": None,
+            "reason": None,
+            "ip": "192.168.1.57",
+        }
+    if target is None:
+        reason = f"No network named {ssid} is in range."
+        message = "That network was not found. Move the unit closer to the router and scan again."
+        kind = "not_found"
+    else:
+        reason = "Secrets were required, but not provided (wrong password)."
+        message = (
+            "The password was not accepted (wrong password). Check it with the owner and try again."
+        )
+        kind = "wrong_password"
     restored = False
     if had_ap and ap_ssid and ap_passphrase:
         st["ap"] = True
         st["ap_ssid"] = ap_ssid
         restored = True
     _write(st)
-    return {"ok": False, "connected": False, "ap_restored": restored, "error": reason}
+    return {
+        "ok": False,
+        "connected": False,
+        "ap_restored": restored,
+        "error": reason,
+        "message": message,
+        "reason": kind,
+        "ip": None,
+    }
 
 
 def saved_wifi() -> list[str]:
