@@ -17,6 +17,7 @@ from platform_support.hostpins import (
     UnresolvedPinError,
     headerless_pins,
     orangepi_zero_3w_pins,
+    rpi5_pins,
     rpi_pins,
 )
 
@@ -197,6 +198,107 @@ class TestHeadlessBackend:
             HostGpio(
                 headerless_pins("arduino-uno-q"), rpi_module=MagicMock(), lgpio_module=MagicMock()
             )
+
+
+class _ChipTable:
+    """lgpio stand-in: chip index → kernel label, and GPIO{n} at offset n."""
+
+    def __init__(self, labels: dict[int, str], line_name: str | None = None):
+        self.labels = labels
+        self.line_name = line_name
+        self.closed: list[int] = []
+
+    def gpiochip_open(self, chip: int) -> int:
+        if chip not in self.labels:
+            raise OSError(f"no gpiochip{chip}")
+        return 100 + chip
+
+    def gpiochip_close(self, handle: int) -> None:
+        self.closed.append(handle)
+
+    def gpio_get_chip_info(self, handle: int) -> tuple[int, str, str]:
+        chip = handle - 100
+        return (54, f"gpiochip{chip}", self.labels[chip])
+
+    def gpio_get_line_info(self, handle: int, line: int) -> tuple[int, int, str, str]:
+        if self.line_name is not None and line == 17:
+            name = self.line_name
+        elif line >= 2:
+            name = f"GPIO{line}"
+        else:
+            name = "ID_SDA" if line == 0 else "ID_SCL"
+        return (line, 0, name, "")
+
+
+class TestPi5Backend:
+    """Pi 5 selects lgpio on the RP1. Other Pis stay on RPi.GPIO."""
+
+    def test_old_kernel_numbering_uses_chip_4_not_chip_0(self):
+        pins = rpi5_pins(lgpio_module=_ChipTable({0: "gpio-brcmstb@107d508500", 4: "pinctrl-rp1"}))
+        assert pins.backend == "rp1"
+        assert pins.source == "profile+rp1-label"
+        assert pins.line(17) == (4, 17)
+        assert pins.line(4) == (4, 4)
+        assert pins.i2c_bus == 1 and pins.spi_bus == 0
+
+    def test_trixie_numbering_uses_chip_0_when_that_is_the_rp1(self):
+        pins = rpi5_pins(lgpio_module=_ChipTable({0: "pinctrl-rp1", 10: "gpio-brcmstb"}))
+        assert pins.line(17) == (0, 17)
+        assert pins.line(21) == (0, 21)
+
+    def test_does_not_guess_when_the_label_is_missing(self):
+        with pytest.raises(RuntimeError, match="Refusing to guess"):
+            rpi5_pins(lgpio_module=_ChipTable({0: "gpio-brcmstb", 4: "gpio-brcmstb"}))
+
+    def test_refuses_a_mislabeled_chip_whose_line_names_are_not_the_header(self):
+        with pytest.raises(RuntimeError, match="Refusing to drive"):
+            rpi5_pins(lgpio_module=_ChipTable({0: "pinctrl-rp1"}, line_name="2712_BOOT_MISO"))
+
+    def test_without_lgpio_lines_stay_unresolved(self):
+        pins = rpi5_pins(None)
+        assert pins.backend == "rp1"
+        assert all(line is None for line in pins.lines.values())
+        with pytest.raises(RuntimeError, match="Pi 5 RP1 GPIO"):
+            HostGpio(pins, rpi_module=MagicMock(), lgpio_module=None)
+
+    def test_setup_and_alerts_use_lgpio_on_the_resolved_chip(self):
+        rpi = MagicMock()
+        lg = FakeLgpio()
+        pins = rpi5_pins(lgpio_module=_ChipTable({0: "gpio-brcmstb", 4: "pinctrl-rp1"}))
+        io = HostGpio(pins, rpi_module=rpi, lgpio_module=lg)
+        assert io.backend == "rp1"
+        io.setup_output(17)
+        io.setup_output(18, initial=True)
+        io.setup_input(21)
+        io.write(17, True)
+        assert io.read(21) is True
+        handle = io.claim_alert(16, MagicMock(), debounce_us=250)
+        assert ("open", 4) in lg.calls
+        assert ("claim_out", 104, 17, 0) in lg.calls
+        assert ("claim_out", 104, 18, 1) in lg.calls
+        assert ("write", 104, 17, 1) in lg.calls
+        assert ("read", 104, 21) in lg.calls
+        assert ("claim_alert", 104, 16, 1) in lg.calls
+        assert ("debounce", 104, 16, 250) in lg.calls
+        assert not rpi.method_calls
+        io.release(17)
+        assert ("free", 104, 17) in lg.calls
+        handle.cancel()
+        io.close()
+        assert ("close", 104) in lg.calls
+
+    def test_other_pis_still_call_rpi_gpio_on_chip_0(self):
+        rpi = MagicMock()
+        rpi.BCM = rpi.OUT = rpi.LOW = 0
+        lg = FakeLgpio()
+        pins = rpi_pins("rpi-4")
+        assert pins.backend == "rpi"
+        assert pins.line(17) == (0, 17)
+        io = HostGpio(pins, rpi_module=rpi, lgpio_module=lg)
+        io.setup_output(17)
+        rpi.setmode.assert_called_once()
+        rpi.setup.assert_called_once()
+        assert lg.calls == []
 
 
 class TestOpenGpio:

@@ -317,10 +317,9 @@ class Settings:
     # Host board. "auto" sniffs /proc/device-tree/model, then /proc/cpuinfo.
     # Explicit ids pin it (rpi-zero-w, rpi-zero-2w, rpi-3, rpi-4, rpi-5,
     # orangepi-zero-3w, arduino-uno-q, arduino-ventuno-q, generic-linux).
-    # rpi-5 is detected and unsupported: the header stack stays off. On
-    # boards where Linux can't reach the headers (the Arduino Q family, and
-    # that unsupported Pi 5), the firmware runs digital-first: RS485 probes
-    # + USB GPS + Wi-Fi sync.
+    # rpi-5 drives the RP1 with lgpio; the other Pis use RPi.GPIO. On boards
+    # where Linux can't reach the headers (the Arduino Q family), the
+    # firmware runs digital-first: RS485 probes + USB GPS + Wi-Fi sync.
     board: str = "auto"
 
     # Sensors

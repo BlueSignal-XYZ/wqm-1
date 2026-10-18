@@ -1,25 +1,41 @@
 # Raspberry Pi hosts
 
-Firmware 2.4.0 is not tied to the Pi Zero 2 W. One **32-bit (armhf) Raspberry
-Pi OS Lite (Trixie)** card is the image for every supported 40-pin Pi. The
-firmware reads the model at boot from `/proc/device-tree/model` (and, if that
-file is missing, from `/proc/cpuinfo`). The golden image does not bake a
-board name in. Build steps: [`tools/golden/`](../tools/golden/MANIFEST.md).
+Firmware 2.4.0 is not tied to the Pi Zero 2 W. Two master cards, both
+Raspberry Pi OS Lite (Trixie), and neither card has a board name baked in.
+The firmware reads the model at boot from `/proc/device-tree/model` (and, if
+that file is missing, from `/proc/cpuinfo`). Build steps:
+[`tools/golden/`](../tools/golden/MANIFEST.md).
+
+## Which card
+
+| Pi | Card |
+|---|---|
+| Zero W, Zero WH | **32-bit (armhf) only.** The 64-bit card has no kernel this board can boot. |
+| Zero 2 W | 32-bit (armhf) or 64-bit (arm64) |
+| 3B, 3B+, 3A+ | 32-bit (armhf) or 64-bit (arm64) |
+| 4 Model B, and the 400 | 32-bit (armhf) or 64-bit (arm64) |
+| 5, 500 | **64-bit (arm64) only.** The 32-bit card cannot run the Pi 5 kernel. |
+
+The 32-bit card is the one a Zero W must use, and that build is the same
+card as before: same overlay, same hotspot, same first boot. The 64-bit
+card is that overlay on the official arm64 Lite image. If a 64-bit userspace
+does come up on a Zero W, first boot logs an error and the firmware logs
+the same. A 32-bit userspace on a Pi 5 logs the mirror of that error.
 
 **Nothing in this page was measured on a WQM-1 with a Pi 3, Pi 4, Pi 5 or a
 cable.** The Zero 2 W remains the reference host that field units already
 run. Rows below say **unverified** wherever the number or the behaviour has
 not been seen on our hardware.
 
-## Supported and unsupported
+## What each profile does
 
-| Pi | Profile id | On the armhf Trixie image | Header stack | This firmware |
+| Pi | Profile id | Boot | Header stack | This firmware |
 |---|---|---|---|---|
-| Zero W, Zero WH | `rpi-zero-w` | `kernel.img`, 32-bit ARMv6 | BCM2835, `RPi.GPIO`, same overlays as the Zero 2 W | Supported in software. **Hardware unverified** on a cabled WQM-1. |
-| Zero 2 W | `rpi-zero-2w` | `kernel7.img` (32-bit) unless `arm_64bit=1` | Reference. Profile id, GPIO backend and pin map are unchanged. | No intended behaviour change. **This armhf card is unverified** against a field unit. |
-| 3B, 3B+, 3A+ | `rpi-3` | `kernel7.img`, 32-bit | Same 40-pin BCM numbering and `RPi.GPIO` | Supported in software. **Hardware unverified.** |
-| 4 Model B, and the 400 | `rpi-4` | 64-bit `kernel8.img` with a 32-bit userland. `arm_64bit` defaults to 1. From kernel 6.18 Raspberry Pi Ltd does not ship a 32-bit kernel for the BCM2711. | Same 40-pin BCM numbering and `RPi.GPIO` | Supported in software. **Hardware unverified.** The 400 is the same profile because the header GPIO matches; it is not a cabled target we have checked. |
-| 5, 500 | `rpi-5` | The BCM2712 cannot run a 32-bit kernel. A 32-bit userland can boot only under the 4K-page `kernel8.img`. `kernel_2712.img` is 16K pages and does not run armhf userland. | The header is the RP1. `RPi.GPIO` does not drive it, and this firmware's Pi path assumes gpiochip 0 line N is BCM N. | **Unsupported.** Detected so it is not reported as a Zero 2 W. The header stack stays off. No gpiochip symlink, no `rpi-lgpio` stand-in, no other workaround. |
+| Zero W, Zero WH | `rpi-zero-w` | armhf card: `kernel.img`, 32-bit ARMv6 | BCM2835, `RPi.GPIO`, same overlays as the Zero 2 W | Supported in software. **Hardware unverified** on a cabled WQM-1. |
+| Zero 2 W | `rpi-zero-2w` | Either card. On armhf, `kernel7.img` (32-bit) unless `arm_64bit=1` | Reference. Profile id, GPIO backend and pin map are unchanged. | No intended behaviour change. **This card is unverified** against a field unit. |
+| 3B, 3B+, 3A+ | `rpi-3` | Either card. On armhf, `kernel7.img`, 32-bit | Same 40-pin BCM numbering and `RPi.GPIO` | Supported in software. **Hardware unverified.** |
+| 4 Model B, and the 400 | `rpi-4` | Either card. The armhf image boots a 64-bit `kernel8.img` with a 32-bit userland (`arm_64bit` defaults to 1). From kernel 6.18 Raspberry Pi Ltd does not ship a 32-bit kernel for the BCM2711. | Same 40-pin BCM numbering and `RPi.GPIO` | Supported in software. **Hardware unverified.** The 400 is the same profile because the header GPIO matches; it is not a cabled target we have checked. |
+| 5, 500 | `rpi-5` | arm64 card. The BCM2712 cannot run a 32-bit kernel. `kernel_2712.img` is 16K pages and does not run armhf userland. | The header is the RP1. `lgpio` opens the gpiochip labelled `pinctrl-rp1` (gpiochip0 on Trixie, gpiochip4 on older kernels) and drives line N as BCM N. `RPi.GPIO` is not called. I2C, SPI and 1-Wire stay on the kernel overlays `setup.sh` already writes. | Supported in software. **Hardware unverified** on a cabled WQM-1. 5 V rail caution below. |
 
 A Pi we do not name (Pi 2, a Compute Module, a model string that only says
 "Raspberry Pi") still resolves to `rpi-zero-2w`. That fallback is deliberate:
@@ -39,8 +55,8 @@ are a CYW43455; the Zero 2 W is its own module on the same driver). The
 firmware never branches on the chip. `nmcli` is asked for an AP on `wlan0`
 either way.
 
-**Pi 3 and Pi 4 hotspot behaviour is unverified on hardware.** The Zero 2 W
-path is the one field units already use.
+**Pi 3, Pi 4 and Pi 5 hotspot behaviour is unverified on hardware.** The
+Zero 2 W path is the one field units already use.
 
 The captive-portal redirect is an `iptables` NAT rule. Trixie Lite does not
 install `iptables` (it ships nftables). `setup.sh` installs it. Without that
@@ -105,11 +121,16 @@ include no HAT:
 | 3A+ | 350 mA | 2.5 A | Under the note on paper. **Unverified.** |
 | 3B+ | 500 mA | 2.5 A | Under the note on paper. **Unverified.** |
 | 4B | 600 mA | 3.0 A | The recommended PSU is under 4 A, but the rail is shared and boot / Wi-Fi peaks are **unverified**. Do not hang USB devices off the Pi; the budget above does not include them. |
-| 5 | 800 mA | 5.0 A | The recommended PSU is **above** the schematic's 4 A note, before the shared loads. Another reason the 5 is unsupported. **Unverified** by meter. |
+| 5 | 800 mA | 5.0 A | The recommended PSU is **above** the schematic's 4 A note once USB loads are included. A headless unit with nothing on the Pi's USB ports is nearer the 800 mA column, which is under the note on paper, before the shared 3.3 V rail and the turbidity probe. **Not metered on a WQM-1. Unverified.** Do not hang USB devices off the Pi. |
 
 A WQM-1 install is headless: no HDMI, keyboard or mouse. Expect something
 nearer the bare-board column than a desktop. That sentence is a reading of
 the table, not a measurement.
+
+The Pi 5 row is a caution, not a bench result. Software on the arm64 card
+will drive the header. That does not mean the shared 5 V rail has been shown
+to hold a Pi 5. If a later meter reading shows the rail sagging, treat the
+Pi 5 as unsupported until the power path is changed.
 
 Source for the Pi columns: Raspberry Pi Ltd, "Power supply" / typical power
 requirements (their documentation, not a WQM-1 bench log). Source for the

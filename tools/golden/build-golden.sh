@@ -1,46 +1,144 @@
 #!/bin/bash
 # build-golden.sh — WQM-1 golden image, offline, on an x86_64 Linux box.
 #
-# One 32-bit (armhf) Raspberry Pi OS Lite Trixie card for every supported
-# Pi. The board name is not written into the image. setup.sh runs here only
-# to install the Pi package set (the same set for Zero W, Zero 2 W, Pi 3
-# and Pi 4). WQM1_BOARD_MODEL is a chroot-only stand-in because this build
-# has no device tree. On a real boot the firmware reads
-# /proc/device-tree/model. See MANIFEST.md.
+# One Raspberry Pi OS Lite Trixie card, either 32-bit (armhf, the default)
+# or 64-bit (arm64). The overlay is the same either way. The board name is
+# not written into the image. setup.sh runs here only to install the Pi
+# package set (the same set for every Pi). WQM1_BOARD_MODEL is a
+# chroot-only stand-in because this build has no device tree. On a real
+# boot the firmware reads /proc/device-tree/model. See MANIFEST.md.
 #
-#   sudo bash build-golden.sh /path/to/2026-10-06-raspios-trixie-armhf-lite.img /path/to/wqm-1
+#   sudo bash build-golden.sh BASE.img /path/to/wqm-1
+#   sudo bash build-golden.sh --arch arm64 BASE.img /path/to/wqm-1
+#
+# armhf is the only card a Zero W can boot. QEMU_CPU=arm1176 is set for
+# that build so pip selects ARMv6 wheels. The arm64 build does not set it.
 #
 # The host kernel may have no vfat, so the boot partition is edited with
 # mtools. Apt sources are rewritten to HTTPS for the build and restored
 # before the image is sealed.
 set -euo pipefail
 
+usage() {
+  echo "usage: sudo bash build-golden.sh [--arch armhf|arm64] BASE.img WQM1_SRC" >&2
+  echo "  armhf (default) writes ./wqm1-golden.img ; arm64 writes ./wqm1-golden-arm64.img" >&2
+  echo "  override the output path with OUT=" >&2
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "build-golden.sh must run as root" >&2
   exit 1
 fi
+
+ARCH="${ARCH:-armhf}"
+POSITIONAL=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --arch)
+      if [ "$#" -lt 2 ]; then
+        usage
+        exit 1
+      fi
+      ARCH="$2"
+      shift 2
+      ;;
+    --arch=*)
+      ARCH="${1#--arch=}"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      while [ "$#" -gt 0 ]; do
+        POSITIONAL+=("$1")
+        shift
+      done
+      ;;
+    -*)
+      echo "unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+if [ "${#POSITIONAL[@]}" -gt 0 ]; then
+  set -- "${POSITIONAL[@]}"
+else
+  set --
+fi
+
+case "$ARCH" in
+  armhf | arm64) ;;
+  *)
+    echo "arch must be armhf or arm64 (got ${ARCH})" >&2
+    usage
+    exit 1
+    ;;
+esac
+
 if [ "$#" -ne 2 ]; then
-  echo "usage: sudo bash build-golden.sh BASE.img WQM1_SRC" >&2
+  usage
   exit 1
 fi
 
 BASE="$1"
 SRC="$2"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT="${OUT:-$PWD/wqm1-golden.img}"
-R="${R:-/mnt/wqm1root}"
-# ARMv6: a wheel built for ARMv7 traps, and pip must pick linux_armv6l.
-export QEMU_CPU=arm1176
+if [ "$ARCH" = "arm64" ]; then
+  OUT="${OUT:-$PWD/wqm1-golden-arm64.img}"
+  BINFMT="qemu-aarch64"
+  unset QEMU_CPU || true
+else
+  OUT="${OUT:-$PWD/wqm1-golden.img}"
+  BINFMT="qemu-arm"
+  # ARMv6: a wheel built for ARMv7 traps, and pip must pick linux_armv6l.
+  export QEMU_CPU=arm1176
+fi
+# Per-arch mount point so a late cleanup from one build cannot unmount the other.
+R="${R:-/mnt/wqm1root-$ARCH}"
 L1=""
 L2=""
 
-if [ ! -e /proc/sys/fs/binfmt_misc/qemu-arm ]; then
-  if [ ! -f /usr/lib/binfmt.d/qemu-arm.conf ]; then
-    echo "qemu-arm binfmt is not registered and qemu-arm.conf is missing" >&2
+BINFMT_CONF="/usr/lib/binfmt.d/${BINFMT}.conf"
+if [ ! -e "/proc/sys/fs/binfmt_misc/${BINFMT}" ]; then
+  if [ ! -f "$BINFMT_CONF" ]; then
+    echo "$BINFMT binfmt is not registered and $BINFMT_CONF is missing" >&2
     exit 1
   fi
-  cat /usr/lib/binfmt.d/qemu-arm.conf > /proc/sys/fs/binfmt_misc/register
+  # The kernel's binfmt_misc directory can exist before the filesystem is
+  # mounted. register is what shows it is actually mounted.
+  if [ ! -e /proc/sys/fs/binfmt_misc/register ]; then
+    mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc
+  fi
+  cat "$BINFMT_CONF" > /proc/sys/fs/binfmt_misc/register
 fi
+
+# $@ is the env command (including the program). armhf passes
+# QEMU_CPU=arm1176 through sudo; arm64 must not, or the aarch64
+# interpreter is asked to emulate an ARMv6 CPU.
+chroot_env() {
+  if [ "$ARCH" = "armhf" ]; then
+    chroot "$R" env \
+      SUDO_USER=pi \
+      DEBIAN_FRONTEND=noninteractive \
+      LC_ALL=C.UTF-8 \
+      QEMU_CPU=arm1176 \
+      "$@"
+  else
+    chroot "$R" env \
+      SUDO_USER=pi \
+      DEBIAN_FRONTEND=noninteractive \
+      LC_ALL=C.UTF-8 \
+      "$@"
+  fi
+}
 
 cleanup() {
   ec=$?
@@ -96,10 +194,22 @@ if [ -f "$R/etc/apt/sources.list" ]; then
   cp -a "$R/etc/apt/sources.list" "$APT_ORIG/"
 fi
 cp -a "$R/etc/apt/sources.list.d" "$APT_ORIG/"
+apt_files=()
+for f in "$R"/etc/apt/sources.list.d/*.sources "$R"/etc/apt/sources.list; do
+  if [ -f "$f" ]; then
+    apt_files+=("$f")
+  fi
+done
+if [ "${#apt_files[@]}" -eq 0 ]; then
+  echo "no apt sources in the base image" >&2
+  exit 1
+fi
 sed -i \
   -e 's|http://raspbian.raspberrypi.com/raspbian/|https://archive.raspbian.org/raspbian/|' \
   -e 's|http://archive.raspberrypi.com/debian/|https://archive.raspberrypi.com/debian/|' \
-  "$R"/etc/apt/sources.list.d/*.sources
+  -e 's|http://deb.debian.org/|https://deb.debian.org/|' \
+  -e 's|http://security.debian.org/|https://security.debian.org/|' \
+  "${apt_files[@]}"
 
 # Firmware tree for this install only. Removed before the image is sealed.
 cp -a "$SRC" "$R/opt/wqm-1-src"
@@ -108,11 +218,7 @@ chroot "$R" usermod -s /bin/bash pi
 chroot "$R" apt-get update
 # "Raspberry Pi" only selects the direct-header package path. It is not a
 # model, and setup.sh does not write it down.
-chroot "$R" env \
-  SUDO_USER=pi \
-  DEBIAN_FRONTEND=noninteractive \
-  LC_ALL=C.UTF-8 \
-  QEMU_CPU=arm1176 \
+chroot_env \
   WQM1_BOARD_MODEL="Raspberry Pi" \
   bash -c 'cd /opt/wqm-1-src && bash ./setup.sh'
 # The captive-portal redirect needs iptables. setup.sh installs it.
@@ -128,17 +234,14 @@ printf '%s\n' '[main]' 'WirelessEnabled=true' > "$R/var/lib/NetworkManager/Netwo
 if ! grep -q cfg80211.ieee80211_regdom "$R/boot/firmware/cmdline.txt"; then
   sed -i '1s/$/ cfg80211.ieee80211_regdom=US/' "$R/boot/firmware/cmdline.txt"
 fi
-chroot "$R" env \
-  SUDO_USER=pi \
-  DEBIAN_FRONTEND=noninteractive \
-  LC_ALL=C.UTF-8 \
-  QEMU_CPU=arm1176 \
+chroot_env \
   bash -c 'cd /opt/wqm-1-src && bash ./setup.sh --golden'
 
 # dpkg's format string. Single quotes so bash does not expand it.
 # shellcheck disable=SC2016
 chroot "$R" dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > "$OUT.packages-dpkg.tsv"
-chroot "$R" python3 -m pip list --path /usr/local/lib/python3.13/dist-packages --format=freeze \
+py_local="$(chroot "$R" python3 -c 'import sys; print("/usr/local/lib/python%d.%d/dist-packages" % sys.version_info[:2])')"
+chroot "$R" python3 -m pip list --path "$py_local" --format=freeze \
   > "$OUT.packages-pip-local.txt"
 
 rm -rf "$R/opt/wqm-1-src"
@@ -175,9 +278,16 @@ for d in sys proc dev/pts dev; do
 done
 umount "$R"
 
-# 600000 x 4 KiB rootfs (~2.3 GiB). The image is ~3.0 GB and grows on first boot.
+# 600000 x 4 KiB rootfs (~2.3 GiB) is what the armhf card fits, and the
+# image is ~3.0 GB and grows on first boot. The arm64 root is larger;
+# resize2fs -P is the smallest size that filesystem will accept.
 NB=600000
 e2fsck -fy "$L2"
+MIN_BLOCKS="$(resize2fs -P "$L2" 2>/dev/null | awk -F': ' '/minimum size/ {print $2}')"
+if [ -n "${MIN_BLOCKS:-}" ] && [ "$MIN_BLOCKS" -gt "$NB" ]; then
+  NB=$((MIN_BLOCKS + 16384))
+fi
+echo "rootfs blocks: $NB (minimum ${MIN_BLOCKS:-unknown})"
 resize2fs "$L2" "$NB"
 zerofree "$L2"
 e2fsck -fy "$L2"

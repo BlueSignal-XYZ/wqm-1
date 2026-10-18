@@ -6,7 +6,10 @@ The WQM-1 firmware started life on the Raspberry Pi Zero 2 W, where Linux
 owns the 40-pin header directly (ADS1115 over kernel I2C, DS18B20 over
 w1-gpio, SX1262 over spidev, relays/LEDs/fan over RPi.GPIO). Zero W, Pi 3
 and Pi 4 share that header and that GPIO block, so they use the same
-``rpi`` backend; only the reported profile id changes. The Arduino UNO Q —
+``rpi`` backend; only the reported profile id changes. The Pi 5's header
+is the RP1, which RPi.GPIO cannot drive, so that profile uses ``lgpio``
+on the ``pinctrl-rp1`` gpiochip (``rp1``) and leaves every other Pi on
+``RPi.GPIO``. The Arduino UNO Q —
 and the upcoming VENTUNO Q — split the machine in two: Debian runs on the
 Qualcomm MPU, but the Arduino headers (analog pins, Qwiic I2C, SPI, GPIO)
 belong to the STM32 MCU, reachable from Linux only through Arduino's Bridge
@@ -21,13 +24,15 @@ chlorine, ORP — the full parameter set), USB GPS, and Wi-Fi cloud sync all
 live on the Linux side and need no header at all. Header peripherals
 (analog probes, LoRa, relays, LEDs, fan) come later via a Bridge companion
 sketch on the MCU — see docs/platforms.md. The Raspberry Pi 5 is named so
-it is not reported as a Zero 2 W, and it is not given the header stack:
-its GPIO is the RP1, which this firmware does not drive.
+it is not reported as a Zero 2 W. Its header stack is on, through lgpio
+on the RP1, and the 5 V rail caution in docs/raspberry-pi.md still applies:
+the schematic's 4 A note has not been metered on a WQM-1.
 """
 
 from __future__ import annotations
 
 import logging
+import platform
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +70,7 @@ class BoardProfile:
     notes: str = ""
     #: How the firmware drives the HAT's lines on this host — see
     #: platform_support/gpio.py. "rpi" is RPi.GPIO (+ lgpio for alerts),
+    #: "rp1" is lgpio on the Pi 5's RP1 gpiochip (line N is BCM N),
     #: "gpiochip" is lgpio on the kernel's gpiochips with the BCM numbers
     #: translated by platform_support/hostpins.py, "none" means the headers
     #: are not Linux's to drive.
@@ -80,6 +86,7 @@ def _pi(
     notes: str,
     *,
     supported: bool = True,
+    gpio_backend: str = "rpi",
 ) -> BoardProfile:
     return BoardProfile(
         id=profile_id,
@@ -87,7 +94,7 @@ def _pi(
         family="raspberry-pi",
         has_direct_headers=supported,
         notes=notes,
-        gpio_backend="rpi" if supported else "none",
+        gpio_backend=gpio_backend if supported else "none",
         supported=supported,
     )
 
@@ -122,10 +129,13 @@ PROFILES: dict[str, BoardProfile] = {
     "rpi-5": _pi(
         "rpi-5",
         "Raspberry Pi 5",
-        "Unsupported. The BCM2712 cannot run a 32-bit kernel, and the 40-pin "
-        "header is the RP1, which RPi.GPIO does not drive. No workaround is "
-        "installed; the header stack stays off. See docs/raspberry-pi.md.",
-        supported=False,
+        "64-bit card only. The 40-pin header is the RP1; lgpio drives the "
+        "gpiochip labelled pinctrl-rp1, and line N is BCM N. RPi.GPIO is not "
+        "used on this profile. 5 V rail caution: the schematic notes 4 A max "
+        "on the shared rail, and Raspberry Pi Ltd recommends a 5 A supply "
+        "when USB loads are attached. Do not attach USB devices. Not metered "
+        "on a WQM-1. Unverified. See docs/raspberry-pi.md.",
+        gpio_backend="rp1",
     ),
     "orangepi-zero-3w": BoardProfile(
         id="orangepi-zero-3w",
@@ -174,11 +184,12 @@ PROFILES: dict[str, BoardProfile] = {
     ),
 }
 
-# Profile ids whose 40-pin header is the Pi's: gpiochip0 line N is BCM N.
+# Profile ids whose 40-pin header is driven by RPi.GPIO: gpiochip0 line N
+# is BCM N. The Pi 5 is not in this set; its header is the RP1.
 RPI_DIRECT_HEADER_IDS: frozenset[str] = frozenset(
     profile_id
     for profile_id, profile in PROFILES.items()
-    if profile.family == "raspberry-pi" and profile.has_direct_headers
+    if profile.family == "raspberry-pi" and profile.gpio_backend == "rpi"
 )
 
 # Substring of /proc/device-tree/model -> profile id, for hosts that are not
@@ -205,7 +216,8 @@ def _raspberry_pi_profile(compact: str) -> str:
     A Pi we do not have a specific row for (Pi 2, a Compute Module, a model
     string that only says "Raspberry Pi") returns ``rpi-zero-2w``. That is
     the long-standing fallback: an OTA must not demote a working analog unit
-    because a model string changed shape. Pi 5 is specific, and unsupported.
+    because a model string changed shape. Pi 5 is specific: the RP1 backend,
+    not this fallback.
     """
     # 500 before 5, 400 before 4: the shorter token is a prefix of the longer.
     if re.search(r"raspberrypi500(?!\d)", compact) or re.search(r"raspberrypi5(?!\d)", compact):
@@ -282,12 +294,27 @@ def _read_cpuinfo(cpuinfo_path: str) -> tuple[str, str]:
     return board, revision
 
 
-def _with_support_warning(profile: BoardProfile) -> BoardProfile:
+def _finish(profile: BoardProfile, machine: str | None = None) -> BoardProfile:
     if not profile.supported:
         logger.warning(
             "Board %s (%s) is not supported — header stack stays off",
             profile.id,
             profile.name,
+        )
+    mach = platform.machine() if machine is None else machine
+    # A Zero W cannot run a 64-bit userspace. The arm64 card has no kernel
+    # for it, so this is the log for the case where one is up anyway.
+    if profile.id == "rpi-zero-w" and mach in {"aarch64", "arm64"}:
+        logger.error(
+            "64-bit userspace on a Pi Zero W. That board can only run the 32-bit (armhf) card."
+        )
+    if profile.id == "rpi-5":
+        logger.warning(
+            "Pi 5 5 V rail caution: the schematic notes +5V output 4 A max, "
+            "shared with the 3.3 V regulator and the turbidity probe. "
+            "Raspberry Pi Ltd recommends a 5 A supply for a Pi 5, which is "
+            "above that note once USB loads are included. Do not attach USB "
+            "devices to the Pi. Not metered on a WQM-1. Unverified."
         )
     return profile
 
@@ -296,6 +323,7 @@ def detect_board(
     override: str = "auto",
     model_path: str = DEVICE_TREE_MODEL,
     cpuinfo_path: str = CPUINFO_PATH,
+    machine: str | None = None,
 ) -> BoardProfile:
     """
     Resolve the board profile.
@@ -312,7 +340,7 @@ def detect_board(
     if override and override != "auto":
         profile = PROFILES.get(override)
         if profile is not None:
-            return _with_support_warning(profile)
+            return _finish(profile, machine)
         logger.warning("Unknown board '%s' in config — falling back to auto", override)
 
     model = _read_model(model_path)
@@ -323,7 +351,7 @@ def detect_board(
             profile_id = "rpi-zero-2w"
         else:
             logger.info("Detected board: %s (%r)", profile_id, model)
-        return _with_support_warning(PROFILES[profile_id])
+        return _finish(PROFILES[profile_id], machine)
 
     # An empty device-tree file is "we looked, it said nothing" — the same
     # fallback as before, without consulting whatever cpuinfo this host has.
@@ -336,10 +364,10 @@ def detect_board(
         profile_id = _profile_from_model(board_model.lower())
         if profile_id is not None:
             logger.info("Detected board from cpuinfo: %s (%r)", profile_id, board_model)
-            return _with_support_warning(PROFILES[profile_id])
+            return _finish(PROFILES[profile_id], machine)
     if revision:
         profile_id = _profile_from_revision(revision)
         if profile_id is not None:
             logger.info("Detected board from cpuinfo revision %s: %s", revision, profile_id)
-            return _with_support_warning(PROFILES[profile_id])
+            return _finish(PROFILES[profile_id], machine)
     return PROFILES["rpi-zero-2w"]

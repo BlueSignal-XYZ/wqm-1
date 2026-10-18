@@ -244,7 +244,7 @@ rules:
 #   rpi-zero-2w        Raspberry Pi Zero 2 W — the reference host
 #   rpi-3              Raspberry Pi 3 (3B, 3B+, 3A+)
 #   rpi-4              Raspberry Pi 4 Model B (and the 400)
-#   rpi-5              Raspberry Pi 5 — detected, unsupported, header stack off
+#   rpi-5              Raspberry Pi 5 — arm64 card, GPIO via lgpio on the RP1
 #   orangepi-zero-3w   Orange Pi Zero 3W — same header, GPIO via lgpio;
 #                      its pin/bus overrides live in /etc/bluesignal/host-pins.yaml
 #   arduino-uno-q / arduino-ventuno-q / generic-linux — digital-first (no headers)

@@ -7,7 +7,9 @@
 #
 # lgpio builds from source here (pip pulls the lg library in with it); it
 # needs swig and python3-dev, which setup.sh installs first.
-lgpio
+# Same pin as requirements-rpi.txt: the real gpiochip library, not the
+# unrelated 0.0.0.2 wheel piwheels also publishes under this name.
+lgpio==0.2.2.0
 smbus2==0.6.1
 spidev==3.8
 w1thermsensor==2.3.0

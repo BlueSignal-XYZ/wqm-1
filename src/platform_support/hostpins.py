@@ -22,8 +22,10 @@ Two sources feed the table, in increasing authority:
    says what its pins are; we do not infer them from a different model.
 
 A resolved table is a ``HostPins``: bus numbers, the GPS UART, and
-``lines[bcm] = (chip, line)``. On the Raspberry Pi the map is the identity
-(chip 0, line = BCM) and nothing here changes a field unit's behaviour.
+``lines[bcm] = (chip, line)``. On a Raspberry Pi other than the Pi 5 the
+map is the identity (chip 0, line = BCM) and nothing here changes a field
+unit's behaviour. On the Pi 5 the line is still BCM N, and the chip is
+whichever gpiochip the kernel labels ``pinctrl-rp1``.
 """
 
 from __future__ import annotations
@@ -131,7 +133,7 @@ class HostPins:
     """Resolved host facts for the active board."""
 
     board_id: str
-    backend: str  # "rpi" | "gpiochip" | "none"
+    backend: str  # "rpi" | "rp1" | "gpiochip" | "none"
     i2c_bus: int
     spi_bus: int
     spi_device: int
@@ -187,6 +189,111 @@ def rpi_pins(board_id: str = "rpi-zero-2w") -> HostPins:
         soc_names={bcm: f"GPIO{bcm}" for bcm in PI_HEADER_BCM_TO_PHYSICAL},
         lines={bcm: (0, bcm) for bcm in PI_HEADER_BCM_TO_PHYSICAL},
         source="profile",
+    )
+
+
+# Raspberry Pi Ltd's name for the RP1 pin controller that owns the 40-pin
+# header. Kernels before the gpiochip reorder (raspberrypi/linux #6144)
+# number it gpiochip4; Trixie (6.12+, including the 6.18 image this card
+# is built from) numbers it gpiochip0. The label is the stable fact.
+# Offset N on that chip is BCM N: the Pi 5 device tree names offset 17
+# "GPIO17". See docs/raspberry-pi.md.
+_RP1_LABEL = "pinctrl-rp1"
+_RP1_CHECK_LINE = 17
+_RP1_CHECK_NAME = "GPIO17"
+
+
+def _info_text(info: Any, index: int, attr: str) -> str:
+    if isinstance(info, (tuple, list)):
+        if len(info) <= index:
+            return ""
+        return str(info[index]).strip()
+    value = getattr(info, attr, "")
+    return str(value).strip()
+
+
+def find_rp1_gpiochip(lgpio_module: Any, max_chips: int = 16) -> int:
+    """Index of the gpiochip whose kernel label is ``pinctrl-rp1``.
+
+    Refuses to guess an index. A line name at offset 17 that is present and
+    is not ``GPIO17`` is also a refusal: that chip is not the header map
+    this firmware drives.
+    """
+    if lgpio_module is None:
+        raise RuntimeError("lgpio not installed — cannot find the RP1 gpiochip")
+    seen: list[str] = []
+    line_info = getattr(lgpio_module, "gpio_get_line_info", None)
+    for chip in range(max_chips):
+        handle = None
+        try:
+            handle = lgpio_module.gpiochip_open(chip)
+            info = lgpio_module.gpio_get_chip_info(handle)
+        except Exception:  # noqa: BLE001 — a chip that cannot be opened is skipped
+            if handle is not None:
+                with contextlib.suppress(Exception):
+                    lgpio_module.gpiochip_close(handle)
+            continue
+        label = _info_text(info, 2, "label")
+        seen.append(f"{chip}:{label or '?'}")
+        if label != _RP1_LABEL:
+            if handle is not None:
+                with contextlib.suppress(Exception):
+                    lgpio_module.gpiochip_close(handle)
+            continue
+        if line_info is not None:
+            try:
+                named = line_info(handle, _RP1_CHECK_LINE)
+            except Exception:  # noqa: BLE001 — unnamed chips are accepted on the label alone
+                named = None
+            if named is not None:
+                name = _info_text(named, 2, "name")
+                if name and name not in {_RP1_CHECK_NAME, "-"}:
+                    if handle is not None:
+                        with contextlib.suppress(Exception):
+                            lgpio_module.gpiochip_close(handle)
+                    raise RuntimeError(
+                        f"gpiochip{chip} is labelled {_RP1_LABEL} but line "
+                        f"{_RP1_CHECK_LINE} is named {name!r}, not {_RP1_CHECK_NAME}. "
+                        "Refusing to drive it."
+                    )
+        if handle is not None:
+            with contextlib.suppress(Exception):
+                lgpio_module.gpiochip_close(handle)
+        return chip
+    detail = f": {', '.join(seen)}" if seen else ""
+    raise RuntimeError(
+        "Pi 5 RP1 gpiochip not found "
+        f"(looked for label {_RP1_LABEL} on chips 0..{max_chips - 1}{detail}). "
+        "Refusing to guess a chip index."
+    )
+
+
+def rpi5_pins(lgpio_module: Any = None) -> HostPins:
+    """Pi 5: BCM N is line N on the RP1. The chip index comes from the label.
+
+    With no lgpio module the lines stay unresolved. Guessing gpiochip 0 or
+    gpiochip 4 would drive the SoC pins on a kernel that numbered them the
+    other way.
+    """
+    chip: int | None = None
+    source = "profile"
+    if lgpio_module is not None:
+        chip = find_rp1_gpiochip(lgpio_module)
+        source = "profile+rp1-label"
+    lines: dict[int, tuple[int, int] | None] = {
+        bcm: None if chip is None else (chip, bcm) for bcm in PI_HEADER_BCM_TO_PHYSICAL
+    }
+    return HostPins(
+        board_id="rpi-5",
+        backend="rp1",
+        i2c_bus=1,
+        spi_bus=0,
+        spi_device=0,
+        gps_port="/dev/serial0",
+        w1_pin="GPIO4",
+        soc_names={bcm: f"GPIO{bcm}" for bcm in PI_HEADER_BCM_TO_PHYSICAL},
+        lines=lines,
+        source=source,
     )
 
 
@@ -447,6 +554,14 @@ def pins_for_board(
     sysfs_root: str = "/sys/class/gpio",
 ) -> HostPins:
     """The HostPins for a profile id (see board.PROFILES)."""
+    if board_id == "rpi-5":
+        lg = lgpio_module
+        if lg is _MISSING:
+            try:
+                import lgpio as lg  # type: ignore[no-redef]
+            except ImportError:
+                lg = None
+        return rpi5_pins(lgpio_module=lg)
     if board_id == "orangepi-zero-3w":
         lg = lgpio_module
         if lg is _MISSING:

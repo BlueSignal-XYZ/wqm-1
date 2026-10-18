@@ -1,11 +1,12 @@
 #!/bin/bash
 # WQM-1 Firmware Setup Script
-# Reference host: a 40-pin Raspberry Pi (Zero W, Zero 2 W, Pi 3, Pi 4) on
-# one 32-bit Raspberry Pi OS Lite image. See docs/raspberry-pi.md.
+# Reference host: a 40-pin Raspberry Pi. The Zero W needs the 32-bit card;
+# Zero 2 W, Pi 3 and Pi 4 take either card; a Pi 5 takes the 64-bit card
+# and drives the RP1 with lgpio. See docs/raspberry-pi.md.
 # Full direct-header stack also on the Orange Pi Zero 3W (Allwinner A733,
 # Pi-layout 40-pin header; GPIO through lgpio on the kernel gpiochips).
 # Runs digital-first on Debian hosts without direct header access
-# (Arduino UNO Q / VENTUNO Q, and a Raspberry Pi 5 — detected, unsupported).
+# (Arduino UNO Q / VENTUNO Q).
 # See docs/platforms.md.
 set -euo pipefail
 
@@ -63,10 +64,12 @@ fi
 
 # --- Host board detection (mirrors src/platform_support/board.py) ---
 # Raspberry Pi hosts get the full direct-header stack (I2C/SPI/1-Wire/GPIO,
-# boot overlays, RPi Python libs). The package set is the same for Zero W,
-# Zero 2 W, Pi 3 and Pi 4; the firmware names the model at boot from the
-# device tree. The Orange Pi Zero 3W gets the same stack through the
-# kernel's gpiochips (lgpio) with its own overlay file and console.
+# boot overlays, the Pi Python libs). The package set is the same for every
+# Pi, including the Pi 5: RPi.GPIO for the boards that use it, lgpio for
+# alerts and for the Pi 5's RP1. The firmware names the model at boot from
+# the device tree and picks the GPIO backend then. The Orange Pi Zero 3W
+# gets the same stack through the kernel's gpiochips (lgpio) with its own
+# overlay file and console.
 # Anything else — Arduino UNO Q / VENTUNO Q, generic Debian — runs
 # digital-first: RS485-USB probes, USB GPS, Wi-Fi sync.
 #
