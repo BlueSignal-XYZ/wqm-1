@@ -223,6 +223,14 @@ chroot_env \
   bash -c 'cd /opt/wqm-1-src && bash ./setup.sh'
 # iptables deletes a legacy captive NAT rule. setup.sh installs it.
 chroot "$R" dpkg -s iptables >/dev/null
+# Setup AP: hostapd beacons, dnsmasq serves the captive DHCP/DNS.
+# The distro units are masked so they cannot bind wlan0 or port 53.
+chroot "$R" dpkg -s hostapd >/dev/null
+chroot "$R" dpkg -s dnsmasq >/dev/null
+[ "$(readlink -f "$R/etc/systemd/system/hostapd.service")" = "/dev/null" ]
+[ "$(readlink -f "$R/etc/systemd/system/dnsmasq.service")" = "/dev/null" ]
+[ -f "$R/etc/systemd/system/wqm1-setup-hostapd.service" ]
+[ -f "$R/etc/systemd/system/wqm1-setup-dnsmasq.service" ]
 
 install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-firstboot" "$R/usr/local/sbin/"
 install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-firstboot.service" "$R/etc/systemd/system/"

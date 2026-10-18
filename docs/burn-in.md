@@ -32,7 +32,8 @@ BURN-IN: PASS
 
 `FAIL` names the check number and which of these broke:
 
-- the NetworkManager connection `wqm1-setup-ap` was not active
+- hostapd was not beaconing (`hostapd_cli status` did not report
+  `state=ENABLED`)
 - the ADS1115 did not answer on I2C
 - `vcgencmd get_throttled` showed a current undervoltage, frequency cap,
   or throttle (a since-boot flag alone does not fail)

@@ -47,18 +47,40 @@ not from a boot on our bench.
 
 ## Setup hotspot
 
-The setup AP is NetworkManager's hotspot on **`wlan0`**, and it is never up
-at the same time as a station link. `brcmfmac` is what Raspberry Pi OS binds
-to the onboard radio of each supported Pi. The chip is not the same part
-(Zero W and Pi 3B are an older Broadcom SDIO radio; Pi 3B+, Pi 3A+ and Pi 4
-are a CYW43455; the Zero 2 W is its own module on the same driver). The
-firmware never branches on the chip. `nmcli` is asked for an AP on `wlan0`
-either way, with one security profile every chip has to accept: WPA2-PSK
-only (`proto=rsn`, CCMP, PMF off) and Wi-Fi power save disabled. Firmware
-7.45.98 (TOB) on the Zero W's BCM43430/1 rejects NetworkManager's default
-hotspot (the kernel logs `brcmf_vif_set_mgmt_ie: vndr ie set error : -52`
-and the SSID blinks). 7.45.96.s1 accepts both; the image uses the stricter
-set. The address is `192.168.4.1` before the profile is activated.
+The setup AP is **hostapd** on **`wlan0`**, and it is never up at the same
+time as a station link. `brcmfmac` is what Raspberry Pi OS binds to the
+onboard radio of each supported Pi. The chip is not the same part (Zero W
+and Pi 3B are an older Broadcom SDIO radio; Pi 3B+, Pi 3A+ and Pi 4 are a
+CYW43455; the Zero 2 W is its own module on the same driver). The firmware
+never branches on the chip. hostapd is asked for an AP on `wlan0` either
+way, with one security profile: WPA2-PSK only (`wpa=2`,
+`wpa_key_mgmt=WPA-PSK`, `rsn_pairwise=CCMP`, `ieee80211w=0`), channel 6,
+and Wi-Fi power save disabled. The address is `192.168.4.1/24`, with
+dnsmasq bound to `wlan0` for DHCP `192.168.4.10-254` and the captive DNS.
+
+NetworkManager cannot be configured to offer that profile. In 1.52.1,
+`nm_supplicant_config_add_setting_wireless_security` appends
+`WPA-PSK-SHA256` whenever `key-mgmt` is `wpa-psk` and the supplicant
+reports PMF support. `802-11-wireless-security.pmf=disable` (the value
+this image used to write) sets `ieee80211w=0` and, in AP mode, drops SAE
+only. `brcmf_configure_wpaie` in `brcmfmac/cfg80211.c` labels the SHA256
+PSK AKM `RSN_AKM_MFP_PSK` and programs `WPA2_AUTH_PSK_SHA256`. The
+firmware comment there is that MFP-required is accepted only together
+with that SHA256 (or SAE) suite. BCM43430/1 firmware 7.45.98 implements
+the SHA256 AKM with MFP. With `ieee80211w=0` the beacon still comes up
+(`COMMISSION READY`, portal on port 80), and a phone that selects
+PSK-SHA256 fails the handshake and says the password is wrong. hostapd
+is what can advertise `WPA-PSK` alone. While it is up, `wlan0` is
+`nmcli device set wlan0 managed no`. A join stops hostapd and dnsmasq,
+flushes `192.168.4.1`, and sets `managed yes` before the existing
+`nmcli` join. A failed join raises the same hostapd AP again.
+
+Firmware 7.45.98 (TOB) also rejects NetworkManager's default hotspot
+(WPA+RSN and TKIP: `brcmf_vif_set_mgmt_ie: vndr ie set error : -52`).
+That was the earlier failure, where the SSID blinked. This one leaves
+the SSID up and rejects the passphrase. No phone handshake was captured
+on the bench; the journal showed `key_mgmt 'WPA-PSK WPA-PSK-SHA256'`
+and `ieee80211w 0`.
 
 Every boot rewrites `wqm1-status.txt` on the boot partition. The first line
 is `COMMISSION: READY` or `COMMISSION: FAIL: <reason>`. A ten-minute bench

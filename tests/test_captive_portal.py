@@ -182,15 +182,23 @@ class TestProbeResponses:
 
 
 class TestDnsmasqConfig:
-    def test_shared_mode_wildcard_and_option_114(self, tmp_path):
-        text = dnsmasq_shared_config()
-        assert "address=/#/192.168.4.1\n" in text
-        assert 'dhcp-option=114,"http://192.168.4.1/setup/"\n' in text
+    def test_dedicated_dnsmasq_keeps_wildcard_and_option_114(self, tmp_path):
+        from utils.captive_portal import DNSMASQ_CONF, dnsmasq_ap_config
+
+        shared = dnsmasq_shared_config()
+        text = dnsmasq_ap_config()
+        assert "address=/#/192.168.4.1\n" in shared
+        assert 'dhcp-option=114,"http://192.168.4.1/setup/"\n' in shared
+        assert shared in text
+        assert "interface=wlan0\n" in text
+        assert "bind-interfaces\n" in text
+        assert "listen-address=192.168.4.1\n" in text
+        assert "dhcp-range=192.168.4.10,192.168.4.254,255.255.255.0,12h\n" in text
+        assert "dhcp-option=3,192.168.4.1\n" in text
+        assert "dhcp-option=6,192.168.4.1\n" in text
         assert ":8080" not in text
-        assert "dnsmasq-shared.d" in str(
-            __import__("utils.captive_portal", fromlist=["DNSMASQ_CONF"]).DNSMASQ_CONF
-        )
-        path = tmp_path / "dnsmasq-shared.d" / "wqm1-captive.conf"
+        assert str(DNSMASQ_CONF) == "/run/wqm1/dnsmasq-ap.conf"
+        path = tmp_path / "dnsmasq-ap.conf"
         written = ensure_dnsmasq_conf(path)
         assert written["ok"] is True
         assert path.read_text(encoding="utf-8") == text

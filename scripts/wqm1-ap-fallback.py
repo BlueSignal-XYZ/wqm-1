@@ -8,7 +8,9 @@ The service does not wait for ``bluesignal-wqm`` and does not wait for
 unconfigured unit has no network for that target to announce. This script
 unblocks the radio, brings ``wlan0`` up, waits out the station grace period
 only when a Wi-Fi profile is actually saved, and retries the hotspot if the
-interface is still down. An installer with a phone then gets the captive
+interface is still down. The hotspot is hostapd (plain WPA-PSK), with
+dnsmasq on 192.168.4.1, not a NetworkManager shared connection. An
+installer with a phone then gets the captive
 sheet at http://192.168.4.1/setup/ (port 80). The Service Window on 8080
 stays up for a unit already on the site LAN. At a well head with no Wi-Fi,
 or with a card flashed for a network that does not exist here, the hotspot
@@ -66,11 +68,10 @@ def service_window_port(config_path: str = "/etc/bluesignal/config.yaml") -> int
 def hotspot_failure_status(detail: object, passphrase: str) -> str:
     """``failed: <reason>`` for wqm1-status.txt.
 
-    The reason is the NetworkManager / wpa_supplicant line ``nmcli`` returned
-    (``Error: Connection activation failed: ...``). The passphrase is removed
-    so a secret echoed by nmcli cannot land on the boot partition. The word
-    "passphrase" is not used in this line: the publisher refuses a file that
-    contains it.
+    The reason is the line hostapd or dnsmasq returned when the AP did not
+    come up. The passphrase is removed so a secret echoed in that line
+    cannot land on the boot partition. The word "passphrase" is not used
+    in this line: the publisher refuses a file that contains it.
     """
     error = ""
     if isinstance(detail, dict):
@@ -102,10 +103,12 @@ def main() -> int:
     )
     from utils.netctl import ensure_reachable, remove_legacy_captive_nat
 
-    # Shared-mode DNS (wildcard + DHCP option 114) before the AP comes up,
-    # so the first lease the phone gets already names the portal. The legacy
-    # NAT rule is removed first: it would steal port 80 from the listener
-    # and send the phone to :8080. A station link does not get either one.
+    # Captive DNS (wildcard + DHCP option 114) before the AP comes up, so
+    # the first lease the phone gets already names the portal. start_ap
+    # writes the same file again and starts the dedicated dnsmasq. The
+    # legacy NAT rule is removed first: it would steal port 80 from the
+    # listener and send the phone to :8080. A station link does not get
+    # either one.
     ensure_dnsmasq_conf()
     remove_legacy_captive_nat(service_window_port())
     ssid, passphrase = resolve_credentials()

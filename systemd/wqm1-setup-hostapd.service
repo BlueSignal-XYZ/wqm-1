@@ -1,0 +1,18 @@
+[Unit]
+Description=BlueSignal WQM-1 setup AP (hostapd, WPA-PSK only)
+# Started and stopped by utils.netctl.start_ap / stop_ap. Not enabled:
+# a station link must not share wlan0 with this AP, and nothing at boot
+# should beacon before the fallback script has decided.
+# Start limits belong in [Unit]. A radio that cannot come up must not
+# restart forever (the same cap as bluesignal-ap-fallback.service).
+After=NetworkManager.service
+StartLimitIntervalSec=600
+StartLimitBurst=8
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd /run/wqm1/hostapd.conf
+Restart=on-failure
+RestartSec=2
+# hostapd stays in the foreground. systemd is the parent; there is no -B.
+TimeoutStartSec=20

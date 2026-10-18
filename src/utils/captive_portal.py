@@ -19,10 +19,10 @@ does not run as root. It binds only while the mode file says ``up`` and
 ``down: station`` when the unit joins the site, and the socket closes.
 Nothing here listens on the site LAN.
 
-DNS (``address=/#/192.168.4.1`` and DHCP option 114) is a drop-in under
-``dnsmasq-shared.d``. NetworkManager reads that directory only for a
-shared connection, so the wildcard does not follow the unit onto the
-site network.
+DNS (``address=/#/192.168.4.1`` and DHCP option 114) is served by a
+dedicated dnsmasq bound to ``wlan0``, started with the setup AP and
+stopped before a station join, so the wildcard does not follow the unit
+onto the site network.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ logger = logging.getLogger("wqm1.captive_portal")
 PORTAL_HOST = "192.168.4.1"
 PORTAL_PORT = 80
 PORTAL_URL = f"http://{PORTAL_HOST}/setup/"
-DNSMASQ_CONF = Path("/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf")
+DNSMASQ_CONF = Path("/run/wqm1/dnsmasq-ap.conf")
 _MODE_PATH = Path("/run/bluesignal/captive-portal.mode")
 _UNIT_NAME = "bluesignal-captive-portal.service"
 _MAX_BODY = 2_000_000
@@ -103,20 +103,39 @@ _HOP_HEADERS = frozenset(
 
 
 def dnsmasq_shared_config() -> str:
-    """Drop-in for NetworkManager's shared-mode dnsmasq.
+    """Captive DNS lines the port-80 portal relies on.
 
     ``address=/#/192.168.4.1`` makes every name the phone looks up resolve
     here. DHCP option 114 (RFC 8910) is the captive-portal URI; iOS and
-    Android request it, and dnsmasq on the images we ship accepts the
-    option in this directory. A station connection does not load
-    ``dnsmasq-shared.d``.
+    Android request it. These lines are part of ``dnsmasq_ap_config``.
+    The process that reads them is stopped before a station join.
     """
     return (
         "# BlueSignal WQM-1 setup hotspot captive portal\n"
-        "# Read only by NetworkManager shared mode (the setup AP).\n"
-        "# A station link does not load dnsmasq-shared.d.\n"
+        "# Included in the dedicated setup-AP dnsmasq, not a station link.\n"
         f"address=/#/{PORTAL_HOST}\n"
         f'dhcp-option=114,"{PORTAL_URL}"\n'
+    )
+
+
+def dnsmasq_ap_config(iface: str = "wlan0") -> str:
+    """dnsmasq for the setup AP, bound to ``iface`` only.
+
+    DHCP is 192.168.4.10-254. The captive lines (wildcard DNS and DHCP
+    option 114) are ``dnsmasq_shared_config``.
+    """
+    return (
+        "# BlueSignal WQM-1 setup AP. Bound to the hotspot interface only.\n"
+        "# wqm1-setup-dnsmasq.service runs this while hostapd is up.\n"
+        f"interface={iface}\n"
+        "bind-interfaces\n"
+        f"listen-address={PORTAL_HOST}\n"
+        "except-interface=lo\n"
+        "dhcp-range=192.168.4.10,192.168.4.254,255.255.255.0,12h\n"
+        f"dhcp-option=3,{PORTAL_HOST}\n"
+        f"dhcp-option=6,{PORTAL_HOST}\n"
+        "dhcp-authoritative\n"
+        "no-resolv\n" + dnsmasq_shared_config()
     )
 
 
@@ -128,13 +147,13 @@ def dnsmasq_conf_path() -> Path:
 
 
 def ensure_dnsmasq_conf(path: Path | None = None) -> dict[str, Any]:
-    """Write the shared-mode drop-in if it differs. Never raises.
+    """Write the setup-AP dnsmasq config if it differs. Never raises.
 
-    Failure is logged. The AP can still come up; the status line is what
-    says the portal is down.
+    Failure is logged. ``start_ap`` treats a failed write as a failed AP
+    so a phone is not left associated with no DHCP and no captive DNS.
     """
     target = path or dnsmasq_conf_path()
-    text = dnsmasq_shared_config()
+    text = dnsmasq_ap_config()
     try:
         if target.is_file() and target.read_text(encoding="utf-8") == text:
             return {"ok": True, "unchanged": True, "path": str(target)}

@@ -59,7 +59,7 @@ and raise the setup hotspot instead. The setup join is stricter.
 
 | Piece | File |
 |---|---|
-| Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) | `utils/captive_portal.dnsmasq_shared_config`, written by `setup.sh` and each boot by `scripts/wqm1-ap-fallback.py` into `/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf` (shared mode only) |
+| Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) and DHCP `192.168.4.10-254` | `utils/captive_portal.dnsmasq_ap_config`, written at AP start to `/run/wqm1/dnsmasq-ap.conf` and served by `wqm1-setup-dnsmasq.service` bound to `wlan0`. Stopped before a station join. |
 | Port 80 captive listener, hotspot only | `utils/captive_portal`, `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Closes when the station joins. |
 | Service Window, including setup, still on 8080 | `service_window` — the port-80 process proxies the setup UI here so the phone never sees `:8080` |
 | Probe paths + foreign-host redirect | `utils/captive_portal` on port 80, and `service_window/captive.py` on 8080 (same target: `http://192.168.4.1/setup/`) |
@@ -91,7 +91,8 @@ networks.
       Android phone does the same. The sheet should load
       `http://192.168.4.1/setup/` with no `:8080`. If it does not, confirm
       `wqm1-status.txt` says `portal: up (80)`, that
-      `/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf` exists, and
+      `hostapd_cli status` says `state=ENABLED` and `/run/wqm1/dnsmasq-ap.conf`
+      contains `address=/#/192.168.4.1` and DHCP option 114, and
       that `ss -ltnp | grep ':80'` shows the captive-portal process. The
       legacy NAT rule should be absent (`sudo iptables -t nat -S PREROUTING`).
       After the unit joins the site Wi-Fi, port 80 on the unit must not
@@ -119,5 +120,7 @@ networks.
       The page says the unit cannot reach the router or DNS. The hotspot
       comes back. `station: fail: no internet`. Unverified on hardware.
 - [ ] **After the join,** `nmcli connection show` lists only the owner's
-      network and `wqm1-setup-ap`. `ip -4 addr show dev wlan0` shows the
+      network. `wqm1-setup-ap` is the old NetworkManager hotspot profile
+      and is deleted so it cannot come back. `hostapd_cli status` does
+      not report `ENABLED`. `ip -4 addr show dev wlan0` shows the
       same address as `station: ok`, and it is not `169.254`.

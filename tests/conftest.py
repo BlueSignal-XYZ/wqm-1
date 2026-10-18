@@ -161,7 +161,7 @@ def no_outbound_http(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_real_network_mutation(monkeypatch):
+def _no_real_network_mutation(monkeypatch, tmp_path):
     """No test may reconfigure the machine running it.
 
     The setup wizard now forgets saved Wi-Fi profiles when it finishes and the
@@ -176,6 +176,9 @@ def _no_real_network_mutation(monkeypatch):
 
     monkeypatch.setattr(netctl, "_run", lambda argv, timeout=15.0: (127, "", "blocked in tests"))
     monkeypatch.delenv("WQM1_VIRTUAL_NET", raising=False)
+    # hostapd.conf holds the setup passphrase. Tests must not write it under /run.
+    monkeypatch.setenv("WQM1_HOSTAPD_CONF", str(tmp_path / "hostapd.conf"))
+    monkeypatch.setenv("WQM1_DNSMASQ_CONF", str(tmp_path / "dnsmasq-ap.conf"))
     try:
         from service_window import captive
 

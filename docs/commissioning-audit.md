@@ -11,7 +11,9 @@ followed serial `86544fd8`.
 Ranked by what it does to an installer who is standing at the unit with a
 phone. Items under "Fixed in the hotspot pass" landed with the 7.45.98
 radio fix. The captive-portal item is fixed in the port-80 change. The
-rest are not fixed; each has the smallest change that would close it.
+address gate is the join that waits for a real lease. The hostapd item
+is the passphrase phones reject on a beacon that is already up. The rest
+are not fixed; each has the smallest change that would close it.
 Nothing below was re-checked on a HAT.
 
 ## Fixed in the hotspot pass
@@ -109,6 +111,54 @@ Nothing below was re-checked on a HAT.
    that is already on the site network: an outage at reboot must not turn
    the customer's Wi-Fi off. The setup join is the stricter of the two.
    Not re-checked on a HAT.
+
+## Fixed in the hostapd pass
+
+1. **Phones reject the correct setup passphrase.** On a Pi Zero W rev
+   `9000c1`, BCM43430/1 firmware 7.45.98, NetworkManager 1.52.1, the
+   hotspot `WQM1-4FD8` comes up (`COMMISSION READY`, portal `up (80)`)
+   and the phone says the password is wrong. The card journal shows
+   NetworkManager configured the AP with `key_mgmt 'WPA-PSK
+   WPA-PSK-SHA256'` and `ieee80211w 0`.
+
+   NetworkManager 1.52.1, `src/core/supplicant/nm-supplicant-config.c`,
+   `nm_supplicant_config_add_setting_wireless_security`: for
+   `key-mgmt=wpa-psk` it appends `WPA-PSK`, then, when the supplicant
+   capability includes PMF, appends ` WPA-PSK-SHA256`. SAE is appended
+   only when PMF and BIP are supported and, in AP mode, `pmf` is not
+   disable (`!is_ap || pmf != NM_SETTING_WIRELESS_SECURITY_PMF_DISABLE`).
+   The same function writes `ieee80211w` `0` when PMF is disable and `2`
+   when it is required. There is no property that asks for `WPA-PSK`
+   without the SHA256 AKM. `pmf=1` (disable) is what the earlier hotspot
+   pass set, and it only drops SAE.
+
+   `brcmfmac`, `drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c`,
+   `brcmf_configure_wpaie`: `RSN_AKM_SHA256_PSK` is logged as
+   `RSN_AKM_MFP_PSK` and ORs `WPA2_AUTH_PSK_SHA256` into `wpa_auth`. The
+   firmware comment on `RSN_CAP_MFPR` is that MFP-required is supported
+   only in combination with `WPA2_AUTH_PSK_SHA256`, `WPA2_AUTH_1X_SHA256`,
+   or `WPA3_AUTH_SAE_PSK`. With `ieee80211w=0` the RSN capabilities have
+   neither MFPC nor MFPR, so `mfp` stays `BRCMF_MFP_NONE` while `wpa_auth`
+   still includes the SHA256 bit, and both are written to the firmware
+   (`mfp` iovar, then `wpa_auth`). BCM43430/1 firmware 7.45.98 implements
+   that SHA256 AKM with MFP. A phone that picks PSK-SHA256 (AKM
+   00-0F-AC:6) fails the 4-way handshake and reports an incorrect
+   password. The beacon itself stays up, which is why this does not look
+   like the earlier vendor-IE failure.
+
+   The setup AP is now hostapd (`wqm1-setup-hostapd.service`) with
+   `wpa=2`, `wpa_key_mgmt=WPA-PSK`, `rsn_pairwise=CCMP`, `ieee80211w=0`,
+   channel 6, and the country code `prepare_wifi_radio` already set.
+   `wlan0` is unmanaged in NetworkManager for the duration.
+   `wqm1-setup-dnsmasq.service` is bound to `wlan0`, serves DHCP
+   `192.168.4.10-254`, `address=/#/192.168.4.1`, and DHCP option 114.
+   A join stops dnsmasq, then hostapd, flushes `192.168.4.1`, sets
+   `managed yes`, and runs the existing join, including the address
+   gate. Any failure raises the same hostapd AP and arms port 80.
+   Burn-in and `read_hotspot_state` ask `hostapd_cli status` for
+   `state=ENABLED`. `setup.sh` installs `hostapd` and `dnsmasq` and
+   masks the distro units. No phone handshake was captured. Not
+   re-checked on a HAT.
 
 ## Still open
 
@@ -246,7 +296,7 @@ commissioning because the bench is indoors.
   saved. An unconfigured unit does not wait.
 - The factory PIN is rejected before the radio is touched, so a join
   cannot finish on the factory PIN and then strand the phone.
-- Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) is in
-  `dnsmasq-shared.d` and applies to the hotspot's shared method only. It
-  does not hijack DNS after the unit has joined the site. The port-80
-  listener closes on that join; it is not left bound on the site LAN.
+- Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) is in the
+  dedicated dnsmasq bound to `wlan0`. That process is stopped before the
+  join, so it does not hijack DNS on the site. The port-80 listener
+  closes on that join; it is not left bound on the site LAN.
