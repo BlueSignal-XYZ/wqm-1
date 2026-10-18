@@ -66,7 +66,7 @@ from the earlier hardcoded-name build as a different tree.
 
 | Path | Role |
 |---|---|
-| `overlay/usr/local/sbin/wqm1-firstboot` | Every boot: unblock Wi-Fi, set the regulatory domain to US, log the device-tree model. First boot of a card: hostname `wqm1-xxxx` from the same serial the firmware uses. |
+| `overlay/usr/local/sbin/wqm1-firstboot` | Every boot: unblock Wi-Fi, set the regulatory domain to US, log the device-tree model, and set hostname `wqm1-xxxx` from the same id the firmware uses for the hotspot SSID. A card moved to another Pi is renamed; it is not left with the first Pi's hostname. |
 | `overlay/etc/systemd/system/wqm1-firstboot.service` | Runs that script before the firmware and the setup hotspot. |
 | `overlay/etc/cloud/cloud.cfg.d/99_wqm1.cfg` | cloud-init does not configure the network and does not set a hostname. |
 | `overlay/etc/ssh/sshd_config.d/10-wqm1.conf` | If SSH is ever enabled, it is key-only. |

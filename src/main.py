@@ -828,7 +828,7 @@ class WQM1App:
     def publish_boot_status(self, fatal: str | None = None) -> None:
         """Write the FAT/status snapshot. Never raises into the caller."""
         try:
-            from diagnostics.boot_status import write_boot_status
+            from diagnostics.boot_status import gps_line, onewire_line, write_boot_status
 
             board = None
             profile = getattr(self, "_board", None)
@@ -846,6 +846,8 @@ class WQM1App:
                 board=board,
                 adc=adc,
                 adc_error=self._adc_error or "",
+                onewire=onewire_line(self._temp),
+                gps=gps_line(self._gps),
                 faulted=sorted(self._faulted_channels),
                 fatal=fatal if fatal is not None else "none",
             )

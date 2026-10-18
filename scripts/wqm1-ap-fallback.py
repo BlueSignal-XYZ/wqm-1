@@ -61,13 +61,33 @@ def service_window_port(config_path: str = "/etc/bluesignal/config.yaml") -> int
         return 8080
 
 
-def _write_status(*, hotspot: str) -> None:
+def hotspot_failure_status(detail: object, passphrase: str) -> str:
+    """``failed: <reason>`` for wqm1-status.txt.
+
+    The reason is the NetworkManager / wpa_supplicant line ``nmcli`` returned
+    (``Error: Connection activation failed: ...``). The passphrase is removed
+    so a secret echoed by nmcli cannot land on the boot partition. The word
+    "passphrase" is not used in this line: the publisher refuses a file that
+    contains it.
+    """
+    error = ""
+    if isinstance(detail, dict):
+        error = str(detail.get("error") or "")
+    elif detail:
+        error = str(detail)
+    error = " ".join(error.split())
+    if passphrase:
+        error = error.replace(passphrase, "[redacted]")
+    return f"failed: {error or 'unknown'}"
+
+
+def _write_status(*, hotspot: str, ssid: str) -> None:
     """Best-effort. A status-file failure must not decide whether the AP
     stays up — the file is how a pulled card is read, not the hotspot."""
     try:
         from diagnostics.boot_status import write_boot_status
 
-        write_boot_status(hotspot=hotspot)
+        write_boot_status(hotspot=hotspot, ssid=ssid)
     except Exception as e:  # noqa: BLE001 — never fail the AP over the status file
         logger.error("Could not write boot status: %s", e)
 
@@ -84,14 +104,15 @@ def main() -> int:
     result = ensure_reachable(ssid, passphrase)
     if result.get("mode") == "station":
         logger.info("Station link present — AP not needed")
-        _write_status(hotspot="down")
+        _write_status(hotspot="station", ssid=ssid)
         return 0
     if result.get("ap"):
         logger.warning("No station link — setup AP %s is up at 192.168.4.1", ssid)
-        _write_status(hotspot="up")
+        _write_status(hotspot="up", ssid=ssid)
         return 0
-    logger.error("No station link and the AP could not be raised: %s", result.get("detail"))
-    _write_status(hotspot="down")
+    failure = hotspot_failure_status(result.get("detail"), passphrase)
+    logger.error("No station link and the AP could not be raised: %s", failure)
+    _write_status(hotspot=failure, ssid=ssid)
     return 1
 
 

@@ -3,8 +3,10 @@
 # Installed by the offline golden build (build-golden.sh); not part of setup.sh.
 #  - every boot: Wi-Fi radio unblocked, regulatory domain US (before the
 #    setup hotspot service decides whether to raise WQM1-XXXX)
-#  - first boot of each card: hostname wqm1-xxxx, the same last four the
-#    firmware uses for the hotspot SSID (utils.identity.ap_name)
+#  - every boot: hostname wqm1-xxxx, the same last four the firmware uses
+#    for the hotspot SSID (utils.identity.ap_name). A card moved to another
+#    Pi used to keep the first Pi's hostname (the mark file lived on the
+#    card) while the SSID followed the new serial.
 set -u
 log() { echo "[wqm1-firstboot] $*"; }
 
@@ -44,26 +46,39 @@ rfkill unblock wlan 2>/dev/null || true
 iw reg set US 2>/dev/null || true
 nmcli radio wifi on 2>/dev/null || true
 
-MARK=/var/lib/wqm1-firstboot/identity-done
-if [ ! -e "$MARK" ]; then
-  name="$(cd /opt/bluesignal/current/src 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import ap_name; print(ap_name().lower())' 2>/dev/null)"
-  if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
-    ser="$(awk -F': *' '/^Serial/ {print tolower($2)}' /proc/cpuinfo | tail -c 5)"
-    name="wqm1-${ser:-0000}"
-    log "firmware id unavailable, hostname from cpuinfo serial"
-  fi
-  if printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
-    hostnamectl set-hostname "$name" 2>/dev/null || { echo "$name" > /etc/hostname; hostname "$name"; }
-    if grep -q '^127\.0\.1\.1' /etc/hosts; then
-      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$name/" /etc/hosts
+# Recomputed every boot from the board this card is in. WQM1_FIRMWARE_SRC,
+# WQM1_CPUINFO, WQM1_HOSTS_FILE and WQM1_HOSTNAME_FILE exist so a test can
+# run this script without touching the machine it is running on.
+SRC="${WQM1_FIRMWARE_SRC:-/opt/bluesignal/current/src}"
+CPUINFO="${WQM1_CPUINFO:-/proc/cpuinfo}"
+HOSTS_FILE="${WQM1_HOSTS_FILE:-/etc/hosts}"
+HOSTNAME_FILE="${WQM1_HOSTNAME_FILE:-/etc/hostname}"
+
+name="$(cd "$SRC" 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import ap_name; print(ap_name().lower())' 2>/dev/null || true)"
+if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+  ser="$(awk -F': *' '/^Serial/ {gsub(/[^0-9a-f]/, "", $2); s=tolower($2)} END { if (length(s) >= 4) print substr(s, length(s)-3, 4) }' "$CPUINFO" 2>/dev/null || true)"
+  name="wqm1-${ser:-0000}"
+  log "firmware id unavailable, hostname from cpuinfo serial"
+fi
+if printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+  current="$(hostname 2>/dev/null || true)"
+  current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  if [ "$current" != "$name" ]; then
+    if ! hostnamectl set-hostname "$name" 2>/dev/null; then
+      printf '%s\n' "$name" > "$HOSTNAME_FILE"
+      hostname "$name" 2>/dev/null || true
+    fi
+    if [ -f "$HOSTS_FILE" ] && grep -q '^127\.0\.1\.1' "$HOSTS_FILE"; then
+      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$name/" "$HOSTS_FILE"
     else
-      printf '127.0.1.1\t%s\n' "$name" >> /etc/hosts
+      printf '127.0.1.1\t%s\n' "$name" >> "$HOSTS_FILE"
     fi
     systemctl try-restart avahi-daemon.service 2>/dev/null || true
-    mkdir -p "${MARK%/*}" && touch "$MARK"
-    log "hostname set to $name"
+    log "hostname set to $name (was ${current:-unset})"
   else
-    log "could not derive a hostname; will retry next boot"
+    log "hostname already $name"
   fi
+else
+  log "could not derive a hostname; will retry next boot"
 fi
 exit 0

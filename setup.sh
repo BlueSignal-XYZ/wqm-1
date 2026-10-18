@@ -371,12 +371,12 @@ else
 fi
 sudo cp "$SCRIPT_DIR/scripts/diagnostics.sh" "$RELEASE_DIR/scripts/"
 sudo chmod +x "$RELEASE_DIR/scripts/diagnostics.sh"
-# The two root oneshots below (bluesignal-card.service, bluesignal-ap-fallback.service)
-# run these out of /opt/bluesignal/current/scripts/. They were enabled without
+# The root oneshots below (card consumer, setup hotspot, burn-in) run these
+# out of /opt/bluesignal/current/scripts/. They were enabled without
 # being copied until 2026-10-12, so no carded unit ever consumed its key or
 # raised its setup hotspot; tests/test_setup_installs_service_scripts.py pins
 # every ExecStart in systemd/ to a copy line here.
-for svc_script in wqm1-consume-card.py wqm1-ap-fallback.py; do
+for svc_script in wqm1-consume-card.py wqm1-ap-fallback.py burn-in.sh; do
     sudo cp "$SCRIPT_DIR/scripts/$svc_script" "$RELEASE_DIR/scripts/"
 done
 if [ -f "$SCRIPT_DIR/scripts/host-pins.py" ]; then
@@ -441,6 +441,10 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# Bench burn-in. Enabled, but the unit does not start unless an empty
+# "burnin" file is on the FAT boot partition (ConditionPathExists).
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-burnin.service" /etc/systemd/system/
+sudo chmod 755 "$RELEASE_DIR/scripts/burn-in.sh"
 # Status file on the FAT boot partition. The firmware runs as the install
 # user and cannot write /boot/firmware; this script copies one file and
 # takes no arguments. The journal drop-in makes journald persistent with a
@@ -475,6 +479,7 @@ sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-ota.service
 sudo systemctl enable bluesignal-ap-fallback.service
+sudo systemctl enable bluesignal-burnin.service
 sudo systemctl enable bluesignal-card.service
 
 # The firmware runs unprivileged but must be able to set the system clock

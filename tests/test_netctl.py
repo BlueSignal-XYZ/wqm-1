@@ -21,18 +21,24 @@ class FakeNm:
         self.join_rc = 0
         self.hotspot_rc = 0
         self.hotspot_fails = 0
+        self.hotspot_err = "device not ready"
+        self.add_rc = 0
         self.saved: list[str] = []
         self.iface_state = ""
 
     def run(self, argv, timeout=15.0):
         self.calls.append(argv)
         a = argv[1:] if argv and argv[0] == "nmcli" else argv
-        if a[:4] == ["device", "wifi", "hotspot", "ifname"]:
+        if a[:2] == ["connection", "add"]:
+            if self.add_rc != 0:
+                return self.add_rc, "", "Error: a connection with this name already exists"
+            return 0, "", ""
+        if a[:2] == ["connection", "up"]:
             if self.hotspot_rc != 0:
-                return self.hotspot_rc, "", "hotspot failed"
+                return self.hotspot_rc, "", self.hotspot_err
             if self.hotspot_fails > 0:
                 self.hotspot_fails -= 1
-                return 1, "", "device not ready"
+                return 1, "", self.hotspot_err
             self.ap = True
             return 0, "", ""
         if a[:4] == ["-t", "-f", "NAME,TYPE", "connection"] and "--active" not in a:
@@ -104,7 +110,8 @@ class TestAccessPoint:
 
         r = start_ap("WQM1-0001", "short")
         assert r["ok"] is False
-        assert not any("hotspot" in c for c in nm.calls)
+        assert not any(c[1:3] == ["connection", "add"] for c in nm.calls)
+        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
 
     def test_start_ap_raises_wpa2_hotspot_named_for_the_unit(self, nm):
         from utils.netctl import AP_CONNECTION_NAME, start_ap
@@ -112,10 +119,56 @@ class TestAccessPoint:
         r = start_ap("WQM1-0001", "river-cedar-42")
         assert r["ok"] is True
         assert r["address"] == "192.168.4.1"
-        hotspot = next(c for c in nm.calls if "hotspot" in c)
-        assert "ssid" in hotspot and hotspot[hotspot.index("ssid") + 1] == "WQM1-0001"
-        assert hotspot[hotspot.index("password") + 1] == "river-cedar-42"
-        assert hotspot[hotspot.index("con-name") + 1] == AP_CONNECTION_NAME
+        delete = next(c for c in nm.calls if c[1:3] == ["connection", "delete"])
+        add = next(c for c in nm.calls if c[1:3] == ["connection", "add"])
+        modify = next(c for c in nm.calls if c[1:3] == ["connection", "modify"])
+        up = next(c for c in nm.calls if c[1:3] == ["connection", "up"])
+        # Recreate, then write security, then activate. Already-flashed
+        # cards never get NetworkManager's default hotspot.
+        assert nm.calls.index(delete) < nm.calls.index(add) < nm.calls.index(modify)
+        assert nm.calls.index(modify) < nm.calls.index(up)
+        assert delete[3] == AP_CONNECTION_NAME
+        assert add[add.index("ssid") + 1] == "WQM1-0001"
+        assert add[add.index("con-name") + 1] == AP_CONNECTION_NAME
+        props = dict(zip(modify[4::2], modify[5::2], strict=True))
+        assert props == {
+            "connection.interface-name": "wlan0",
+            "connection.autoconnect": "no",
+            "802-11-wireless.ssid": "WQM1-0001",
+            "802-11-wireless.mode": "ap",
+            "802-11-wireless.powersave": "2",
+            "802-11-wireless-security.key-mgmt": "wpa-psk",
+            "802-11-wireless-security.proto": "rsn",
+            "802-11-wireless-security.pairwise": "ccmp",
+            "802-11-wireless-security.group": "ccmp",
+            "802-11-wireless-security.pmf": "1",
+            "802-11-wireless-security.psk": "river-cedar-42",
+            "ipv4.method": "shared",
+            "ipv4.addresses": "192.168.4.1/24",
+        }
+        assert "sae" not in modify
+        assert up[3] == AP_CONNECTION_NAME
+
+    def test_existing_profile_is_updated_when_add_cannot_replace_it(self, nm):
+        """delete + add is the normal path. When the old profile is still
+        there, modify writes the same security before activation."""
+        from utils.netctl import start_ap
+
+        nm.add_rc = 10
+        r = start_ap("WQM1-4FD8", "river-cedar-42")
+        assert r["ok"] is True
+        modify = next(c for c in nm.calls if c[1:3] == ["connection", "modify"])
+        props = dict(zip(modify[4::2], modify[5::2], strict=True))
+        assert props["802-11-wireless-security.proto"] == "rsn"
+        assert props["802-11-wireless-security.pairwise"] == "ccmp"
+        assert props["802-11-wireless-security.group"] == "ccmp"
+        assert props["802-11-wireless-security.pmf"] == "1"
+        assert props["802-11-wireless-security.key-mgmt"] == "wpa-psk"
+        assert props["802-11-wireless.powersave"] == "2"
+        assert props["802-11-wireless.ssid"] == "WQM1-4FD8"
+        assert props["802-11-wireless-security.psk"] == "river-cedar-42"
+        up = next(c for c in nm.calls if c[1:3] == ["connection", "up"])
+        assert nm.calls.index(modify) < nm.calls.index(up)
 
     def test_ensure_reachable_prefers_a_station_link(self, nm):
         from utils.netctl import ensure_reachable
@@ -123,7 +176,7 @@ class TestAccessPoint:
         nm.station = True
         r = ensure_reachable("WQM1-0001", "river-cedar-42", grace_s=10, sleep=lambda s: None)
         assert r["mode"] == "station"
-        assert not any("hotspot" in c for c in nm.calls)
+        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
 
     def test_ensure_reachable_raises_the_ap_after_the_grace_period(self, nm):
         from utils.netctl import ensure_reachable
@@ -159,6 +212,7 @@ class TestAccessPoint:
         assert t[0] < 45
         assert any(c[:3] == ["rfkill", "unblock", "wifi"] for c in nm.calls)
         assert any(c[:3] == ["ip", "link", "set"] for c in nm.calls)
+        assert ["iw", "dev", "wlan0", "set", "power_save", "off"] in nm.calls
 
     def test_hotspot_is_retried_when_the_interface_is_not_ready(self, nm):
         from utils.netctl import ensure_reachable
@@ -182,10 +236,8 @@ class TestAccessPoint:
             clock=clock,
         )
         assert r["ap"] is True
-        hotspot_calls = [
-            c for c in nm.calls if len(c) > 3 and c[1:4] == ["device", "wifi", "hotspot"]
-        ]
-        assert len(hotspot_calls) == 2
+        activations = [c for c in nm.calls if c[1:3] == ["connection", "up"]]
+        assert len(activations) == 2
 
 
 class TestJoin:
@@ -229,6 +281,26 @@ class TestJoin:
         # The failed profile is dropped so NM does not keep retrying it.
         assert any(c[1:3] == ["connection", "delete"] and c[3] == "PondHouse" for c in nm.calls)
 
+    def test_a_failed_restore_is_retried(self, nm):
+        from utils.netctl import join_network
+
+        nm.ap = True
+        nm.join_rc = 4
+        nm.hotspot_fails = 1
+        nm.hotspot_err = (
+            "Error: Connection activation failed: 802.1X supplicant took too long to authenticate."
+        )
+        r = join_network(
+            "PondHouse",
+            "wrong",
+            ap_ssid="WQM1-0001",
+            ap_passphrase="river-cedar-42",
+            sleep=lambda s: None,
+        )
+        assert r["ap_restored"] is True
+        activations = [c for c in nm.calls if c[1:3] == ["connection", "up"]]
+        assert len(activations) == 2
+
     def test_join_refuses_a_control_character_ssid(self, nm):
         from utils.netctl import join_network
 
@@ -250,6 +322,15 @@ class TestApFallbackScript:
         a = mod.derived_passphrase("10000000abcdef01")
         b = mod.derived_passphrase("10000000abcdef02")
         assert a != b and len(a) == 12 and len(b) == 12
+
+    def test_derived_passphrase_is_the_sha256_prefix(self):
+        import hashlib
+
+        from utils.netctl import derived_passphrase
+
+        serial = "1000000086544fd8"
+        expected = hashlib.sha256(f"wqm1-ap:{serial}".encode()).hexdigest()[:12]
+        assert derived_passphrase(serial) == expected
 
     def test_credentials_come_from_the_identity_file_when_present(self, tmp_path, monkeypatch):
         import importlib.util
@@ -288,3 +369,76 @@ class TestApFallbackScript:
         assert "network-online.target" not in directives
         assert "bluesignal-wqm" not in directives
         assert "Restart=on-failure" in directives
+
+    def test_start_limit_keys_are_in_the_unit_section(self):
+        import configparser
+        import shutil
+        import subprocess
+        from pathlib import Path
+
+        path = Path(__file__).parent.parent / "systemd" / "bluesignal-ap-fallback.service"
+        parser = configparser.ConfigParser(strict=False, interpolation=None)
+        parser.optionxform = str
+        parser.read(path)
+        assert parser.get("Unit", "StartLimitIntervalSec") == "600"
+        assert parser.get("Unit", "StartLimitBurst") == "8"
+        assert not parser.has_option("Service", "StartLimitIntervalSec")
+        assert not parser.has_option("Service", "StartLimitBurst")
+        exe = shutil.which("systemd-analyze")
+        if not exe:
+            return
+        result = subprocess.run(
+            [exe, "verify", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        combined = result.stdout + result.stderr
+        assert "StartLimitIntervalSec" not in combined
+        assert "Unknown key" not in combined
+
+    def test_failed_activation_is_written_to_the_status_file(self, tmp_path, monkeypatch):
+        import importlib.util
+        from pathlib import Path
+
+        from utils import netctl
+
+        spec = importlib.util.spec_from_file_location(
+            "ap_fallback_fail", Path(__file__).parent.parent / "scripts" / "wqm1-ap-fallback.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        fake = FakeNm()
+        fake.hotspot_rc = 1
+        fake.hotspot_err = (
+            "Error: Connection activation failed: 802.1X supplicant took too long to authenticate."
+        )
+        monkeypatch.setattr(netctl, "_run", fake.run)
+        monkeypatch.setattr(mod, "resolve_credentials", lambda: ("WQM1-4FD8", "river-cedar-42"))
+        status = tmp_path / "wqm1-status.txt"
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
+        assert mod.main() == 1
+        text = status.read_text(encoding="utf-8")
+        assert (
+            "hotspot: failed: Error: Connection activation failed: "
+            "802.1X supplicant took too long to authenticate."
+        ) in text
+        assert "ssid: WQM1-4FD8" in text
+        assert "COMMISSION: FAIL:" in text
+        assert "river-cedar-42" not in text
+        assert "passphrase" not in text.lower()
+
+    def test_a_passphrase_echoed_by_nm_is_not_written_to_the_status_file(self):
+        import importlib.util
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location(
+            "ap_fallback_redact", Path(__file__).parent.parent / "scripts" / "wqm1-ap-fallback.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        line = mod.hotspot_failure_status(
+            {"error": "psk river-cedar-42 rejected"}, "river-cedar-42"
+        )
+        assert line == "failed: psk [redacted] rejected"
+        assert "river-cedar-42" not in line

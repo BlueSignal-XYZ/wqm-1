@@ -1,0 +1,22 @@
+[Unit]
+Description=BlueSignal WQM-1 ten-minute burn-in (only when bootfs/burnin exists)
+# Skipped on a normal boot. Drop an empty file named "burnin" on the FAT
+# boot partition and this oneshot runs after the setup hotspot is up.
+# ConditionPathExists=| is OR: either mount point is enough.
+ConditionPathExists=|/boot/firmware/burnin
+ConditionPathExists=|/boot/burnin
+After=bluesignal-ap-fallback.service bluesignal-wqm.service NetworkManager.service
+Wants=bluesignal-ap-fallback.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+ExecStart=/opt/bluesignal/current/scripts/burn-in.sh
+# 10 minutes of checks plus margin. No Restart=: a FAIL must not loop.
+TimeoutStartSec=900
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

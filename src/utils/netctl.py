@@ -65,6 +65,23 @@ logger = logging.getLogger("wqm1.netctl")
 
 AP_CONNECTION_NAME = "wqm1-setup-ap"
 AP_GRACE_S = 45
+# BCM43430/1 firmware 7.45.98 (TOB) rejects NetworkManager's default hotspot.
+# WPA+RSN and TKIP come back as "nl80211: kernel reports: key setting
+# validation failed", and the WPA vendor IE as
+# "brcmf_vif_set_mgmt_ie: vndr ie set error : -52". WPA2-PSK only is the
+# set that firmware accepts. 7.45.96.s1 accepts the defaults; this is the
+# stricter of the two, and every board uses it (the firmware does not
+# branch on the chip). pmf 1 is NetworkManager's "disabled". powersave 2
+# is "disable" — the driver turns power save on while the SDIO radio loads.
+AP_SECURITY_PROPERTIES: tuple[tuple[str, str], ...] = (
+    ("802-11-wireless.mode", "ap"),
+    ("802-11-wireless.powersave", "2"),
+    ("802-11-wireless-security.key-mgmt", "wpa-psk"),
+    ("802-11-wireless-security.proto", "rsn"),
+    ("802-11-wireless-security.pairwise", "ccmp"),
+    ("802-11-wireless-security.group", "ccmp"),
+    ("802-11-wireless-security.pmf", "1"),
+)
 # How long to wait for wlan0 to leave "unavailable" (rfkill, firmware still
 # loading, interface not created yet) before the hotspot attempt. The Pi
 # Zero W's SDIO radio is often still down well after NetworkManager has
@@ -159,6 +176,10 @@ def prepare_wifi_radio(iface: str = DEFAULT_WIFI_IFACE) -> None:
         _run(["iw", "reg", "set", "US"])
     _nmcli("radio", "wifi", "on")
     _run(["ip", "link", "set", iface, "up"])
+    # The brcmfmac probe enables power save before any connection profile
+    # exists. The AP profile also sets 802-11-wireless.powersave 2; this
+    # catches the window before that profile is active.
+    _run(["iw", "dev", iface, "set", "power_save", "off"])
     _nmcli("device", "set", iface, "managed", "yes")
 
 
@@ -215,12 +236,57 @@ def ap_active(iface: str = DEFAULT_WIFI_IFACE) -> bool:
     return any(line.startswith(f"{AP_CONNECTION_NAME}:") for line in out.splitlines())
 
 
+def _nm_error(rc: int, out: str, err: str) -> str:
+    """One line, stderr first. nmcli puts ``Error: ...`` on stderr."""
+    parts: list[str] = []
+    for chunk in (err, out):
+        text = " ".join((chunk or "").split())
+        if text and text not in parts:
+            parts.append(text)
+    return " | ".join(parts) if parts else f"nmcli rc {rc}"
+
+
+def ap_profile_properties(
+    ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE
+) -> list[tuple[str, str]]:
+    """Property pairs written onto ``wqm1-setup-ap`` before it is activated.
+
+    Applied with ``nmcli connection modify`` on every raise, including when
+    a profile from an older image is still there (``connection add`` fails
+    because the name exists). Activation sees WPA2-PSK only, PMF off, and
+    power save disabled — not NetworkManager's default hotspot.
+    """
+    return [
+        ("connection.interface-name", iface),
+        ("connection.autoconnect", "no"),
+        ("802-11-wireless.ssid", ssid),
+        *AP_SECURITY_PROPERTIES,
+        ("802-11-wireless-security.psk", passphrase),
+        ("ipv4.method", "shared"),
+        ("ipv4.addresses", AP_SUBNET),
+    ]
+
+
+def _flatten_properties(pairs: list[tuple[str, str]]) -> list[str]:
+    flat: list[str] = []
+    for key, value in pairs:
+        flat.extend((key, value))
+    return flat
+
+
 def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
     """Raise the setup hotspot. WPA2-PSK, private subnet, NM's own DHCP.
 
     Refuses a passphrase under 8 characters (WPA2 minimum) rather than
     raising an open network — an open AP into a PIN-gated page is still an
     open AP.
+
+    The profile is deleted and written again on every raise, then modified
+    with the firmware-compatible security before ``connection up``. An
+    already-flashed card picks the new settings up the next time this runs
+    (boot, or a failed join that brings the AP back). ``nmcli device wifi
+    hotspot`` is not used: it activates NetworkManager's default security
+    before any modify, and that activation is what 7.45.98 rejects.
     """
     if not _SSID_RE.match(ssid or ""):
         return {"ok": False, "error": "invalid ssid"}
@@ -230,36 +296,41 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
         return netsim.start_ap(ssid, passphrase)
     if ap_active(iface):
         return {"ok": True, "ssid": ssid, "already": True}
-    # A stale profile from a previous boot would hold the old passphrase.
+    # A profile left by an older image (or by a failed activation that
+    # never reached autoconnect=no) has the security this firmware rejects.
     _nmcli("connection", "delete", AP_CONNECTION_NAME)
-    rc, out, err = _nmcli(
-        "device",
+    add_rc, add_out, add_err = _nmcli(
+        "connection",
+        "add",
+        "type",
         "wifi",
-        "hotspot",
         "ifname",
         iface,
         "con-name",
         AP_CONNECTION_NAME,
+        "autoconnect",
+        "no",
         "ssid",
         ssid,
-        "password",
-        passphrase,
         timeout=30,
     )
-    if rc != 0:
-        logger.error("AP start failed: %s %s", out, err)
-        return {"ok": False, "error": err or out or f"nmcli rc {rc}"}
-    # Pin the subnet so the printed setup URL is always the same address.
-    _nmcli(
-        "connection",
-        "modify",
-        AP_CONNECTION_NAME,
-        "ipv4.addresses",
-        AP_SUBNET,
-        "ipv4.method",
-        "shared",
+    props = _flatten_properties(ap_profile_properties(ssid, passphrase, iface))
+    mod_rc, mod_out, mod_err = _nmcli(
+        "connection", "modify", AP_CONNECTION_NAME, *props, timeout=30
     )
-    _nmcli("connection", "modify", AP_CONNECTION_NAME, "connection.autoconnect", "no")
+    if mod_rc != 0:
+        reason = _nm_error(mod_rc, mod_out, mod_err)
+        # modify of a name that was never created is less useful than the
+        # add error. A profile that survived delete reports the modify error.
+        if add_rc != 0 and "unknown" in reason.lower():
+            reason = _nm_error(add_rc, add_out, add_err)
+        logger.error("AP profile update failed: %s", reason)
+        return {"ok": False, "error": reason}
+    rc, out, err = _nmcli("connection", "up", AP_CONNECTION_NAME, "ifname", iface, timeout=40)
+    if rc != 0:
+        reason = _nm_error(rc, out, err)
+        logger.error("AP start failed: %s", reason)
+        return {"ok": False, "error": reason}
     logger.info("Setup AP up: %s on %s", ssid, iface)
     return {"ok": True, "ssid": ssid, "address": AP_SUBNET.split("/")[0]}
 
@@ -347,7 +418,13 @@ def join_network(
     _nmcli("connection", "delete", ssid)
     restored = False
     if had_ap and ap_ssid and ap_passphrase:
-        restored = bool(start_ap(ap_ssid, ap_passphrase, iface).get("ok"))
+        # One attempt is how an installer got locked out when the radio was
+        # still settling after the station join. Same budget as boot.
+        for attempt in range(max(1, AP_ATTEMPTS)):
+            restored = bool(start_ap(ap_ssid, ap_passphrase, iface).get("ok"))
+            if restored or attempt + 1 >= AP_ATTEMPTS:
+                break
+            sleep(2)
     return {"ok": False, "connected": False, "ap_restored": restored, "error": reason}
 
 
@@ -373,7 +450,7 @@ def ensure_reachable(
     stays for a unit that DOES have a saved network (a site whose AP is slow
     to answer). The radio is unblocked and ``wlan0`` is given ``radio_wait_s``
     to become usable before the hotspot command, and that command is retried:
-    one ``nmcli device wifi hotspot`` against an interface that is still
+    one hotspot activation against an interface that is still
     ``unavailable`` used to exit the oneshot for the rest of the boot.
     """
     prepare_wifi_radio(iface)

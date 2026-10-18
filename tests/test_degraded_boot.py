@@ -186,8 +186,8 @@ class TestHotspotDespiteTheBoard:
         monkeypatch.setattr(mod, "resolve_credentials", lambda: ("WQM1-TEST", "river-cedar-42"))
         assert mod.main() == 0
         assert fake.ap is True
-        hotspot = [c for c in fake.calls if "hotspot" in c]
-        assert hotspot, "ensure_reachable never asked NetworkManager for a hotspot"
+        hotspot = [c for c in fake.calls if len(c) > 3 and c[1:3] == ["connection", "up"]]
+        assert hotspot, "ensure_reachable never activated the setup AP"
         # The passphrase is an argument of the hotspot command and must not
         # land in the status file the AP script writes beside it.
         text = status.read_text(encoding="utf-8")
@@ -210,6 +210,7 @@ class TestBootStatusFile:
             wlan0="down",
             hotspot="up",
             adc="faulted",
+            power="ok",
             adc_error="ADS1115 init failed: [Errno 5] Input/output error",
             faulted=["ph", "tds", "turbidity"],
             fatal="none",
@@ -220,6 +221,7 @@ class TestBootStatusFile:
         assert first_parsed["i2c"] == "bus not enumerated"
         assert first_parsed["wlan0"] == "down"
         assert first_parsed["hotspot"] == "up"
+        assert first_parsed["commission"] == "FAIL: adc faulted"
         assert first_parsed["adc"] == "faulted"
         assert "Input/output error" in first_parsed["adc_error"]
         assert first_parsed["faulted"] == "ph, tds, turbidity"
