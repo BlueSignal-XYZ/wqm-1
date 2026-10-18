@@ -540,7 +540,10 @@ matching policy from `config/policies.yaml`.
 #### Service Window (web UI)
 
 A Flask UI on port `8080` exposes calibration, relay control,
-LoRaWAN AppKey configuration, sensor data, and diagnostics.
+LoRaWAN AppKey configuration, sensor data, and diagnostics. While the
+setup hotspot is up, the same setup page is also served on port 80 at
+`http://192.168.4.1/setup/` so a phone's captive-portal sheet can open it.
+Port 80 closes when the unit joins the site network.
 
 ```bash
 sudo systemctl status bluesignal-service-window

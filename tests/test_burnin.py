@@ -48,12 +48,32 @@ def test_throttled_bits():
 
 
 def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
-    assert commission_verdict({"hotspot": "up", "adc": "ok", "power": "ok", "fatal": "none"}) == (
-        "READY"
+    assert commission_verdict(
+        {"hotspot": "up", "portal": "up (80)", "adc": "ok", "power": "ok", "fatal": "none"}
+    ) == ("READY")
+    assert (
+        commission_verdict(
+            {
+                "hotspot": "station",
+                "portal": "down: station",
+                "adc": "ok",
+                "power": "ok",
+                "fatal": "none",
+            }
+        )
+        == "READY"
     )
     assert (
-        commission_verdict({"hotspot": "station", "adc": "ok", "power": "ok", "fatal": "none"})
-        == "READY"
+        commission_verdict(
+            {
+                "hotspot": "up",
+                "portal": "down: connection refused",
+                "adc": "ok",
+                "power": "ok",
+                "fatal": "none",
+            }
+        )
+        == "FAIL: portal down: connection refused"
     )
     failed = commission_verdict(
         {
@@ -68,6 +88,7 @@ def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
         commission_verdict(
             {
                 "hotspot": "up",
+                "portal": "up (80)",
                 "adc": "faulted",
                 "power": "now undervoltage throttled=0x1",
                 "fatal": "none",
@@ -80,6 +101,7 @@ def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
         commission_verdict(
             {
                 "hotspot": "up",
+                "portal": "up (80)",
                 "adc": "ok",
                 "power": "since-boot undervoltage throttled=0x10000",
                 "gps": "no fix",

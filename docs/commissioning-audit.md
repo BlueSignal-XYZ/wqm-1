@@ -9,11 +9,12 @@ Pi still booted on the first as hostname `wqm1-e794` while the SSID
 followed serial `86544fd8`.
 
 Ranked by what it does to an installer who is standing at the unit with a
-phone. "Fixed" items landed in this change. The rest are not fixed here;
-each has the smallest change that would close it. Nothing below was
-re-checked on a HAT.
+phone. Items under "Fixed in the hotspot pass" landed with the 7.45.98
+radio fix. The captive-portal item is fixed in the port-80 change. The
+rest are not fixed; each has the smallest change that would close it.
+Nothing below was re-checked on a HAT.
 
-## Fixed in this change
+## Fixed in the hotspot pass
 
 1. **Hotspot security the 7.45.98 firmware rejects.** `nmcli device wifi
    hotspot` activated NetworkManager's default (WPA+RSN, TKIP allowed, PMF
@@ -60,31 +61,32 @@ re-checked on a HAT.
 
 7. **No bench check and no single verdict.** `wqm1-status.txt` is a
    self-check every boot (board, revision, Wi-Fi chip and firmware,
-   kernel, undervoltage, ADC, 1-Wire, GPS, hotspot, SSID, uptime,
+   kernel, undervoltage, ADC, 1-Wire, GPS, hotspot, portal, SSID, uptime,
    `COMMISSION: READY` or `FAIL`). `scripts/burn-in.sh` runs for ten
    minutes when an empty `burnin` file is on the boot partition and
    writes `wqm1-burnin.txt`. See [burn-in.md](burn-in.md).
 
+## Fixed in the port-80 change
+
+1. **Captive check stayed on port 8080.** The phone's probe hit port 80
+   and was redirected to `http://192.168.4.1:8080/setup/`. Some handsets
+   treat a captive portal that leaves port 80 as "no internet" and never
+   show the page. `bluesignal-captive-portal.service` now binds
+   `192.168.4.1:80` as the install user (`CAP_NET_BIND_SERVICE`, not a
+   root Flask). Apple, Android, and Windows probe URLs get `302` to
+   `http://192.168.4.1/setup/`. A typed `http://` name gets the same
+   redirect. Requests for `192.168.4.1` itself are proxied to the Service
+   Window, which stays on 8080. Shared-mode dnsmasq still answers every
+   name with `192.168.4.1` and sends DHCP option 114 (RFC 8910) for that
+   URL. The legacy iptables NAT rule is deleted so it cannot steal port
+   80. When the unit joins the site network the listener closes.
+   `wqm1-status.txt` has `portal: up (80)` or `portal: down: <reason>`,
+   and `COMMISSION: FAIL` when the hotspot is up and port 80 does not
+   answer. Not re-checked on a phone.
+
 ## Still open
 
-### 1. Captive check opens port 8080
-
-The phone's probe hits port 80 and is redirected to
-`http://192.168.4.1:8080/setup/`. Some handsets treat a captive portal
-that leaves port 80 as "no internet" and never show the page, so the
-installer has to type the URL that is printed on the card. The Service
-Window listens on 8080 only (`service_window.port`).
-
-**Fix:** also bind the setup routes on port 80 while the hotspot is up,
-or redirect to a path on port 80 that this process serves. Do not move
-the whole Service Window in the same change; the customer's LAN keeps
-using 8080.
-
-**Impact:** the installer associates and then stares at a spinner. The
-unit is fine. This is the most common "it didn't come up" after the
-radio itself works.
-
-### 2. Undervoltage drops the AP and the ADC together
+### 1. Undervoltage drops the AP and the ADC together
 
 The Zero W log shows `brcmf_cfg80211_set_power_mgmt: power save enabled`
 during probe, and a marginal 5 V rail (HAT + AP) throttles the chip.
@@ -98,9 +100,9 @@ undervoltage` as a failed board before it ships. No firmware change
 holds the AP up through a brownout.
 
 **Impact:** the SSID appears, the phone connects, then both disappear.
-Looks like the bug in item 1 of "Fixed" and is not.
+Looks like the hotspot-security failure in the hotspot pass and is not.
 
-### 3. Country is forced to US when the regdom is unset
+### 2. Country is forced to US when the regdom is unset
 
 `prepare_wifi_radio` and `wqm1-firstboot` set the regulatory domain to
 US when it is empty, `00`, or `UNSET`. They do not overwrite a country
@@ -115,7 +117,7 @@ domain to US; an unset domain is why `wlan0` stays down.
 
 **Impact:** "my network is not in the list." The hotspot itself is up.
 
-### 4. Pi 3, Pi 4, Pi 5, and the Zero 2 W are unverified with this profile
+### 3. Pi 3, Pi 4, Pi 5, and the Zero 2 W are unverified with this profile
 
 The security set is the one 7.45.98 requires and 7.45.96.s1 already
 accepted a superset of. The CYW43455 (Pi 3B+, 3A+, 4) and the Zero 2 W
@@ -133,7 +135,7 @@ CCMP.
 7.45.98 Zero W did, or the ADC check may fail on a Pi 5 for a different
 reason than a dead converter.
 
-### 5. `wqm1-firstboot` is only on the golden image
+### 4. `wqm1-firstboot` is only on the golden image
 
 `setup.sh` does not install it. A card built by hand keeps whatever
 hostname the Imager wrote, which will not track a Pi swap. Golden cards
@@ -147,7 +149,7 @@ the field failure was a golden card, and a second writer of
 **Impact:** a one-off install, not a golden card. The SSID is still
 right; mDNS may not match the label.
 
-### 6. Join can finish before the unit has an address
+### 5. Join can finish before the unit has an address
 
 `station_connected` is NetworkManager state `connected`. That is usually
 after DHCP, and it is not a check that the address answers. `_finish_setup`
@@ -163,7 +165,7 @@ failure the existing restore path brings the AP back.
 **Impact:** the installer sees "Setup is finished", goes home, and the
 unit is not on the network. The card still has `wqm1-status.txt`.
 
-### 7. Nothing re-raises the hotspot after the fallback service has succeeded
+### 6. Nothing re-raises the hotspot after the fallback service has succeeded
 
 `bluesignal-ap-fallback.service` is a oneshot. It exits 0 when the AP is
 up or a station is associated. A later crash of NetworkManager, or a
@@ -175,11 +177,11 @@ the service already succeeded.
 while setup is not finished and no station is connected. The three
 retries in `join_network` cover the bad-password case only.
 
-**Impact:** rare next to item 1, and the installer has no page to read
+**Impact:** rare next to a radio that never comes up, and the installer has no page to read
 the error on. The status file still has the last failure if the boot
 path was the one that failed.
 
-### 8. A saved profile whose name is not the SSID survives a bad password
+### 7. A saved profile whose name is not the SSID survives a bad password
 
 `join_network` deletes a connection named exactly the SSID. `nmcli
 device wifi connect` names the profile after the SSID, so the usual
@@ -194,7 +196,7 @@ matches and whose state is not connected, using the same listing
 **Impact:** only a card that already has a hand-named profile. Golden
 images ship with no Wi-Fi profiles.
 
-### 9. Power save is turned on by the driver before the profile exists
+### 8. Power save is turned on by the driver before the profile exists
 
 `prepare_wifi_radio` now runs `iw dev wlan0 set power_save off`, and the
 AP profile sets `802-11-wireless.powersave=2`. NetworkManager has
@@ -210,7 +212,7 @@ call is not a fix.
 **Impact:** the AP associates and then stalls under load. Looks like a
 weak signal.
 
-### 10. GPS and 1-Wire do not gate the verdict
+### 9. GPS and 1-Wire do not gate the verdict
 
 No GPS fix, and no DS18B20, are normal on the bench (indoor, probe not
 fitted). The status file reports them (`gps`, `onewire`) and
@@ -233,6 +235,7 @@ commissioning because the bench is indoors.
   saved. An unconfigured unit does not wait.
 - The factory PIN is rejected before the radio is touched, so a join
   cannot finish on the factory PIN and then strand the phone.
-- Captive DNS (`address=/#/192.168.4.1`) is in `dnsmasq-shared.d` and
-  applies to the hotspot's shared method only. It does not hijack DNS
-  after the unit has joined the site.
+- Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) is in
+  `dnsmasq-shared.d` and applies to the hotspot's shared method only. It
+  does not hijack DNS after the unit has joined the site. The port-80
+  listener closes on that join; it is not left bound on the site LAN.

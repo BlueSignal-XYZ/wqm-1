@@ -67,7 +67,8 @@ class TestCaptivePortal:
         with app.test_client() as c:
             r = c.get(path)
         assert r.status_code == 302
-        assert r.headers["Location"] == "http://192.168.4.1:8080/setup/"
+        assert r.headers["Location"] == "http://192.168.4.1/setup/"
+        assert ":8080" not in r.headers["Location"]
 
     def test_foreign_host_on_the_hotspot_goes_to_setup(self, tmp_path, mock_hardware, monkeypatch):
         from service_window import captive
@@ -77,7 +78,7 @@ class TestCaptivePortal:
         with app.test_client() as c:
             r = c.get("/", headers={"Host": "captive.apple.com"})
         assert r.status_code == 302
-        assert r.headers["Location"] == "http://192.168.4.1:8080/setup/"
+        assert r.headers["Location"] == "http://192.168.4.1/setup/"
 
     @pytest.mark.parametrize("host", ["192.168.4.1:8080", "wqm1-0001.local:8080", "localhost"])
     def test_own_host_names_are_left_alone(self, tmp_path, mock_hardware, monkeypatch, host):
@@ -89,9 +90,7 @@ class TestCaptivePortal:
             with c.session_transaction() as sess:
                 sess["pin_verified"] = True
             r = c.get("/", headers={"Host": host})
-        assert not (
-            r.status_code == 302 and "192.168.4.1:8080/setup" in r.headers.get("Location", "")
-        )
+        assert not (r.status_code == 302 and "192.168.4.1/setup" in r.headers.get("Location", ""))
 
     def test_foreign_host_is_ignored_when_the_hotspot_is_down(
         self, tmp_path, mock_hardware, monkeypatch
@@ -105,7 +104,9 @@ class TestCaptivePortal:
             r = c.get("/", headers={"Host": "wqm1.example.net"})
         assert "192.168.4.1" not in r.headers.get("Location", "")
 
-    def test_captive_rule_matches_only_hotspot_traffic(self):
+    def test_legacy_nat_rule_matches_only_hotspot_traffic(self):
+        """The rule we delete, not one we install. It must stay this narrow
+        so a mistaken leftover cannot match the site LAN."""
         from utils import netctl
 
         rule = netctl._captive_rule(8080, "wlan0")
@@ -113,17 +114,32 @@ class TestCaptivePortal:
         assert rule[rule.index("-d") + 1] == "192.168.4.1"
         assert rule[rule.index("--dport") + 1] == "80"
         assert rule[rule.index("--to-ports") + 1] == "8080"
+        assert (
+            "-A"
+            not in Path("src/utils/netctl.py")
+            .read_text()
+            .split("def remove_captive_redirect")[1]
+            .split("def remove_legacy")[0]
+        )
 
-    def test_ap_fallback_installs_the_rule_every_boot(self):
+    def test_ap_fallback_removes_the_nat_rule_before_the_ap(self):
         src = Path("scripts/wqm1-ap-fallback.py").read_text()
-        assert "ensure_captive_redirect(service_window_port())" in src
-        assert src.index("ensure_captive_redirect(") < src.index("ensure_reachable(ssid")
+        assert "remove_legacy_captive_nat(service_window_port())" in src
+        assert "ensure_dnsmasq_conf()" in src
+        assert src.index("remove_legacy_captive_nat(") < src.index("ensure_reachable(ssid")
+        assert src.index("ensure_dnsmasq_conf()") < src.index("ensure_reachable(ssid")
 
     def test_setup_sh_writes_the_dns_half(self):
         src = Path("setup.sh").read_text()
         assert "/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf" in src
-        assert "address=/#/192.168.4.1" in src
-        assert "dhcp-option=114" in src
+        assert "dnsmasq_shared_config" in src
+        from utils.captive_portal import dnsmasq_shared_config
+
+        generated = dnsmasq_shared_config()
+        assert "address=/#/192.168.4.1" in generated
+        assert "dhcp-option=114" in generated
+        assert "http://192.168.4.1/setup/" in generated
+        assert ":8080" not in generated
 
 
 # ── 2. No factory-PIN prompt on the hotspot during first setup ───────────────
@@ -636,21 +652,22 @@ class TestNetworkModuleFailures:
         monkeypatch.setattr(
             netctl, "_run", lambda argv, timeout=15.0: (127, "", "iptables not found")
         )
-        out = netctl.ensure_captive_redirect(8080)
-        assert out["ok"] is False and "iptables" in out["error"]
+        out = netctl.remove_captive_redirect(8080)
+        assert out["ok"] is True and "iptables" in out["skipped"]
 
-    def test_captive_rule_already_present_is_not_added_twice(self, monkeypatch):
+    def test_captive_rule_present_is_deleted_not_added(self, monkeypatch):
         from utils import netctl
 
         calls = []
 
         def run(argv, timeout=15.0):
             calls.append(argv)
-            return (0, "", "")  # -C says the rule exists
+            return (0, "", "")  # -C says the rule exists; -D then removes it
 
         monkeypatch.setattr(netctl, "_run", run)
-        assert netctl.ensure_captive_redirect(8080)["already"] is True
+        assert netctl.remove_captive_redirect(8080)["removed"] is True
         assert not any("-A" in c for c in calls)
+        assert any("-D" in c for c in calls)
 
     def test_corrupt_virtual_state_falls_back_to_the_demo_scene(self, virtual_net):
         from utils import netsim

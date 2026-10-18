@@ -221,7 +221,7 @@ chroot "$R" apt-get update
 chroot_env \
   WQM1_BOARD_MODEL="Raspberry Pi" \
   bash -c 'cd /opt/wqm-1-src && bash ./setup.sh'
-# The captive-portal redirect needs iptables. setup.sh installs it.
+# iptables deletes a legacy captive NAT rule. setup.sh installs it.
 chroot "$R" dpkg -s iptables >/dev/null
 
 install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-firstboot" "$R/usr/local/sbin/"
