@@ -136,9 +136,18 @@ class SamplingWorker(Worker):
         irrigation_hold: Any = None,
         apple_home: Any = None,
         home_assistant: Any = None,
+        maintenance: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(clock)
         self._settings = settings_provider
+        # Optional boot hook: retry a sensor that failed to initialise.
+        # Exceptions are logged once — a retry that raises every cycle would
+        # be the same spam loop a fatal init used to cause via systemd.
+        self._maintenance = maintenance
+        self._maintenance_logged = False
+        # Set by the app when the ADC (or the whole sensor set) is faulted,
+        # so the empty-reading path says why once instead of "no probes fitted".
+        self.hardware_note: str | None = None
         self.irrigation_hold = irrigation_hold
         self.apple_home = apple_home
         self.home_assistant = home_assistant
@@ -222,6 +231,13 @@ class SamplingWorker(Worker):
         return result.value
 
     def step(self) -> None:
+        if self._maintenance is not None:
+            try:
+                self._maintenance()
+            except Exception as e:  # noqa: BLE001 — a retry must not stop sampling
+                if not self._maintenance_logged:
+                    self._maintenance_logged = True
+                    logger.error("Deferred hardware retry failed: %s", e)
         # No probe is fitted at all — record nothing.
         #
         # A reading with every sensor field null is not a measurement, and
@@ -240,6 +256,13 @@ class SamplingWorker(Worker):
         # produces all-null rows anyway. One did, for 1,459 rows in a night.
         # The second guard, below the read, is what actually holds.
         if not any(self._sensors.values()):
+            if self.hardware_note:
+                # The probes are declared. They were not built because the
+                # board or a sensor failed to initialise. Say that once.
+                if self._no_sensor_cycles == 0:
+                    logger.error("%s", self.hardware_note)
+                self._no_sensor_cycles += 1
+                return
             if self._no_sensor_cycles == 0:
                 logger.warning(
                     "No probes declared fitted — not recording readings. "
@@ -437,6 +460,10 @@ class SamplingWorker(Worker):
         # away.
         if all(reading[field] is None for field in _SENSOR_FIELDS):
             self._empty_cycles += 1
+            if self.hardware_note:
+                if self._empty_cycles == 1:
+                    logger.error("%s", self.hardware_note)
+                return
             if self._empty_cycles == 1 or self._empty_cycles % 60 == 0:
                 logger.warning(
                     "No sensor produced a value (%d cycle(s)) — nothing recorded. "

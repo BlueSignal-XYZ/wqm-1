@@ -1,9 +1,20 @@
 [Unit]
 Description=BlueSignal WQM-1 setup access point (raised only when no Wi-Fi network associates)
-# After NetworkManager has had its chance; the script itself waits a further
-# grace period before deciding the unit is stranded.
-After=NetworkManager.service network-online.target
-Wants=network-online.target
+# This unit creates the network on an unconfigured unit. It must not be
+# ordered After=network-online.target. That target is reached when
+# NetworkManager's wait-online helper finishes, and on a unit with no saved
+# Wi-Fi the helper is waiting for a connection that will never exist — the
+# connection this service is what creates. The field Pi Zero W (firmware
+# 2.4.0, before the golden-image first-boot script) still had wlan0 down
+# about 85s into boot (cloud-init Up=False). The oneshot then called
+# `nmcli device wifi hotspot` once; a failure exited, and with no Restart=
+# it never tried again. Its log went to the journal, which was volatile, so
+# the line was gone. Nothing here depends on bluesignal-wqm: a sensor crash
+# loop cannot block the hotspot, and the hotspot must not wait on one.
+# wqm1-firstboot.service (golden image only) unblocks the radio when it is
+# installed. After= on a unit that is not in this boot is ignored.
+After=NetworkManager.service wqm1-firstboot.service
+Wants=NetworkManager.service
 
 [Service]
 Type=oneshot
@@ -13,7 +24,16 @@ ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-ap-fallback.py
 Environment=PYTHONPATH=/opt/bluesignal/current/src
 Environment=PYTHONUNBUFFERED=1
 RemainAfterExit=yes
-TimeoutStartSec=120
+# Radio wait + station grace + a few hotspot attempts. The script itself
+# stays under two minutes on an unconfigured unit (no station grace).
+TimeoutStartSec=180
+# A radio that appears late (Pi Zero W SDIO) gets another pass. A success
+# stays active because of RemainAfterExit. The burst cap stops a unit with
+# no radio at all from restarting for ever.
+Restart=on-failure
+RestartSec=15
+StartLimitIntervalSec=600
+StartLimitBurst=8
 
 [Install]
 WantedBy=multi-user.target

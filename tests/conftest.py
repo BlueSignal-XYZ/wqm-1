@@ -93,6 +93,7 @@ def mock_hardware():
     _bus.reset_mock()
     _smbus2.SMBus.side_effect = None
     _smbus2.SMBus.return_value = _bus
+    _bus.read_word_data.side_effect = None
     _bus.read_word_data.return_value = 0x8583
     _bus.read_i2c_block_data.return_value = [0x85, 0x83]
     _bus.read_i2c_block_data.side_effect = None

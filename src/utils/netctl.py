@@ -65,6 +65,12 @@ logger = logging.getLogger("wqm1.netctl")
 
 AP_CONNECTION_NAME = "wqm1-setup-ap"
 AP_GRACE_S = 45
+# How long to wait for wlan0 to leave "unavailable" (rfkill, firmware still
+# loading, interface not created yet) before the hotspot attempt. The Pi
+# Zero W's SDIO radio is often still down well after NetworkManager has
+# finished starting; one shot against that interface never comes up.
+RADIO_WAIT_S = 20.0
+AP_ATTEMPTS = 3
 AP_SUBNET = "192.168.4.1/24"
 AP_ADDRESS = "192.168.4.1"
 AP_NETWORK = "192.168.4.0/24"
@@ -119,6 +125,70 @@ def ap_credentials() -> tuple[str, str]:
     if len(passphrase) < 8:
         passphrase = derived_passphrase(get_pi_serial())
     return ssid, passphrase
+
+
+def _regdom(text: str) -> str:
+    """Country code from ``iw reg get``, or "" when it did not say."""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("country "):
+            token = line.split()[1] if len(line.split()) > 1 else ""
+            return token.split(":", 1)[0]
+    return ""
+
+
+def prepare_wifi_radio(iface: str = DEFAULT_WIFI_IFACE) -> None:
+    """Make the onboard radio usable for a hotspot.
+
+    Raspberry Pi OS leaves the radio soft-blocked until a regulatory domain
+    is set, and ``brcmfmac`` keeps ``wlan0`` down (IFF_UP clear — cloud-init
+    reports ``Up=False``) while the domain is world/unset (``00``). The
+    golden image's first-boot script does this too, but that script is not
+    installed by ``setup.sh`` and it is not ordered before
+    ``network-online.target``, so the access-point path has to do it itself.
+    Every call is best-effort and idempotent. Never raises.
+    """
+    if netsim.is_virtual():
+        return
+    _run(["rfkill", "unblock", "wifi"])
+    _run(["rfkill", "unblock", "wlan"])
+    rc, out, _ = _run(["iw", "reg", "get"])
+    # Only fill in an unset domain. Do not overwrite a country an installer
+    # already chose. US matches the golden image's kernel command line.
+    if rc != 0 or _regdom(out) in ("", "00", "UNSET"):
+        _run(["iw", "reg", "set", "US"])
+    _nmcli("radio", "wifi", "on")
+    _run(["ip", "link", "set", iface, "up"])
+    _nmcli("device", "set", iface, "managed", "yes")
+
+
+_USABLE_STATES = frozenset(
+    {"connected", "disconnected", "connecting", "deactivating", "disconnecting"}
+)
+
+
+def iface_state(iface: str = DEFAULT_WIFI_IFACE) -> str | None:
+    """NetworkManager's state for ``iface``, or None if it is not listed."""
+    if netsim.is_virtual():
+        return "disconnected"
+    rc, out, _ = _nmcli("-t", "-f", "DEVICE,STATE", "device", "status")
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 2 and parts[0] == iface:
+            return parts[1] or None
+    return None
+
+
+def iface_usable(iface: str = DEFAULT_WIFI_IFACE) -> bool:
+    """True when NetworkManager will accept a hotspot on ``iface``.
+
+    ``unavailable`` is rfkill or firmware that has not come up.
+    ``unmanaged`` is an interface NetworkManager will not configure.
+    Neither can host the setup AP.
+    """
+    return iface_state(iface) in _USABLE_STATES
 
 
 def station_connected(iface: str = DEFAULT_WIFI_IFACE) -> bool:
@@ -288,22 +358,64 @@ def ensure_reachable(
     iface: str = DEFAULT_WIFI_IFACE,
     sleep: Any = time.sleep,
     clock: Any = time.monotonic,
+    radio_wait_s: float = RADIO_WAIT_S,
+    ap_attempts: int = AP_ATTEMPTS,
 ) -> dict[str, Any]:
-    """Boot-time rule: wait up to ``grace_s`` for a station link; if none,
-    raise the AP. Called by ``scripts/wqm1-ap-fallback.py`` from a oneshot
-    unit after NetworkManager, never from the firmware's sampling loop."""
+    """Boot-time rule: if a station link is up, keep it; otherwise raise the AP.
+
+    Called by ``scripts/wqm1-ap-fallback.py`` from a oneshot unit. Never from
+    the firmware's sampling loop, and never dependent on that process: a
+    sensor that failed to initialise must not stop the setup hotspot.
+
+    An unconfigured unit has no saved Wi-Fi profile, so there is nothing for
+    the station grace period to wait for — waiting it out is how the hotspot
+    was still down when ``wlan0`` itself was still down. The grace period
+    stays for a unit that DOES have a saved network (a site whose AP is slow
+    to answer). The radio is unblocked and ``wlan0`` is given ``radio_wait_s``
+    to become usable before the hotspot command, and that command is retried:
+    one ``nmcli device wifi hotspot`` against an interface that is still
+    ``unavailable`` used to exit the oneshot for the rest of the boot.
+    """
+    prepare_wifi_radio(iface)
+    radio_deadline = clock() + radio_wait_s
+    while True:
+        if station_connected(iface):
+            return {"ok": True, "mode": "station", "ap": False}
+        if iface_usable(iface) or clock() >= radio_deadline:
+            break
+        sleep(2)
+    if station_connected(iface):
+        return {"ok": True, "mode": "station", "ap": False}
+    # None saved profiles → do not burn the grace period. A failure to list
+    # profiles (nmcli missing or not up yet) also returns an empty list;
+    # trying the AP is the point of this service, and the attempts below
+    # still back off.
+    grace = grace_s if saved_wifi(iface) else 0.0
     started = clock()
-    while clock() - started < grace_s:
+    while clock() - started < grace:
         if station_connected(iface):
             return {"ok": True, "mode": "station", "ap": False}
         sleep(3)
-    result = start_ap(ap_ssid, ap_passphrase, iface)
-    return {
-        "ok": bool(result.get("ok")),
-        "mode": "ap",
-        "ap": bool(result.get("ok")),
-        "detail": result,
-    }
+    last: dict[str, Any] = {}
+    attempts = max(1, ap_attempts)
+    for attempt in range(attempts):
+        if station_connected(iface):
+            return {"ok": True, "mode": "station", "ap": False}
+        if not iface_usable(iface):
+            prepare_wifi_radio(iface)
+        last = start_ap(ap_ssid, ap_passphrase, iface)
+        if last.get("ok"):
+            break
+        if attempt + 1 < attempts:
+            logger.warning(
+                "Setup AP attempt %d/%d failed (%s) — retrying",
+                attempt + 1,
+                attempts,
+                last.get("error"),
+            )
+            sleep(2)
+    ok = bool(last.get("ok"))
+    return {"ok": ok, "mode": "ap", "ap": ok, "detail": last}
 
 
 def saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]]:

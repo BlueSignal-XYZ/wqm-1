@@ -232,6 +232,89 @@ def smart_breaker_card(config: dict[str, Any], awg: dict[str, Any] | None) -> di
     return explain("smart_breaker", "degraded", ctx)
 
 
+_ANALOG_CHANNELS = ("ph", "tds", "turbidity", "orp")
+
+
+def hardware_report(sock_path: str) -> dict[str, Any]:
+    """Live fault report from the firmware, else the boot status file.
+
+    The command socket answers while the process is up in degraded mode.
+    When it does not (the process is down, or this page is being read off a
+    card's status file by a test), the plain-text snapshot is the same
+    facts. An empty dict means neither source had anything to say — the
+    cards stay as the readings describe them.
+    """
+    from service_window.cmd_client import send_command
+
+    resp = send_command(sock_path, "hardware_status")
+    if resp.get("ok") and resp.get("adc"):
+        faulted = resp.get("faulted") or []
+        if isinstance(faulted, str):
+            faulted = [part.strip() for part in faulted.split(",") if part.strip()]
+        return {
+            "adc": str(resp.get("adc")),
+            "adc_error": str(resp.get("adcError") or ""),
+            "faulted": [str(name) for name in faulted],
+            "fatal": str(resp.get("fatal") or ""),
+        }
+    from diagnostics.boot_status import read_published_status
+
+    parsed = read_published_status()
+    if not parsed:
+        return {}
+    names = [part.strip() for part in parsed.get("faulted", "").split(",") if part.strip()]
+    return {
+        "adc": parsed.get("adc", ""),
+        "adc_error": parsed.get("adc_error", ""),
+        "faulted": names,
+        "fatal": parsed.get("fatal", ""),
+    }
+
+
+def apply_board_fault(
+    cards: dict[str, dict[str, Any]], report: dict[str, Any] | None
+) -> dict[str, dict[str, Any]]:
+    """Replace analog cards when the converter did not initialise.
+
+    "No data for 3 minutes" reads as an unplugged probe. A missing board is
+    a different fault and a different action, and the readings buffer cannot
+    say it — nothing was stored.
+    """
+    if not report or report.get("adc") != "faulted":
+        return cards
+    named = report.get("faulted") or list(_ANALOG_CHANNELS)
+    detail = report.get("adc_error") or None
+    out = dict(cards)
+    for name in named:
+        card = out.get(name)
+        if card is None or card.get("status") == "disabled":
+            continue
+        out[name] = explain(name, "board_fault", {"detail": detail})
+    return out
+
+
+def board_fault_banner(report: dict[str, Any] | None) -> dict[str, str] | None:
+    """One card for the provisioning page, or None when the board is up."""
+    if not report or report.get("adc") != "faulted":
+        return None
+    detail = str(report.get("adc_error") or "").strip()
+    banner = {
+        "status": "fault",
+        "message": (
+            "The sensor board did not start. Analog readings are off; "
+            "the rest of the unit is running."
+        ),
+        "likelyCause": "The board is missing, unseated, or its analog supply is off.",
+        "action": (
+            "Power the unit off, reseat the board on the 40-pin header, and "
+            "power it back on. The unit keeps retrying."
+        ),
+    }
+    if detail:
+        banner["detail"] = detail
+    return banner
+
+
 def worst_status(cards: dict[str, dict[str, Any]]) -> str:
     """Aggregate status across cards: fault > attention > ok."""
     statuses = {c.get("status") for c in cards.values()}

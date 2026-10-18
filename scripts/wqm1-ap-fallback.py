@@ -2,11 +2,15 @@
 """
 Boot-time AP fallback (commissioning plan, PR 4).
 
-Run once by ``bluesignal-ap-fallback.service`` after NetworkManager is up:
-wait ``AP_GRACE_S`` for a known Wi-Fi network to associate; if none does,
-raise the unit's own WPA2 hotspot so an installer with a phone can reach the
-Service Window at http://192.168.4.1:8080 — at a well head with no Wi-Fi, or
-with a card flashed for a network that does not exist here.
+Run once by ``bluesignal-ap-fallback.service`` after NetworkManager is up.
+The service does not wait for ``bluesignal-wqm`` and does not wait for
+``network-online.target``: a failed sensor must not stop setup, and an
+unconfigured unit has no network for that target to announce. This script
+unblocks the radio, brings ``wlan0`` up, waits out the station grace period
+only when a Wi-Fi profile is actually saved, and retries the hotspot if the
+interface is still down. An installer with a phone then reaches the Service
+Window at http://192.168.4.1:8080 — at a well head with no Wi-Fi, or with a
+card flashed for a network that does not exist here.
 
 The SSID is ``WQM1-`` + the last four characters of the device id
 (utils.identity.ap_name) and the passphrase comes from the provisioned
@@ -57,6 +61,17 @@ def service_window_port(config_path: str = "/etc/bluesignal/config.yaml") -> int
         return 8080
 
 
+def _write_status(*, hotspot: str) -> None:
+    """Best-effort. A status-file failure must not decide whether the AP
+    stays up — the file is how a pulled card is read, not the hotspot."""
+    try:
+        from diagnostics.boot_status import write_boot_status
+
+        write_boot_status(hotspot=hotspot)
+    except Exception as e:  # noqa: BLE001 — never fail the AP over the status file
+        logger.error("Could not write boot status: %s", e)
+
+
 def main() -> int:
     from utils.netctl import ensure_captive_redirect, ensure_reachable
 
@@ -69,11 +84,14 @@ def main() -> int:
     result = ensure_reachable(ssid, passphrase)
     if result.get("mode") == "station":
         logger.info("Station link present — AP not needed")
+        _write_status(hotspot="down")
         return 0
     if result.get("ap"):
         logger.warning("No station link — setup AP %s is up at 192.168.4.1", ssid)
+        _write_status(hotspot="up")
         return 0
     logger.error("No station link and the AP could not be raised: %s", result.get("detail"))
+    _write_status(hotspot="down")
     return 1
 
 
