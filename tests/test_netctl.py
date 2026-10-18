@@ -20,14 +20,26 @@ class FakeNm:
         self.ap = False
         self.join_rc = 0
         self.hotspot_rc = 0
+        self.hotspot_fails = 0
+        self.saved: list[str] = []
+        self.iface_state = ""
 
     def run(self, argv, timeout=15.0):
         self.calls.append(argv)
         a = argv[1:] if argv and argv[0] == "nmcli" else argv
         if a[:4] == ["device", "wifi", "hotspot", "ifname"]:
-            if self.hotspot_rc == 0:
-                self.ap = True
-            return self.hotspot_rc, "", "" if self.hotspot_rc == 0 else "hotspot failed"
+            if self.hotspot_rc != 0:
+                return self.hotspot_rc, "", "hotspot failed"
+            if self.hotspot_fails > 0:
+                self.hotspot_fails -= 1
+                return 1, "", "device not ready"
+            self.ap = True
+            return 0, "", ""
+        if a[:4] == ["-t", "-f", "NAME,TYPE", "connection"] and "--active" not in a:
+            lines = [f"{name}:802-11-wireless" for name in self.saved]
+            return 0, "\n".join(lines), ""
+        if a[:2] == ["-g", "802-11-wireless.ssid"]:
+            return 0, a[-1], ""
         if a[:2] == ["connection", "down"]:
             self.ap = False
             return 0, "", ""
@@ -42,7 +54,11 @@ class FakeNm:
             return self.join_rc, "", "Error: Secrets were required, but not provided."
         if "device" in a and "status" in a:
             conn = "wqm1-setup-ap" if self.ap else ("PondHouse" if self.station else "--")
-            state = "connected" if (self.ap or self.station) else "disconnected"
+            if self.iface_state:
+                state = self.iface_state
+                conn = "--"
+            else:
+                state = "connected" if (self.ap or self.station) else "disconnected"
             return 0, f"wlan0:{state}:{conn}", ""
         if a[:4] == ["-t", "-f", "NAME,DEVICE", "connection"] or (
             "connection" in a and "show" in a and "--active" in a
@@ -120,9 +136,56 @@ class TestAccessPoint:
         def sleep(s):
             t[0] += s
 
+        nm.saved = ["PondHouse"]
         r = ensure_reachable("WQM1-0001", "river-cedar-42", grace_s=45, sleep=sleep, clock=clock)
         assert r["mode"] == "ap" and r["ap"] is True
         assert t[0] >= 45
+
+    def test_unconfigured_unit_raises_the_ap_without_the_station_grace(self, nm):
+        """No saved Wi-Fi: nothing can associate, so the 45s wait is skipped
+        and the radio is unblocked before the hotspot command."""
+        from utils.netctl import ensure_reachable
+
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        def sleep(s):
+            t[0] += s
+
+        r = ensure_reachable("WQM1-0001", "river-cedar-42", grace_s=45, sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert t[0] < 45
+        assert any(c[:3] == ["rfkill", "unblock", "wifi"] for c in nm.calls)
+        assert any(c[:3] == ["ip", "link", "set"] for c in nm.calls)
+
+    def test_hotspot_is_retried_when_the_interface_is_not_ready(self, nm):
+        from utils.netctl import ensure_reachable
+
+        nm.hotspot_fails = 1
+        nm.iface_state = "unavailable"
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        def sleep(s):
+            t[0] += s
+
+        r = ensure_reachable(
+            "WQM1-0001",
+            "river-cedar-42",
+            grace_s=45,
+            radio_wait_s=4,
+            sleep=sleep,
+            clock=clock,
+        )
+        assert r["ap"] is True
+        hotspot_calls = [
+            c for c in nm.calls if len(c) > 3 and c[1:4] == ["device", "wifi", "hotspot"]
+        ]
+        assert len(hotspot_calls) == 2
 
 
 class TestJoin:
@@ -214,3 +277,14 @@ class TestApFallbackScript:
         assert "After=NetworkManager.service" in unit
         assert "Type=oneshot" in unit
         assert "wqm1-ap-fallback.py" in unit
+        # The hotspot is what creates a network on an unconfigured unit.
+        # Waiting for network-online blocks on a connection that will not come,
+        # and the main app's health must not gate the script. The comment in
+        # the unit file names the target it refuses to order on; the
+        # directives themselves must not.
+        directives = "\n".join(
+            line for line in unit.splitlines() if line and not line.lstrip().startswith("#")
+        )
+        assert "network-online.target" not in directives
+        assert "bluesignal-wqm" not in directives
+        assert "Restart=on-failure" in directives

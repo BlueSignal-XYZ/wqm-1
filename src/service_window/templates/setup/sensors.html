@@ -3,6 +3,14 @@
 {% block title %}Setup — Sensors{% endblock %}
 {% block content %}
 <h1 class="setup-h1">Probe check</h1>
+{% if board_fault %}
+<div class="card health-card health-border-fault">
+    <div class="health-message">{{ board_fault.message }}</div>
+    <p><b>Likely cause:</b> {{ board_fault.likelyCause }}</p>
+    {% if board_fault.detail %}<p class="skip-note">{{ board_fault.detail }}</p>{% endif %}
+    <p><b>Try this:</b> {{ board_fault.action }}</p>
+</div>
+{% endif %}
 {% if not fitted_cards %}
 <p class="lead">No probes are declared on this unit yet. Tick the ones that are
 connected below.</p>

@@ -441,6 +441,20 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# Status file on the FAT boot partition. The firmware runs as the install
+# user and cannot write /boot/firmware; this script copies one file and
+# takes no arguments. The journal drop-in makes journald persistent with a
+# small cap — without /var/log/journal, Raspberry Pi OS keeps the journal
+# in tmpfs and a power cycle erases the setup-hotspot script's own log.
+sudo cp "$SCRIPT_DIR/scripts/wqm1-publish-status.sh" "$RELEASE_DIR/scripts/"
+sudo chmod 755 "$RELEASE_DIR/scripts/wqm1-publish-status.sh"
+echo "$INSTALL_USER ALL=(root) NOPASSWD: /opt/bluesignal/current/scripts/wqm1-publish-status.sh" \
+    | sudo tee /etc/sudoers.d/bluesignal-status > /dev/null
+sudo chmod 440 /etc/sudoers.d/bluesignal-status
+sudo visudo -cf /etc/sudoers.d/bluesignal-status > /dev/null || sudo rm -f /etc/sudoers.d/bluesignal-status
+sudo mkdir -p /etc/systemd/journald.conf.d /var/log/journal
+sudo cp "$SCRIPT_DIR/systemd/journald.conf.d/wqm1.conf" /etc/systemd/journald.conf.d/wqm1.conf
+sudo systemctl try-restart systemd-journald 2>/dev/null || true
 # Captive portal for that AP (site flow v2): NetworkManager's shared-mode
 # dnsmasq reads this drop-in for the hotspot only, so every name a joined
 # phone looks up answers 192.168.4.1, and DHCP option 114 (RFC 8910) hands

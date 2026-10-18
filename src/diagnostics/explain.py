@@ -55,6 +55,10 @@ SENSOR_STATES: tuple[str, ...] = (
     "calibration_overdue",
     "calibration_drift",
     "disabled",
+    # The converter (or another sensor) did not initialise. Distinct from
+    # "no data": the probe was never read, and reseating the board is the
+    # action, not rinsing an electrode.
+    "board_fault",
 )
 
 SYSTEM_STATES: tuple[str, ...] = ("ok", "degraded", "down", "stale")
@@ -92,6 +96,7 @@ _STATE_STATUS: dict[str, str] = {
     "down": "fault",
     "stale": "fault",
     "disabled": "disabled",
+    "board_fault": "fault",
     # A correct unit at a site with no route out: readings are stored and
     # will upload when a link exists. That is the design working, not a
     # fault (commissioning plan, PR 5).
@@ -134,6 +139,12 @@ _SENSOR_COPY: dict[str, tuple[str, str | None, str | None]] = {
         "{name} is not installed on this unit.",
         None,
         None,
+    ),
+    "board_fault": (
+        "{name} is not being read — the sensor board did not start.",
+        "The board is missing, unseated, or its analog supply is off. {detail}",
+        "Power the unit off, reseat the board on the 40-pin header, and power "
+        "it back on. The unit keeps retrying on its own.",
     ),
 }
 
@@ -330,6 +341,7 @@ _CONTEXT_DEFAULTS: dict[str, Any] = {
     "position": "in an unknown state",
     "fail_safe": "as configured",
     "queued": "some",
+    "detail": "The converter did not answer on the I2C bus.",
 }
 
 
