@@ -143,26 +143,26 @@ def read_wlan_state(iface: str = "wlan0") -> str:
 
 
 def read_hotspot_state() -> str:
-    """``up`` when the setup AP profile is active, else ``down``.
+    """``up`` when hostapd reports ``state=ENABLED``, else ``down``.
 
-    A failure to ask NetworkManager is ``unknown`` — not ``down`` — so a
-    status file written while ``nmcli`` is missing does not claim the
-    hotspot is off. ``ap_active`` collapses that failure to False, which
-    is right for "should I raise the AP" and wrong for this file."""
+    A missing ``hostapd_cli``, or a control socket this user cannot open,
+    is ``unknown`` — not ``down`` — so a status file written before the
+    tool is installed does not claim the hotspot is off. ``ap_active``
+    collapses that failure to False, which is right for "should I raise
+    the AP" and wrong for this file."""
     try:
-        from utils.netctl import AP_CONNECTION_NAME, _nmcli
+        from utils.netctl import hostapd_state
     except Exception as e:  # noqa: BLE001 — status must be writable anyway
         logger.debug("hotspot state unavailable: %s", e)
         return "unknown"
     try:
-        rc, out, _ = _nmcli("-t", "-f", "NAME,DEVICE", "connection", "show", "--active")
+        state = hostapd_state()
     except Exception as e:  # noqa: BLE001
         logger.debug("hotspot state failed: %s", e)
         return "unknown"
-    if rc != 0:
+    if state is None:
         return "unknown"
-    active = any(line.startswith(f"{AP_CONNECTION_NAME}:") for line in out.splitlines())
-    return "up" if active else "down"
+    return "up" if state == "ENABLED" else "down"
 
 
 def _portal_line(hotspot: str) -> str:

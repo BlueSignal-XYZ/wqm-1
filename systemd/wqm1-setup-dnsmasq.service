@@ -1,0 +1,17 @@
+[Unit]
+Description=BlueSignal WQM-1 setup AP DHCP and captive DNS
+# Bound to wlan0 by /run/wqm1/dnsmasq-ap.conf. Stopped with the AP so it
+# does not answer DNS after the unit joins the site network.
+# PartOf stops this unit when hostapd is stopped.
+After=wqm1-setup-hostapd.service
+BindsTo=wqm1-setup-hostapd.service
+PartOf=wqm1-setup-hostapd.service
+StartLimitIntervalSec=600
+StartLimitBurst=8
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/wqm1/dnsmasq-ap.conf
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=20

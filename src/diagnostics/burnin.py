@@ -143,6 +143,7 @@ def adc_answers(open_adc: Callable[[], object] | None = None) -> bool:
 
 
 def hotspot_active() -> bool:
+    """True when hostapd is beaconing (``hostapd_cli status`` state=ENABLED)."""
     from utils.netctl import ap_active
 
     try:

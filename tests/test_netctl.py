@@ -32,10 +32,53 @@ class FakeNm:
         self.gateway = "192.168.1.1"
         self.dns = "192.168.1.1"
         self.reach = True
+        self.regdom = ""
+        self.iw_scan = ""
+        self.dnsmasq_rc = 0
+        self.dnsmasq_err = "dnsmasq failed"
+        self.hostapd = False
+        self.dnsmasq = False
+        self.managed = "yes"
 
     def run(self, argv, timeout=15.0):
         self.calls.append(argv)
+        if argv and argv[0] == "systemctl":
+            action = argv[1] if len(argv) > 1 else ""
+            unit = argv[2] if len(argv) > 2 else ""
+            if action == "start" and unit == "wqm1-setup-hostapd.service":
+                if self.hotspot_rc != 0:
+                    return self.hotspot_rc, "", self.hotspot_err
+                if self.hotspot_fails > 0:
+                    self.hotspot_fails -= 1
+                    return 1, "", self.hotspot_err
+                self.ap = True
+                self.hostapd = True
+                return 0, "", ""
+            if action == "stop" and unit == "wqm1-setup-hostapd.service":
+                self.ap = False
+                self.hostapd = False
+                return 0, "", ""
+            if action == "start" and unit == "wqm1-setup-dnsmasq.service":
+                if self.dnsmasq_rc != 0:
+                    return self.dnsmasq_rc, "", self.dnsmasq_err
+                self.dnsmasq = True
+                return 0, "", ""
+            if action == "stop" and unit == "wqm1-setup-dnsmasq.service":
+                self.dnsmasq = False
+                return 0, "", ""
+            return 0, "", ""
+        if argv and argv[0] == "hostapd_cli":
+            if self.ap:
+                return 0, "state=ENABLED", ""
+            return 1, "", "Failed to connect to hostapd - wpactrl_open: No such file or directory"
+        if argv[:3] == ["iw", "reg", "get"] and self.regdom:
+            return 0, f"country {self.regdom}: DFS-FCC", ""
+        if argv[:4] == ["iw", "dev", "wlan0", "scan"]:
+            return 0, self.iw_scan, ""
         a = argv[1:] if argv and argv[0] == "nmcli" else argv
+        if a[:4] == ["device", "set", "wlan0", "managed"]:
+            self.managed = a[4]
+            return 0, "", ""
         if a[:2] == ["connection", "add"]:
             if self.add_rc != 0:
                 return self.add_rc, "", "Error: a connection with this name already exists"
@@ -147,71 +190,202 @@ class TestBoundary:
         assert "service_window" not in src
 
 
+def _conf(text: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        found[key] = value
+    return found
+
+
+def _at(calls: list[list[str]], pred) -> int:
+    for index, call in enumerate(calls):
+        if pred(call):
+            return index
+    raise AssertionError("expected call was not made")
+
+
 class TestAccessPoint:
     def test_start_ap_refuses_a_short_passphrase_rather_than_going_open(self, nm):
         from utils.netctl import start_ap
 
         r = start_ap("WQM1-0001", "short")
         assert r["ok"] is False
-        assert not any(c[1:3] == ["connection", "add"] for c in nm.calls)
-        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
+        assert not any(
+            c[:3] == ["systemctl", "start", "wqm1-setup-hostapd.service"] for c in nm.calls
+        )
 
-    def test_start_ap_raises_wpa2_hotspot_named_for_the_unit(self, nm):
-        from utils.netctl import AP_CONNECTION_NAME, start_ap
+    def test_hostapd_config_is_wpa_psk_only(self):
+        from utils.netctl import hostapd_config
 
-        r = start_ap("WQM1-0001", "river-cedar-42")
-        assert r["ok"] is True
-        assert r["address"] == "192.168.4.1"
-        delete = next(c for c in nm.calls if c[1:3] == ["connection", "delete"])
-        add = next(c for c in nm.calls if c[1:3] == ["connection", "add"])
-        modify = next(c for c in nm.calls if c[1:3] == ["connection", "modify"])
-        up = next(c for c in nm.calls if c[1:3] == ["connection", "up"])
-        # Recreate, then write security, then activate. Already-flashed
-        # cards never get NetworkManager's default hotspot.
-        assert nm.calls.index(delete) < nm.calls.index(add) < nm.calls.index(modify)
-        assert nm.calls.index(modify) < nm.calls.index(up)
-        assert delete[3] == AP_CONNECTION_NAME
-        assert add[add.index("ssid") + 1] == "WQM1-0001"
-        assert add[add.index("con-name") + 1] == AP_CONNECTION_NAME
-        props = dict(zip(modify[4::2], modify[5::2], strict=True))
-        assert props == {
-            "connection.interface-name": "wlan0",
-            "connection.autoconnect": "no",
-            "802-11-wireless.ssid": "WQM1-0001",
-            "802-11-wireless.mode": "ap",
-            "802-11-wireless.powersave": "2",
-            "802-11-wireless-security.key-mgmt": "wpa-psk",
-            "802-11-wireless-security.proto": "rsn",
-            "802-11-wireless-security.pairwise": "ccmp",
-            "802-11-wireless-security.group": "ccmp",
-            "802-11-wireless-security.pmf": "1",
-            "802-11-wireless-security.psk": "river-cedar-42",
-            "ipv4.method": "shared",
-            "ipv4.addresses": "192.168.4.1/24",
-        }
-        assert "sae" not in modify
-        assert up[3] == AP_CONNECTION_NAME
+        text = hostapd_config("WQM1-4FD8", "river-cedar-42", country="US", channel=6)
+        conf = _conf(text)
+        assert conf["interface"] == "wlan0"
+        assert conf["driver"] == "nl80211"
+        assert conf["ssid"] == "WQM1-4FD8"
+        assert conf["hw_mode"] == "g"
+        assert conf["channel"] in {"6", "11"}
+        assert conf["country_code"] == "US"
+        assert conf["wpa"] == "2"
+        assert conf["wpa_key_mgmt"] == "WPA-PSK"
+        assert conf["wpa_passphrase"] == "river-cedar-42"
+        assert conf["rsn_pairwise"] == "CCMP"
+        assert conf["ieee80211w"] == "0"
+        assert "SHA256" not in text
+        assert "SAE" not in text
+        assert "sae" not in text.lower()
 
-    def test_existing_profile_is_updated_when_add_cannot_replace_it(self, nm):
-        """delete + add is the normal path. When the old profile is still
-        there, modify writes the same security before activation."""
+    def test_country_follows_the_regulatory_domain(self, nm):
+        from utils.netctl import hostapd_config, wifi_country
+
+        nm.regdom = "DE"
+        assert wifi_country() == "DE"
+        text = hostapd_config("WQM1-4FD8", "river-cedar-42", country=wifi_country())
+        assert _conf(text)["country_code"] == "DE"
+        assert "iw" in nm.calls[0] and nm.calls[0][1] == "reg"
+
+    def test_start_ap_writes_hostapd_and_dnsmasq_then_starts_them(self, nm, monkeypatch):
+        import os
+        from pathlib import Path
+
+        from utils.captive_portal import dnsmasq_ap_config
         from utils.netctl import start_ap
 
-        nm.add_rc = 10
+        monkeypatch.setenv(
+            "WQM1_PORTAL_MODE_FILE", str(Path(os.environ["WQM1_HOSTAPD_CONF"]).parent / "mode")
+        )
         r = start_ap("WQM1-4FD8", "river-cedar-42")
         assert r["ok"] is True
-        modify = next(c for c in nm.calls if c[1:3] == ["connection", "modify"])
-        props = dict(zip(modify[4::2], modify[5::2], strict=True))
-        assert props["802-11-wireless-security.proto"] == "rsn"
-        assert props["802-11-wireless-security.pairwise"] == "ccmp"
-        assert props["802-11-wireless-security.group"] == "ccmp"
-        assert props["802-11-wireless-security.pmf"] == "1"
-        assert props["802-11-wireless-security.key-mgmt"] == "wpa-psk"
-        assert props["802-11-wireless.powersave"] == "2"
-        assert props["802-11-wireless.ssid"] == "WQM1-4FD8"
-        assert props["802-11-wireless-security.psk"] == "river-cedar-42"
-        up = next(c for c in nm.calls if c[1:3] == ["connection", "up"])
-        assert nm.calls.index(modify) < nm.calls.index(up)
+        assert r["address"] == "192.168.4.1"
+        assert nm.ap is True
+        assert nm.dnsmasq is True
+        assert nm.managed == "no"
+        hostapd = Path(os.environ["WQM1_HOSTAPD_CONF"]).read_text(encoding="utf-8")
+        dns = Path(os.environ["WQM1_DNSMASQ_CONF"]).read_text(encoding="utf-8")
+        conf = _conf(hostapd)
+        assert conf["ssid"] == "WQM1-4FD8"
+        assert conf["wpa_key_mgmt"] == "WPA-PSK"
+        assert conf["ieee80211w"] == "0"
+        assert conf["rsn_pairwise"] == "CCMP"
+        assert conf["wpa_passphrase"] == "river-cedar-42"
+        assert "SHA256" not in hostapd
+        assert "bind-interfaces" in dns
+        assert "interface=wlan0" in dns
+        assert "dhcp-range=192.168.4.10,192.168.4.254,255.255.255.0,12h" in dns
+        assert "address=/#/192.168.4.1" in dns
+        assert 'dhcp-option=114,"http://192.168.4.1/setup/"' in dns
+        assert dns == dnsmasq_ap_config()
+        assert ":8080" not in dns
+        managed_no = _at(
+            nm.calls, lambda c: c[:6] == ["nmcli", "device", "set", "wlan0", "managed", "no"]
+        )
+        addr = _at(nm.calls, lambda c: c[:3] == ["ip", "addr", "replace"])
+        hostapd_start = _at(
+            nm.calls, lambda c: c[:3] == ["systemctl", "start", "wqm1-setup-hostapd.service"]
+        )
+        dns_start = _at(
+            nm.calls, lambda c: c[:3] == ["systemctl", "start", "wqm1-setup-dnsmasq.service"]
+        )
+        assert managed_no < addr < hostapd_start < dns_start
+        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
+        from utils.captive_portal import portal_should_bind, read_mode
+
+        assert read_mode() == "up"
+        assert portal_should_bind(read_mode(), True) is True
+        mode = Path(os.environ["WQM1_HOSTAPD_CONF"]).stat().st_mode & 0o777
+        assert mode == 0o600
+
+    def test_portal_still_answers_a_captive_probe(self, nm, monkeypatch, tmp_path):
+        import http.client
+        import threading
+
+        from utils.captive_portal import PORTAL_URL, make_server
+        from utils.netctl import start_ap
+
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "mode"))
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        portal = make_server("127.0.0.1", 0, backend=9)
+        thread = threading.Thread(target=portal.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", portal.server_address[1], timeout=2)
+            conn.request(
+                "GET",
+                "/hotspot-detect.html",
+                headers={"Host": "captive.apple.com", "Connection": "close"},
+            )
+            resp = conn.getresponse()
+            body = resp.read()
+            location = resp.getheader("Location")
+            conn.close()
+        finally:
+            portal.shutdown()
+            thread.join(timeout=2)
+        assert resp.status == 302
+        assert location == PORTAL_URL
+        assert b"Success" not in body
+
+    def test_scan_while_the_ap_is_up_uses_iw(self, nm):
+        from utils.netctl import scan_networks, start_ap
+
+        nm.iw_scan = (
+            "BSS aa:bb:cc:dd:ee:01(on wlan0)\n"
+            "\tsignal: -40.00 dBm\n"
+            "\tSSID: PondHouse\n"
+            "\tRSN:\n"
+            "BSS aa:bb:cc:dd:ee:02(on wlan0)\n"
+            "\tsignal: -70.00 dBm\n"
+            "\tSSID: Barn\n"
+        )
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        nets = scan_networks()
+        assert [n["ssid"] for n in nets] == ["PondHouse", "Barn"]
+        assert nets[0]["secured"] is True
+        assert nets[0]["signal"] == 100
+        assert nets[1]["secured"] is False
+        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in nm.calls)
+        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in nm.calls)
+
+    def test_stop_orders_dnsmasq_then_hostapd_then_nm(self, nm):
+        from utils.netctl import start_ap, stop_ap
+
+        assert start_ap("WQM1-0001", "river-cedar-42")["ok"]
+        nm.calls.clear()
+        assert stop_ap()["ok"]
+        dns_stop = _at(
+            nm.calls, lambda c: c[:3] == ["systemctl", "stop", "wqm1-setup-dnsmasq.service"]
+        )
+        host_stop = _at(
+            nm.calls, lambda c: c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"]
+        )
+        flush = _at(nm.calls, lambda c: c[:4] == ["ip", "addr", "flush", "dev"])
+        managed_yes = _at(
+            nm.calls, lambda c: c[:6] == ["nmcli", "device", "set", "wlan0", "managed", "yes"]
+        )
+        assert dns_stop < host_stop < flush < managed_yes
+        assert nm.ap is False
+        assert nm.managed == "yes"
+
+    def test_dnsmasq_failure_tears_the_ap_back_down(self, nm):
+        from utils.netctl import start_ap
+
+        nm.dnsmasq_rc = 1
+        r = start_ap("WQM1-0001", "river-cedar-42")
+        assert r["ok"] is False
+        assert "dnsmasq" in r["error"]
+        assert nm.ap is False
+        assert nm.managed == "yes"
+
+    def test_a_leftover_nm_profile_is_deleted_and_not_activated(self, nm):
+        from utils.netctl import AP_CONNECTION_NAME, start_ap
+
+        r = start_ap("WQM1-4FD8", "river-cedar-42")
+        assert r["ok"] is True
+        assert any(c[1:4] == ["connection", "delete", AP_CONNECTION_NAME] for c in nm.calls)
+        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
+        assert not any(c[1:3] == ["connection", "add"] for c in nm.calls)
 
     def test_ensure_reachable_prefers_a_station_link(self, nm):
         from utils.netctl import ensure_reachable
@@ -279,7 +453,9 @@ class TestAccessPoint:
             clock=clock,
         )
         assert r["ap"] is True
-        activations = [c for c in nm.calls if c[1:3] == ["connection", "up"]]
+        activations = [
+            c for c in nm.calls if c[:3] == ["systemctl", "start", "wqm1-setup-hostapd.service"]
+        ]
         assert len(activations) == 2
 
 
@@ -305,7 +481,9 @@ class TestJoin:
         assert r["error"] is None
         assert r["ip"] == "192.168.1.50"
         assert r["reason"] is None
-        assert any(c[1:3] == ["connection", "down"] for c in nm.calls)
+        assert any(c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls)
+        assert nm.ap is False
+        assert nm.managed == "yes"
 
     def test_wrong_password_reraises_the_ap(self, nm):
         """The load-bearing case: an installer locked out by a typo is worse
@@ -328,6 +506,19 @@ class TestJoin:
         assert nm.ap is True
         # The failed profile is dropped so NM does not keep retrying it.
         assert any(c[1:3] == ["connection", "delete"] and c[3] == "PondHouse" for c in nm.calls)
+        # Stop (managed yes) happens before the join; the restore sets managed no
+        # and starts hostapd again.
+        connect = _at(nm.calls, lambda c: c[1:4] == ["device", "wifi", "connect"])
+        managed_yes = _at(
+            nm.calls, lambda c: c[:6] == ["nmcli", "device", "set", "wlan0", "managed", "yes"]
+        )
+        managed_no = _at(
+            nm.calls, lambda c: c[:6] == ["nmcli", "device", "set", "wlan0", "managed", "no"]
+        )
+        restored = _at(
+            nm.calls, lambda c: c[:3] == ["systemctl", "start", "wqm1-setup-hostapd.service"]
+        )
+        assert managed_yes < connect < managed_no < restored
 
     def test_a_failed_restore_is_retried(self, nm):
         from utils.netctl import join_network
@@ -346,7 +537,10 @@ class TestJoin:
             sleep=lambda s: None,
         )
         assert r["ap_restored"] is True
-        activations = [c for c in nm.calls if c[1:3] == ["connection", "up"]]
+        assert r["reason"] == "wrong_password"
+        activations = [
+            c for c in nm.calls if c[:3] == ["systemctl", "start", "wqm1-setup-hostapd.service"]
+        ]
         assert len(activations) == 2
 
     def test_join_refuses_a_control_character_ssid(self, nm):
@@ -645,6 +839,41 @@ class TestApFallbackScript:
         combined = result.stdout + result.stderr
         assert "StartLimitIntervalSec" not in combined
         assert "Unknown key" not in combined
+
+    def test_setup_ap_units_verify(self):
+        import configparser
+        import shutil
+        import subprocess
+        from pathlib import Path
+
+        root = Path(__file__).parent.parent / "systemd"
+        names = ("wqm1-setup-hostapd.service", "wqm1-setup-dnsmasq.service")
+        for name in names:
+            parser = configparser.ConfigParser(strict=False, interpolation=None)
+            parser.optionxform = str
+            parser.read(root / name)
+            assert parser.get("Unit", "StartLimitIntervalSec") == "600"
+            assert parser.get("Unit", "StartLimitBurst") == "8"
+            assert parser.get("Service", "Restart") == "on-failure"
+            assert "WantedBy" not in parser.sections()
+        hostapd = (root / names[0]).read_text()
+        dnsmasq = (root / names[1]).read_text()
+        assert "ExecStart=/usr/sbin/hostapd /run/wqm1/hostapd.conf" in hostapd
+        assert "hostapd -B" not in hostapd
+        assert "ExecStart=/usr/sbin/dnsmasq --keep-in-foreground" in dnsmasq
+        assert "BindsTo=wqm1-setup-hostapd.service" in dnsmasq
+        exe = shutil.which("systemd-analyze")
+        if not exe:
+            return
+        result = subprocess.run(
+            [exe, "verify", *[str(root / name) for name in names]],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        combined = result.stdout + result.stderr
+        assert "Unknown key" not in combined
+        assert "StartLimitIntervalSec" not in combined
 
     def test_failed_activation_is_written_to_the_status_file(self, tmp_path, monkeypatch):
         import importlib.util

@@ -16,6 +16,13 @@ the profile from the same file. A 64-bit userspace on a Zero W, and a
 No Wi-Fi credentials are in `bootfs/` or `overlay/`. Wi-Fi is set later, on
 the unit, from the setup hotspot. The overlay is not copied per arch.
 
+`setup.sh` installs `hostapd` and `dnsmasq` into the image (dnsmasq may
+already be present; the package install is idempotent). The distro
+`hostapd.service` and `dnsmasq.service` are masked. The setup AP uses
+`wqm1-setup-hostapd.service` and `wqm1-setup-dnsmasq.service`, which are
+copied in and not enabled. `netctl` starts them only while the hotspot
+is up.
+
 ## Base images
 
 Both dated 2026-10-06. The sha256 is the official sidecar

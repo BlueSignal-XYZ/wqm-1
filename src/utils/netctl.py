@@ -38,15 +38,22 @@ Two more since site flow v2 (2026-10-03):
   on 192.168.4.1:80 (not as root) and answers captive probes with a redirect
   to ``http://192.168.4.1/setup/``. ``start_ap`` arms that listener;
   ``join_network`` disarms it the moment a station joins, so port 80 is not
-  left open on the site LAN. The DNS half (every name answers 192.168.4.1,
-  DHCP option 114) is a dnsmasq-shared drop-in, which NetworkManager does
-  not load for a station link. ``remove_legacy_captive_nat`` deletes the old
-  port-80 NAT redirect: that rule stole the packets from the listener and
-  sent phones to ``:8080``. Root only, from the boot-time AP fallback.
+  left open on the site LAN. DNS and DHCP for that subnet are a dedicated
+  dnsmasq bound to ``wlan0`` (wildcard to 192.168.4.1, DHCP option 114).
+  It is stopped before the join, so it does not answer on the site LAN.
+  ``remove_legacy_captive_nat`` deletes the old port-80 NAT redirect: that
+  rule stole the packets from the listener and sent phones to ``:8080``.
+  Root only, from the boot-time AP fallback.
 
-Everything shells NetworkManager's ``nmcli`` with a fixed argv and no shell,
-the same tool ``netinfo`` already reads through. Every call returns a result
-dict and never raises.
+The setup AP is hostapd, not NetworkManager shared mode. NetworkManager
+1.52.1 always adds ``WPA-PSK-SHA256`` when ``key-mgmt`` is ``wpa-psk`` and
+the supplicant supports PMF; ``pmf=disable`` only drops SAE in AP mode.
+``brcmfmac`` treats that SHA256 AKM as the MFP suite, and BCM43430/1
+firmware 7.45.98 does not complete the handshake when a phone selects it
+with management-frame protection off. hostapd is told ``wpa_key_mgmt=WPA-PSK``
+and ``ieee80211w=0``. While the AP is up, ``wlan0`` is unmanaged in
+NetworkManager. The join still uses ``nmcli`` after the interface is handed
+back. Every call returns a result dict and never raises.
 
 **Simulated units never reach this code's subprocesses.** When
 ``WQM1_VIRTUAL_NET`` is set, every function delegates to ``utils.netsim`` — a
@@ -60,37 +67,38 @@ import errno
 import hashlib
 import ipaddress
 import logging
+import os
 import re
 import shutil
 import socket
 import subprocess  # nosec B404 - fixed argv, no shell, resolved binaries only
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from utils import netsim
+from utils.captive_portal import (
+    arm_portal,
+    disarm_portal,
+    ensure_dnsmasq_conf,
+    wait_until_reachable,
+)
 
 logger = logging.getLogger("wqm1.netctl")
 
 AP_CONNECTION_NAME = "wqm1-setup-ap"
 AP_GRACE_S = 45
-# BCM43430/1 firmware 7.45.98 (TOB) rejects NetworkManager's default hotspot.
-# WPA+RSN and TKIP come back as "nl80211: kernel reports: key setting
-# validation failed", and the WPA vendor IE as
-# "brcmf_vif_set_mgmt_ie: vndr ie set error : -52". WPA2-PSK only is the
-# set that firmware accepts. 7.45.96.s1 accepts the defaults; this is the
-# stricter of the two, and every board uses it (the firmware does not
-# branch on the chip). pmf 1 is NetworkManager's "disabled". powersave 2
-# is "disable" — the driver turns power save on while the SDIO radio loads.
-AP_SECURITY_PROPERTIES: tuple[tuple[str, str], ...] = (
-    ("802-11-wireless.mode", "ap"),
-    ("802-11-wireless.powersave", "2"),
-    ("802-11-wireless-security.key-mgmt", "wpa-psk"),
-    ("802-11-wireless-security.proto", "rsn"),
-    ("802-11-wireless-security.pairwise", "ccmp"),
-    ("802-11-wireless-security.group", "ccmp"),
-    ("802-11-wireless-security.pmf", "1"),
-)
+# The setup AP is hostapd on wlan0, not an NM shared connection. NM 1.52.1
+# cannot be told to offer WPA-PSK without WPA-PSK-SHA256, and that AKM
+# fails the 4-way handshake on BCM43430/1 firmware 7.45.98 when PMF is off.
+HOSTAPD_UNIT = "wqm1-setup-hostapd.service"
+DNSMASQ_UNIT = "wqm1-setup-dnsmasq.service"
+HOSTAPD_CTRL = "/run/wqm1/hostapd"
+# Channel 6. 11 is the other non-overlapping 2.4 GHz channel; one is pinned
+# so the beacon does not move between boots.
+AP_CHANNEL = 6
+AP_CHANNELS = (6, 11)
 # How long to wait for wlan0 to leave "unavailable" (rfkill, firmware still
 # loading, interface not created yet) before the hotspot attempt. The Pi
 # Zero W's SDIO radio is often still down well after NetworkManager has
@@ -229,14 +237,22 @@ def prepare_wifi_radio(iface: str = DEFAULT_WIFI_IFACE) -> None:
     _nmcli("radio", "wifi", "on")
     _run(["ip", "link", "set", iface, "up"])
     # The brcmfmac probe enables power save before any connection profile
-    # exists. The AP profile also sets 802-11-wireless.powersave 2; this
-    # catches the window before that profile is active.
+    # exists. start_ap turns it off again once hostapd is beaconing.
     _run(["iw", "dev", iface, "set", "power_save", "off"])
     _nmcli("device", "set", iface, "managed", "yes")
 
 
 _USABLE_STATES = frozenset(
-    {"connected", "disconnected", "connecting", "deactivating", "disconnecting"}
+    {
+        "connected",
+        "disconnected",
+        "connecting",
+        "deactivating",
+        "disconnecting",
+        # The setup AP takes wlan0 away from NetworkManager. unmanaged is
+        # that state, not a radio that has failed to appear.
+        "unmanaged",
+    }
 )
 
 
@@ -255,11 +271,11 @@ def iface_state(iface: str = DEFAULT_WIFI_IFACE) -> str | None:
 
 
 def iface_usable(iface: str = DEFAULT_WIFI_IFACE) -> bool:
-    """True when NetworkManager will accept a hotspot on ``iface``.
+    """True when ``iface`` can host the setup AP or a station join.
 
     ``unavailable`` is rfkill or firmware that has not come up.
-    ``unmanaged`` is an interface NetworkManager will not configure.
-    Neither can host the setup AP.
+    ``unmanaged`` means NetworkManager is not configuring it, which is
+    what AP mode asks for. A missing interface is not usable.
     """
     return iface_state(iface) in _USABLE_STATES
 
@@ -279,13 +295,96 @@ def station_connected(iface: str = DEFAULT_WIFI_IFACE) -> bool:
     return False
 
 
+def hostapd_conf_path() -> Path:
+    override = os.environ.get("WQM1_HOSTAPD_CONF")
+    if override:
+        return Path(override)
+    return Path("/run/wqm1/hostapd.conf")
+
+
+def wifi_country() -> str:
+    """Regulatory domain hostapd should advertise.
+
+    The same rule as ``prepare_wifi_radio``: a country ``iw reg get``
+    already reports is kept, and an unset domain is US.
+    """
+    if netsim.is_virtual():
+        return "US"
+    rc, out, _ = _run(["iw", "reg", "get"])
+    code = _regdom(out) if rc == 0 else ""
+    if len(code) == 2 and code.isalpha():
+        return code.upper()
+    return "US"
+
+
+def hostapd_config(
+    ssid: str,
+    passphrase: str,
+    iface: str = DEFAULT_WIFI_IFACE,
+    country: str = "US",
+    channel: int = AP_CHANNEL,
+) -> str:
+    """hostapd configuration for the setup AP.
+
+    ``wpa_key_mgmt`` is ``WPA-PSK`` and nothing else. No SHA256 AKM, no SAE.
+    ``ieee80211w=0`` and ``rsn_pairwise=CCMP``. The country code is the one
+    ``prepare_wifi_radio`` leaves set.
+    """
+    code = (country or "").strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        code = "US"
+    use_channel = channel if channel in AP_CHANNELS else AP_CHANNEL
+    lines = [
+        f"interface={iface}",
+        "driver=nl80211",
+        f"ssid={ssid}",
+        "hw_mode=g",
+        f"channel={use_channel}",
+        f"country_code={code}",
+        "ieee80211d=1",
+        "auth_algs=1",
+        "wpa=2",
+        "wpa_key_mgmt=WPA-PSK",
+        f"wpa_passphrase={passphrase}",
+        "rsn_pairwise=CCMP",
+        "ieee80211w=0",
+        f"ctrl_interface={HOSTAPD_CTRL}",
+        "ctrl_interface_group=0",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def hostapd_state() -> str | None:
+    """hostapd control-interface state, or None when it cannot be asked.
+
+    ``ENABLED`` means the AP is beaconing. ``""`` means hostapd_cli ran and
+    the AP is not up. None means the binary is missing or the socket
+    refused this user, which a status file must not record as "down".
+    """
+    if netsim.is_virtual():
+        return "ENABLED" if netsim.ap_active() else ""
+    rc, out, err = _run(["hostapd_cli", "-p", HOSTAPD_CTRL, "status"], timeout=5)
+    if rc == 127:
+        return None
+    blob = "\n".join(part for part in (out, err) if part)
+    if "permission denied" in blob.lower():
+        return None
+    for line in blob.splitlines():
+        if line.startswith("state="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
 def ap_active(iface: str = DEFAULT_WIFI_IFACE) -> bool:
+    """True when hostapd reports ``state=ENABLED`` on ``iface``.
+
+    The interface argument is kept for callers that used to ask
+    NetworkManager. The control socket is the one ``hostapd_config`` sets.
+    """
+    del iface
     if netsim.is_virtual():
         return netsim.ap_active()
-    rc, out, _ = _nmcli("-t", "-f", "NAME,DEVICE", "connection", "show", "--active")
-    if rc != 0:
-        return False
-    return any(line.startswith(f"{AP_CONNECTION_NAME}:") for line in out.splitlines())
+    return hostapd_state() == "ENABLED"
 
 
 def _nm_error(rc: int, out: str, err: str) -> str:
@@ -298,52 +397,102 @@ def _nm_error(rc: int, out: str, err: str) -> str:
     return " | ".join(parts) if parts else f"nmcli rc {rc}"
 
 
-def ap_profile_properties(
-    ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE
-) -> list[tuple[str, str]]:
-    """Property pairs written onto ``wqm1-setup-ap`` before it is activated.
+def _write_private(path: Path, text: str, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.chmod(tmp, mode)
+    tmp.replace(path)
 
-    Applied with ``nmcli connection modify`` on every raise, including when
-    a profile from an older image is still there (``connection add`` fails
-    because the name exists). Activation sees WPA2-PSK only, PMF off, and
-    power save disabled — not NetworkManager's default hotspot.
+
+def _systemctl(*args: str, timeout: float = 30.0) -> tuple[int, str, str]:
+    return _run(["systemctl", *args], timeout=timeout)
+
+
+def _set_managed(iface: str, managed: bool) -> tuple[int, str, str]:
+    return _nmcli("device", "set", iface, "managed", "yes" if managed else "no")
+
+
+def _packaged_unit(name: str) -> Path | None:
+    packaged = Path(__file__).resolve().parents[2] / "systemd" / name
+    if packaged.is_file():
+        return packaged
+    installed = Path("/opt/bluesignal/current/systemd") / name
+    if installed.is_file():
+        return installed
+    return None
+
+
+def ensure_ap_units() -> dict[str, Any]:
+    """Install the hostapd and dnsmasq units if this process is root.
+
+    ``setup.sh`` copies them. An image that has not re-run setup still
+    needs them the first time the AP is raised. They are not enabled:
+    nothing starts them at boot except ``start_ap``.
     """
-    return [
-        ("connection.interface-name", iface),
-        ("connection.autoconnect", "no"),
-        ("802-11-wireless.ssid", ssid),
-        *AP_SECURITY_PROPERTIES,
-        ("802-11-wireless-security.psk", passphrase),
-        ("ipv4.method", "shared"),
-        ("ipv4.addresses", AP_SUBNET),
-    ]
+    try:
+        root = os.geteuid() == 0
+    except AttributeError:
+        root = False
+    if not root:
+        return {"ok": True, "skipped": "not root"}
+    changed = False
+    for name in (HOSTAPD_UNIT, DNSMASQ_UNIT):
+        src = _packaged_unit(name)
+        if src is None:
+            return {"ok": False, "error": f"{name} unit file missing"}
+        dest = Path("/etc/systemd/system") / name
+        text = src.read_text(encoding="utf-8")
+        try:
+            if dest.is_file() and dest.read_text(encoding="utf-8") == text:
+                continue
+            dest.write_text(text, encoding="utf-8")
+        except OSError as e:
+            return {"ok": False, "error": str(e)}
+        changed = True
+    if changed:
+        rc, _out, err = _systemctl("daemon-reload")
+        if rc != 0:
+            return {"ok": False, "error": err or f"daemon-reload rc {rc}"}
+    return {"ok": True, "reloaded": changed}
 
 
-def _flatten_properties(pairs: list[tuple[str, str]]) -> list[str]:
-    flat: list[str] = []
-    for key, value in pairs:
-        flat.extend((key, value))
-    return flat
+def _wait_hostapd() -> bool:
+    for attempt in range(25):
+        if hostapd_state() == "ENABLED":
+            return True
+        if attempt < 24:
+            time.sleep(0.2)
+    return False
+
+
+def _release_ap_iface(iface: str) -> None:
+    """Stop both units, drop 192.168.4.1, and give wlan0 back to NM."""
+    _systemctl("stop", DNSMASQ_UNIT)
+    _systemctl("stop", HOSTAPD_UNIT)
+    _run(["ip", "addr", "flush", "dev", iface])
+    _nmcli("connection", "delete", AP_CONNECTION_NAME)
+    _set_managed(iface, True)
 
 
 def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
-    """Raise the setup hotspot. WPA2-PSK, private subnet, NM's own DHCP.
+    """Raise the setup hotspot with hostapd. WPA2-PSK, 192.168.4.1/24.
 
     Refuses a passphrase under 8 characters (WPA2 minimum) rather than
     raising an open network — an open AP into a PIN-gated page is still an
     open AP.
 
-    The profile is deleted and written again on every raise, then modified
-    with the firmware-compatible security before ``connection up``. An
-    already-flashed card picks the new settings up the next time this runs
-    (boot, or a failed join that brings the AP back). ``nmcli device wifi
-    hotspot`` is not used: it activates NetworkManager's default security
-    before any modify, and that activation is what 7.45.98 rejects.
+    NetworkManager is told to leave ``wlan0`` alone, then hostapd beacons
+    and dnsmasq serves DHCP and the captive DNS. A leftover
+    ``wqm1-setup-ap`` NM profile is deleted so a later ``managed yes``
+    cannot raise the shared-mode AP that advertises WPA-PSK-SHA256.
     """
     if not _SSID_RE.match(ssid or ""):
         return {"ok": False, "error": "invalid ssid"}
     if not passphrase or len(passphrase) < 8:
         return {"ok": False, "error": "passphrase must be at least 8 characters"}
+    if any(ord(ch) < 32 for ch in passphrase):
+        return {"ok": False, "error": "invalid passphrase"}
     if netsim.is_virtual():
         result = netsim.start_ap(ssid, passphrase)
         if result.get("ok"):
@@ -352,59 +501,124 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
     if ap_active(iface):
         _arm_portal()
         return {"ok": True, "ssid": ssid, "already": True}
-    # A profile left by an older image (or by a failed activation that
-    # never reached autoconnect=no) has the security this firmware rejects.
+    installed = ensure_ap_units()
+    if not installed.get("ok"):
+        return {"ok": False, "error": str(installed.get("error") or "ap units")}
+    # Best-effort. An unmanaged or idle interface has nothing to disconnect.
+    _nmcli("device", "disconnect", iface)
     _nmcli("connection", "delete", AP_CONNECTION_NAME)
-    add_rc, add_out, add_err = _nmcli(
-        "connection",
-        "add",
-        "type",
-        "wifi",
-        "ifname",
-        iface,
-        "con-name",
-        AP_CONNECTION_NAME,
-        "autoconnect",
-        "no",
-        "ssid",
-        ssid,
-        timeout=30,
-    )
-    props = _flatten_properties(ap_profile_properties(ssid, passphrase, iface))
-    mod_rc, mod_out, mod_err = _nmcli(
-        "connection", "modify", AP_CONNECTION_NAME, *props, timeout=30
-    )
-    if mod_rc != 0:
-        reason = _nm_error(mod_rc, mod_out, mod_err)
-        # modify of a name that was never created is less useful than the
-        # add error. A profile that survived delete reports the modify error.
-        if add_rc != 0 and "unknown" in reason.lower():
-            reason = _nm_error(add_rc, add_out, add_err)
-        logger.error("AP profile update failed: %s", reason)
-        return {"ok": False, "error": reason}
-    rc, out, err = _nmcli("connection", "up", AP_CONNECTION_NAME, "ifname", iface, timeout=40)
+    rc, out, err = _set_managed(iface, False)
     if rc != 0:
         reason = _nm_error(rc, out, err)
-        logger.error("AP start failed: %s", reason)
+        logger.error("Could not unmanage %s: %s", iface, reason)
+        return {"ok": False, "error": reason}
+    try:
+        _write_private(
+            hostapd_conf_path(),
+            hostapd_config(ssid, passphrase, iface, wifi_country(), AP_CHANNEL),
+            0o600,
+        )
+    except OSError as e:
+        _set_managed(iface, True)
+        return {"ok": False, "error": str(e)}
+    dns = ensure_dnsmasq_conf()
+    if not dns.get("ok"):
+        _set_managed(iface, True)
+        return {"ok": False, "error": str(dns.get("error") or "dnsmasq config")}
+    _run(["ip", "link", "set", iface, "up"])
+    rc, out, err = _run(["ip", "addr", "replace", AP_SUBNET, "dev", iface])
+    if rc != 0:
+        _set_managed(iface, True)
+        return {"ok": False, "error": err or out or f"ip addr rc {rc}"}
+    rc, out, err = _systemctl("start", HOSTAPD_UNIT)
+    if rc != 0 or not _wait_hostapd():
+        reason = _nm_error(rc, out, err) if rc != 0 else "hostapd did not reach ENABLED"
+        logger.error("hostapd start failed: %s", reason)
+        _release_ap_iface(iface)
+        return {"ok": False, "error": reason}
+    _run(["iw", "dev", iface, "set", "power_save", "off"])
+    rc, out, err = _systemctl("start", DNSMASQ_UNIT)
+    if rc != 0:
+        reason = _nm_error(rc, out, err)
+        logger.error("dnsmasq start failed: %s", reason)
+        _release_ap_iface(iface)
         return {"ok": False, "error": reason}
     logger.info("Setup AP up: %s on %s", ssid, iface)
     _arm_portal()
-    return {"ok": True, "ssid": ssid, "address": AP_SUBNET.split("/")[0]}
+    return {"ok": True, "ssid": ssid, "address": AP_ADDRESS}
 
 
 def stop_ap(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Stop dnsmasq, then hostapd, flush 192.168.4.1, and return wlan0 to NM."""
     if netsim.is_virtual():
         return netsim.stop_ap()
-    rc, out, err = _nmcli("connection", "down", AP_CONNECTION_NAME)
-    if rc != 0 and "not an active connection" not in (err + out).lower():
-        return {"ok": False, "error": err or out}
+    _release_ap_iface(iface)
     return {"ok": True}
 
 
+def _dbm_to_percent(dbm: float) -> int:
+    """Map dBm onto the 0–100 scale the setup page already shows."""
+    return max(0, min(100, int(round((dbm + 100.0) * 2))))
+
+
+def parse_iw_scan(text: str) -> list[dict[str, Any]]:
+    """SSIDs from ``iw dev wlan0 scan``, strongest first.
+
+    NetworkManager cannot scan while ``wlan0`` is unmanaged for hostapd.
+    ``iw`` can. A BSS with an RSN or WPA information element is secured.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    ssid: str | None = None
+    signal = 0
+    secured = False
+
+    def flush() -> None:
+        nonlocal ssid, signal, secured
+        if ssid:
+            prev = found.get(ssid)
+            if prev is None or int(prev["signal"]) < signal:
+                found[ssid] = {"ssid": ssid, "signal": signal, "secured": secured}
+        ssid = None
+        signal = 0
+        secured = False
+
+    for raw in (text or "").splitlines():
+        if raw.startswith("BSS "):
+            flush()
+            continue
+        line = raw.strip()
+        if line.startswith("SSID:"):
+            ssid = line.split(":", 1)[1].strip() or None
+        elif line.startswith("signal:"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    signal = _dbm_to_percent(float(parts[1]))
+                except ValueError:
+                    signal = 0
+        elif line.startswith("RSN:") or line.startswith("WPA:"):
+            secured = True
+    flush()
+    return sorted(found.values(), key=lambda item: -int(item["signal"]))
+
+
+def _scan_iw(iface: str) -> list[dict[str, Any]]:
+    rc, out, _ = _run(["iw", "dev", iface, "scan"], timeout=20)
+    if rc != 0:
+        return []
+    return parse_iw_scan(out)
+
+
 def scan_networks(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, Any]]:
-    """Visible networks, strongest first. Never raises; empty on failure."""
+    """Visible networks, strongest first. Never raises; empty on failure.
+
+    While the setup AP holds ``wlan0``, NetworkManager is not managing it,
+    so the scan goes through ``iw``. A station link still uses ``nmcli``.
+    """
     if netsim.is_virtual():
         return netsim.scan_networks()
+    if ap_active(iface) or iface_state(iface) == "unmanaged":
+        return _scan_iw(iface)
     _nmcli("device", "wifi", "rescan", "ifname", iface, timeout=20)
     rc, out, _ = _nmcli(
         "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list", "ifname", iface
@@ -885,8 +1099,6 @@ def _fail_join(
     restored = _restore_ap(had_ap, ap_ssid, ap_passphrase, iface, sleep)
     pending["ap_restored"] = restored
     if restored:
-        from utils.captive_portal import wait_until_reachable
-
         portal = wait_until_reachable(seconds=3.0, pause=sleep)
     else:
         _disarm_portal("hotspot down")
@@ -1052,14 +1264,10 @@ def forget_saved_wifi(keep: str | None, iface: str = DEFAULT_WIFI_IFACE) -> dict
 
 
 def _arm_portal() -> None:
-    from utils.captive_portal import arm_portal
-
     arm_portal()
 
 
 def _disarm_portal(reason: str) -> None:
-    from utils.captive_portal import disarm_portal
-
     disarm_portal(reason)
 
 

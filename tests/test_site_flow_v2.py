@@ -129,16 +129,21 @@ class TestCaptivePortal:
         assert src.index("remove_legacy_captive_nat(") < src.index("ensure_reachable(ssid")
         assert src.index("ensure_dnsmasq_conf()") < src.index("ensure_reachable(ssid")
 
-    def test_setup_sh_writes_the_dns_half(self):
+    def test_setup_sh_installs_hostapd_and_a_dedicated_dnsmasq(self):
         src = Path("setup.sh").read_text()
-        assert "/etc/NetworkManager/dnsmasq-shared.d/wqm1-captive.conf" in src
-        assert "dnsmasq_shared_config" in src
-        from utils.captive_portal import dnsmasq_shared_config
+        assert "hostapd" in src
+        assert "dnsmasq" in src
+        assert "wqm1-setup-hostapd.service" in src
+        assert "wqm1-setup-dnsmasq.service" in src
+        assert 'systemctl mask "$unit"' in src
+        assert "/etc/NetworkManager/dnsmasq-shared.d" not in src
+        from utils.captive_portal import dnsmasq_ap_config
 
-        generated = dnsmasq_shared_config()
+        generated = dnsmasq_ap_config()
         assert "address=/#/192.168.4.1" in generated
         assert "dhcp-option=114" in generated
         assert "http://192.168.4.1/setup/" in generated
+        assert "dhcp-range=192.168.4.10,192.168.4.254,255.255.255.0,12h" in generated
         assert ":8080" not in generated
 
 
