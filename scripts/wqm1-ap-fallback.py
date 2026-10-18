@@ -83,13 +83,13 @@ def hotspot_failure_status(detail: object, passphrase: str) -> str:
     return f"failed: {error or 'unknown'}"
 
 
-def _write_status(*, hotspot: str, ssid: str, portal: str) -> None:
+def _write_status(*, hotspot: str, ssid: str, portal: str, station: str | None = None) -> None:
     """Best-effort. A status-file failure must not decide whether the AP
     stays up — the file is how a pulled card is read, not the hotspot."""
     try:
         from diagnostics.boot_status import write_boot_status
 
-        write_boot_status(hotspot=hotspot, ssid=ssid, portal=portal)
+        write_boot_status(hotspot=hotspot, ssid=ssid, portal=portal, station=station)
     except Exception as e:  # noqa: BLE001 — never fail the AP over the status file
         logger.error("Could not write boot status: %s", e)
 
@@ -111,8 +111,14 @@ def main() -> int:
     ssid, passphrase = resolve_credentials()
     result = ensure_reachable(ssid, passphrase)
     if result.get("mode") == "station":
-        logger.info("Station link present — AP not needed")
-        _write_status(hotspot="station", ssid=ssid, portal="down: station")
+        ip = str(result.get("ip") or "").strip()
+        logger.info("Station link present%s — AP not needed", f" at {ip}" if ip else "")
+        _write_status(
+            hotspot="station",
+            ssid=ssid,
+            portal="down: station",
+            station=f"ok {ip}".strip(),
+        )
         return 0
     if result.get("ap"):
         # ensure_reachable already armed the listener. Start the unit (root
@@ -126,7 +132,13 @@ def main() -> int:
             logger.warning("Captive portal service: %s", started.get("error"))
         portal = wait_until_reachable()
         logger.info("Captive portal: %s", portal)
-        _write_status(hotspot="up", ssid=ssid, portal=portal)
+        station_failure = result.get("station_failure")
+        _write_status(
+            hotspot="up",
+            ssid=ssid,
+            portal=portal,
+            station=f"fail: {station_failure}" if station_failure else None,
+        )
         return 0
     failure = hotspot_failure_status(result.get("detail"), passphrase)
     logger.error("No station link and the AP could not be raised: %s", failure)

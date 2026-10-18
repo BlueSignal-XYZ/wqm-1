@@ -186,6 +186,21 @@ def _finish_setup(keep_ssid: str | None) -> dict:
     return {"forgotten": forgot.get("forgotten", []), "restarted": restarted}
 
 
+def _join_notice(ssid: str, result: dict) -> dict:
+    """What the setup page says when a join did not finish.
+
+    ``message`` is the installer sentence. ``error`` is the raw nmcli line,
+    kept for logs and for callers that have not grown a message yet.
+    """
+    told = result.get("message") or result.get("error") or "The unit could not join that network."
+    return {
+        "ssid": ssid,
+        "error": told,
+        "reason": result.get("reason"),
+        "ap_restored": bool(result.get("ap_restored")),
+    }
+
+
 def _declare(form: dict, backhaul: str) -> None:
     """Record the variant — unticked means NOT fitted, the same rule the
     sensors step applies to probes."""
@@ -206,13 +221,15 @@ def network() -> ResponseReturnValue:
     The LAST step (site flow v2). One form, three ways out:
 
     * ``join`` — record the variant, then join a scanned network. **This
-      finishes setup.** The page is usually served over the unit's own setup
-      hotspot, which goes DOWN the moment the join starts, so the phone may
-      never see this response: the PIN is checked first, and on success the
-      unit finishes on its own (other saved Wi-Fi forgotten, setup recorded,
-      firmware restarted). On failure ``netctl`` brings the hotspot straight
-      back and the reason is kept on the unit, so the page that reopens says
-      why.
+      finishes setup only when wlan0 is associated to that SSID, has a
+      usable IPv4 address (not a link-local 169.254 address), and can reach
+      the gateway or DNS.** The page is usually served over the unit's own
+      setup hotspot, which goes DOWN the moment the join starts, so the phone
+      may never see this response: the PIN is checked first, and on success
+      the unit finishes on its own (other saved Wi-Fi forgotten, setup recorded,
+      firmware restarted). On failure ``netctl`` stores the installer-readable
+      reason before it brings the hotspot and the port-80 portal back, so the
+      page that reopens says why.
     * ``keep`` — the unit is already on a network (the bench, or a LAN visit):
       record the variant and finish on the network it is using.
     * ``declare`` — LTE or no network here: record the variant and go to the
@@ -221,7 +238,13 @@ def network() -> ResponseReturnValue:
     * ``rescan`` — refresh the list.
     """
     from diagnostics.explain import explain
-    from utils.netctl import ap_active, ap_credentials, join_network, scan_networks
+    from utils.netctl import (
+        ap_active,
+        ap_credentials,
+        join_network,
+        scan_networks,
+        usable_ipv4,
+    )
     from utils.netinfo import wifi_status
 
     config_path = current_app.config["CONFIG_PATH"]
@@ -241,8 +264,21 @@ def network() -> ResponseReturnValue:
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             ap_ssid, ap_pass = ap_credentials()
-            result = join_network(ssid, password or None, ap_ssid=ap_ssid, ap_passphrase=ap_pass)
-            if result.get("connected"):
+
+            def _remember(pending: dict) -> None:
+                # Before the hotspot is raised again. A phone that rejoins
+                # the moment the AP is up must already find this sentence.
+                current_app.config["LAST_JOIN"] = _join_notice(ssid, pending)
+
+            result = join_network(
+                ssid,
+                password or None,
+                ap_ssid=ap_ssid,
+                ap_passphrase=ap_pass,
+                on_failure=_remember,
+            )
+            joined_ip = str(result.get("ip") or "")
+            if result.get("connected") and usable_ipv4(joined_ip):
                 current_app.config.pop("LAST_JOIN", None)
                 finished = _finish_setup(ssid)
                 return render_template(
@@ -250,21 +286,24 @@ def network() -> ResponseReturnValue:
                     steps=_steps(),
                     step="done",
                     ssid=ssid,
+                    ip=joined_ip,
                     identity=_identity(),
                     forgotten=finished["forgotten"],
                 )
             # Kept on the unit, not flashed: a flash rides in this response,
-            # and this response is usually lost with the hotspot.
-            current_app.config["LAST_JOIN"] = {
-                "ssid": ssid,
-                "error": result.get("error") or "no reason given",
-                "ap_restored": bool(result.get("ap_restored")),
-            }
+            # and this response is usually lost with the hotspot. The hook
+            # above wrote the same notice before the AP came back.
+            current_app.config["LAST_JOIN"] = _join_notice(ssid, result)
             return redirect(url_for("setup.network"))
         if action == "keep":
-            current = wifi_status().get("ssid")
-            if ap_active() or not current:
-                flash("This unit is not on a network yet — pick one and join it.", "error")
+            current_status = wifi_status()
+            current = current_status.get("ssid")
+            current_ip = str(current_status.get("ip") or "")
+            if ap_active() or not current or not usable_ipv4(current_ip):
+                flash(
+                    "This unit is not on a network with an address yet — pick one and join it.",
+                    "error",
+                )
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             finished = _finish_setup(current)
@@ -273,6 +312,7 @@ def network() -> ResponseReturnValue:
                 steps=_steps(),
                 step="done",
                 ssid=current,
+                ip=current_ip,
                 identity=_identity(),
                 forgotten=finished["forgotten"],
             )

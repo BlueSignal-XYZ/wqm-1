@@ -8,7 +8,8 @@ state changes. The first line is the commissioning verdict
 (``COMMISSION: READY`` or ``COMMISSION: FAIL: <reason>``). The rest names
 the firmware, the board and its revision code, the kernel, the Wi-Fi chip
 and firmware, undervoltage, the I2C buses the kernel enumerated, wlan0,
-the setup hotspot (SSID and the last AP error), the port-80 captive
+the setup hotspot (SSID and the last AP error), the station join
+(``station: ok <ip>`` or ``station: fail: <reason>``), the port-80 captive
 portal, ADC, 1-Wire, GPS, uptime, and the last fatal error.
 
 No secrets. A line that looks like a key, a passphrase, or a private key
@@ -42,6 +43,7 @@ _KEYS = (
     "wlan0",
     "ssid",
     "hotspot",
+    "station",
     "portal",
     "adc",
     "onewire",
@@ -382,6 +384,13 @@ def commission_verdict(fields: dict[str, str]) -> str:
         reasons.append(detail or "hotspot failed")
     elif not reachable:
         reasons.append("hotspot down")
+    # A failed site join while the hotspot is up is how the installer gets
+    # back in. It is not a board failure. A station line that says fail
+    # while we claim to be on that station is.
+    station = (fields.get("station") or "").strip()
+    if hotspot == "station" and station.startswith("fail"):
+        detail = station.split(":", 1)[1].strip() if ":" in station else station
+        reasons.append(detail or "station failed")
     # The portal is only required while the hotspot is up. A station link
     # has closed port 80 on purpose; that is not a commissioning failure.
     hotspot_up = hotspot == "up" or hotspot.startswith("up ")
@@ -516,6 +525,7 @@ def write_boot_status(
     i2c: str | None = None,
     wlan0: str | None = None,
     hotspot: str | None = None,
+    station: str | None = None,
     ssid: str | None = None,
     adc: str | None = None,
     adc_error: str | None = None,
@@ -554,6 +564,12 @@ def write_boot_status(
         ssid_text = prev["ssid"]
     else:
         ssid_text = _read_ssid()
+    if station is not None:
+        station_text = station
+    elif prev.get("station"):
+        station_text = prev["station"]
+    else:
+        station_text = ""
     if portal is not None:
         portal_text = portal
     elif hotspot_text == "up" or str(hotspot_text).startswith("up "):
@@ -573,6 +589,7 @@ def write_boot_status(
         "wlan0": wlan0 if wlan0 is not None else read_wlan_state(),
         "ssid": ssid_text,
         "hotspot": hotspot_text,
+        "station": station_text,
         "portal": portal_text,
         "adc": adc if adc is not None else prev.get("adc", "unknown"),
         "onewire": _kept(onewire, prev.get("onewire", ""), read_onewire_state()),

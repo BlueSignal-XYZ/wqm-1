@@ -373,6 +373,37 @@ class TestNetworkStepDeclaresTheVariant:
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert not (saved.get("service_window") or {}).get("setup_completed")
 
+    def test_a_join_without_a_usable_address_does_not_finish(self, factory_client, monkeypatch):
+        from utils import netctl
+
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *a, **k: {
+                "ok": False,
+                "connected": True,
+                "ap_restored": True,
+                "error": "activated",
+                "message": (
+                    "The unit joined the Wi-Fi but only has a link-local address (169.254.x), "
+                    "not one from the router."
+                ),
+                "reason": "no_dhcp",
+                "ip": "169.254.4.4",
+            },
+        )
+        monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "river-cedar-42"))
+        client, app = factory_client
+        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
+        client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        page = client.get("/setup/network")
+        assert b"169.254" in page.data
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert not (saved.get("service_window") or {}).get("setup_completed")
+
     def test_page_warns_before_a_join_when_served_over_the_ap(self, factory_client, monkeypatch):
         from utils import netctl, netinfo
 
@@ -421,7 +452,13 @@ class TestWizardWalkedInOrder:
         monkeypatch.setattr(
             netctl,
             "join_network",
-            lambda *a, **k: {"ok": True, "connected": True, "ap_restored": False, "error": None},
+            lambda *a, **k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
         )
         forgot = {}
 

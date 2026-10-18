@@ -96,6 +96,33 @@ def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
         )
         == "FAIL: now undervoltage throttled=0x1; adc faulted"
     )
+    # The hotspot is up, so a failed site join is not a board failure.
+    assert (
+        commission_verdict(
+            {
+                "hotspot": "up",
+                "portal": "up (80)",
+                "station": "fail: no address",
+                "adc": "ok",
+                "power": "ok",
+                "fatal": "none",
+            }
+        )
+        == "READY"
+    )
+    assert (
+        commission_verdict(
+            {
+                "hotspot": "station",
+                "portal": "down: station",
+                "station": "fail: no address",
+                "adc": "ok",
+                "power": "ok",
+                "fatal": "none",
+            }
+        )
+        == "FAIL: no address"
+    )
     # A GPS with no fix and a missing 1-Wire probe are not commissioning failures.
     assert (
         commission_verdict(
