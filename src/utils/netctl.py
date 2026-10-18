@@ -13,8 +13,10 @@ Two jobs (commissioning plan, PR 4):
 * **The access point.** At boot, if no known Wi-Fi network associates within
   ``AP_GRACE_S``, raise a WPA2 hotspot named after the unit (``WQM1-0001``)
   with the per-unit passphrase from the identity file. It is a FALLBACK,
-  never concurrent with a station link — Pi Zero 2W AP+STA on ``brcmfmac`` is
-  fragile, so the rule avoids the question. The AP stays up while the unit is
+  never concurrent with a station link — AP+STA on ``brcmfmac`` is fragile, so
+  the rule avoids the question. Zero W, Zero 2 W, Pi 3 and Pi 4 all expose
+  the onboard radio as ``wlan0`` under that driver (the chip differs; this
+  call does not). The AP stays up while the unit is
   unassociated, which is also how a permanently-offline well head is reached
   next year.
 * **The Wi-Fi join.** From the Service Window's network step: list networks,

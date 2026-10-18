@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from platform_support.board import RPI_DIRECT_HEADER_IDS
+
 logger = logging.getLogger("wqm1.hostpins")
 
 #: Bench-written overrides (physical pin → SoC pin name, bus numbers).
@@ -459,6 +461,6 @@ def pins_for_board(
             lgpio_module=lg,
             sysfs_root=sysfs_root,
         )
-    if board_id == "rpi-zero-2w":
+    if board_id in RPI_DIRECT_HEADER_IDS:
         return rpi_pins(board_id)
     return headerless_pins(board_id)

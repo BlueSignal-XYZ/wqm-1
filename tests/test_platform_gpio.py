@@ -201,10 +201,14 @@ class TestHeadlessBackend:
 
 class TestOpenGpio:
     def test_defaults_to_the_active_board(self, mock_hardware):
-        # No board pinned → detection on a dev host → the Pi profile.
+        # No board pinned → auto-detection. A dev host with no device tree
+        # falls back to the Zero 2 W profile; a real Pi reports its own id.
+        # Either way the header path is the Pi's, not a demotion.
+        from platform_support.board import RPI_DIRECT_HEADER_IDS
+
         io = open_gpio()
         assert io.backend == "rpi"
-        assert io.pins.board_id == "rpi-zero-2w"
+        assert io.pins.board_id in RPI_DIRECT_HEADER_IDS
 
     def test_follows_set_active_board(self, tmp_path):
         from platform_support import PROFILES, set_active_board

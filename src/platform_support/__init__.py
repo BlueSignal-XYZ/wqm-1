@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import threading
 
-from platform_support.board import PROFILES, BoardProfile, detect_board
+from platform_support.board import PROFILES, RPI_DIRECT_HEADER_IDS, BoardProfile, detect_board
 from platform_support.hostpins import HostPins, UnresolvedPinError, pins_for_board
 
 __all__ = [
     "PROFILES",
+    "RPI_DIRECT_HEADER_IDS",
     "BoardProfile",
     "HostPins",
     "UnresolvedPinError",

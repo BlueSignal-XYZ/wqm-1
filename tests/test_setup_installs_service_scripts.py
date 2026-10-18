@@ -92,3 +92,19 @@ class TestGoldenMode:
         block = self._block()
         assert "config.yaml" not in block.split("rm -f", 1)[1].split("journalctl")[0]
         assert "nmcli" not in block
+
+
+class TestArmhfInstallFixes:
+    """ARMv6 must not build from source when a wheel exists, and the captive
+    portal's iptables redirect has to be installed — Trixie Lite has neither."""
+
+    def test_every_pip_install_prefers_a_binary_wheel(self):
+        installs = [line for line in SETUP.splitlines() if "pip3 install" in line]
+        assert len(installs) >= 4
+        assert all("--prefer-binary" in line for line in installs)
+
+    def test_iptables_is_installed_on_every_host_path(self):
+        # Pi, Orange Pi and the digital-first apt lists each name the package.
+        assert "swig build-essential \\\n        iptables" in SETUP
+        assert "systemd-timesyncd \\\n        iptables" in SETUP
+        assert "python3-dev iptables" in SETUP

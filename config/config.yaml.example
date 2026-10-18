@@ -238,10 +238,15 @@ rules:
 
 # --- Host board ---
 # Which board the firmware runs on. "auto" (the default) reads
-# /proc/device-tree/model; set it explicitly only to pin a profile:
+# /proc/device-tree/model, then /proc/cpuinfo. Set it explicitly only to
+# pin a profile:
+#   rpi-zero-w         Raspberry Pi Zero W (and Zero WH)
 #   rpi-zero-2w        Raspberry Pi Zero 2 W — the reference host
+#   rpi-3              Raspberry Pi 3 (3B, 3B+, 3A+)
+#   rpi-4              Raspberry Pi 4 Model B (and the 400)
+#   rpi-5              Raspberry Pi 5 — detected, unsupported, header stack off
 #   orangepi-zero-3w   Orange Pi Zero 3W — same header, GPIO via lgpio;
 #                      its pin/bus overrides live in /etc/bluesignal/host-pins.yaml
 #   arduino-uno-q / arduino-ventuno-q / generic-linux — digital-first (no headers)
-# See docs/platforms.md.
+# See docs/platforms.md and docs/raspberry-pi.md.
 # board: auto

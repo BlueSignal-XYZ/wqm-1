@@ -103,4 +103,8 @@ class TestHeartbeatHostBoard:
         assert hb["hostBoard"] == "orangepi-zero-3w"
         set_active_board(None)
         hb = HealthReporter("2.3.0").build_heartbeat()
-        assert hb["hostBoard"] == "rpi-zero-2w"
+        # Auto-detection. No device tree (CI, a laptop) falls back to the
+        # Zero 2 W profile. A Pi reports itself. Never a headerless host.
+        profile = PROFILES[hb["hostBoard"]]
+        assert profile.family == "raspberry-pi"
+        assert profile.has_direct_headers is True

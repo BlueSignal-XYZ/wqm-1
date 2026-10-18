@@ -1,0 +1,4 @@
+# WQM-1 golden image. Every card is a never-booted copy, so each unit runs
+# cloud-init's first boot once; host keys and machine-id are made on that boot.
+dsmode: local
+instance_id: wqm1-golden-2.4.0
