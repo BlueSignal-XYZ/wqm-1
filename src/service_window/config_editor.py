@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from utils.atomic import atomic_write_text
+
 
 def read_config(path: str) -> dict[str, Any]:
     """Read YAML config file, returning empty dict if missing.
@@ -67,15 +69,8 @@ def update_config_section(path: str, section: str, updates: dict[str, Any]) -> N
 
 
 def _atomic_yaml_write(path: str, data: dict[str, Any]) -> None:
-    """Write YAML file atomically (write to .tmp then rename)."""
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    try:
-        with tmp.open("w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-        tmp.replace(p)
-    except Exception:
-        if tmp.exists():
-            tmp.unlink()
-        raise
+    """Write YAML file atomically (temp file, fsync, rename)."""
+    atomic_write_text(
+        path,
+        yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
+    )

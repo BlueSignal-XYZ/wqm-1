@@ -1,0 +1,14 @@
+[Unit]
+Description=Create the journal directory on the log tmpfs before the bind mount
+DefaultDependencies=no
+After=var-log.mount
+Before=var-log-journal.mount systemd-journald.service
+Requires=var-log.mount
+
+[Service]
+Type=oneshot
+ExecStart=/bin/mkdir -p /var/log/journal /var/lib/wqm1/journal
+RemainAfterExit=yes
+
+[Install]
+WantedBy=local-fs.target

@@ -46,6 +46,7 @@ from typing import Any
 from Crypto.PublicKey import ECC
 from Crypto.Signature import eddsa
 
+from utils.atomic import atomic_write_text
 from utils.config import FIRMWARE_VERSION, Settings
 
 logger = logging.getLogger("wqm1.ota")
@@ -471,10 +472,7 @@ class OTAAgent:
 
     def _write_state(self, state: dict) -> None:
         try:
-            self._state_dir.mkdir(parents=True, exist_ok=True)
-            tmp = self._state_file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(state, indent=2))
-            tmp.replace(self._state_file)
+            atomic_write_text(self._state_file, json.dumps(state, indent=2))
         except OSError as e:
             logger.warning("Could not write OTA state file: %s", e)
 
