@@ -131,6 +131,23 @@ class TestProbeResponses:
         for host in PROBE_HOSTS:
             assert classify_request("/", host) == "redirect"
 
+    def test_ios_and_android_stay_on_the_hotspot(self, servers):
+        """iOS 'Use Without Internet' and Android 'Stay connected'.
+
+        A body of Success, or an Android 204, tells the phone the hotspot has
+        internet. The phone then skips the sheet and keeps using mobile data.
+        These answers stay a redirect with an empty body so the phone offers
+        to stay on WQM1-xxxx.
+        """
+        portal, _backend = servers
+        ios = _get(portal.server_address[1], "/hotspot-detect.html", "captive.apple.com")
+        android = _get(portal.server_address[1], "/generate_204", "connectivitycheck.gstatic.com")
+        assert ios.status == 302
+        assert b"Success" not in ios.body  # type: ignore[attr-defined]
+        assert android.status != 204
+        assert android.status == 302
+        assert android.getheader("Location") == PORTAL_URL
+
     def test_redirect_target_is_the_setup_page_on_port_80(self):
         assert PORTAL_URL == "http://192.168.4.1/setup/"
         assert ":8080" not in PORTAL_URL

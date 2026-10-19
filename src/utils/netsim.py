@@ -28,6 +28,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from utils.wifi_setup import CAPTIVE_JOIN_MESSAGE
+
 ENV_VAR = "WQM1_VIRTUAL_NET"
 
 # The bench network every golden-image unit remembers. The wizard must forget
@@ -141,10 +143,17 @@ def stop_ap() -> dict[str, Any]:
 
 def scan_networks() -> list[dict[str, Any]]:
     st = read_state()
-    nets = [
-        {"ssid": n["ssid"], "signal": int(n.get("signal", 0)), "secured": bool(n.get("secured"))}
-        for n in st["networks"]
-    ]
+    nets = []
+    for n in st["networks"]:
+        row: dict[str, Any] = {
+            "ssid": n["ssid"],
+            "signal": int(n.get("signal", 0)),
+            "secured": bool(n.get("secured")),
+        }
+        for key in ("security", "freq_mhz", "hidden", "rssi_dbm", "band"):
+            if key in n and n[key] is not None:
+                row[key] = n[key]
+        nets.append(row)
     return sorted(nets, key=lambda n: -n["signal"])
 
 
@@ -162,6 +171,24 @@ def join_network(
         not target.get("secured") or (password or "") == target.get("password")
     )
     st["joins"] = (st.get("joins") or [])[-19:] + [{"ssid": ssid, "ok": ok}]
+    if ok and target is not None and target.get("captive"):
+        # The password was accepted and an address was handed out, but a
+        # sign-in page is blocking the internet. Put the hotspot back.
+        restored = False
+        if had_ap and ap_ssid and ap_passphrase:
+            st["ap"] = True
+            st["ap_ssid"] = ap_ssid
+            restored = True
+        _write(st)
+        return {
+            "ok": False,
+            "connected": False,
+            "ap_restored": restored,
+            "error": "sign-in page",
+            "message": CAPTIVE_JOIN_MESSAGE,
+            "reason": "captive_sign_in",
+            "ip": "192.168.1.57",
+        }
     if ok:
         st["station"] = ssid
         if ssid not in st["saved"]:

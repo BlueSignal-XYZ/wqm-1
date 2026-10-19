@@ -6,7 +6,10 @@ this repo as of 2026-08-18 — where a step differs from the printed installer
 manual, the code is right and the manual defect is named in §6.
 
 Companions: [`getting-started.md`](getting-started.md) (first install from
-scratch), [`ota-runbook.md`](ota-runbook.md) §7 (field bootstrap),
+scratch), [`installer-mistakes.md`](installer-mistakes.md) (the things that
+send an installer back to the truck: 2.4 GHz only, weak signal, the phone
+on mobile data, enterprise / WPA3 / sign-in Wi-Fi, the password, and the
+probes), [`ota-runbook.md`](ota-runbook.md) §7 (field bootstrap),
 `marketplace/docs/operations/device-reflash-runbook.md` (taking a unit back to
 zero).
 
@@ -152,6 +155,9 @@ reboot.** Not `otaStatus: success`; the number.
    cloud will have recorded a counter reset on the device.
 
 ## 2. On site
+
+Read [`installer-mistakes.md`](installer-mistakes.md) before the first
+join of the day. The setup page repeats the short version.
 
 1. **Mount and wire first, power second.** 24 V DC to the screw terminal is the
    production source; the USB-C supply is for debug only, powers neither the

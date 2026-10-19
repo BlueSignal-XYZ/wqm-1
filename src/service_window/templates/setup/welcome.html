@@ -1,6 +1,7 @@
 {% extends "setup_base.html" %}
 {% block title %}Setup{% endblock %}
 {% block content %}
+<p class="setup-alert" role="note">{{ cell_note }}</p>
 <h1 class="setup-h1">Let&rsquo;s set this unit up</h1>
 {% if carded %}
 <p class="lead">About three minutes. This unit already knows who it is and how to reach

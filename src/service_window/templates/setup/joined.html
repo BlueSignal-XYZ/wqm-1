@@ -4,6 +4,9 @@
 <h1 class="setup-h1">Joined {{ ssid }}. Setup is finished.</h1>
 <p class="lead">{{ identity.device_id }} is restarting on the owner&rsquo;s network{% if ip %}
 at {{ ip }}{% endif %}. It checks in to BlueSignal Cloud within a minute or two.</p>
+{% if weak %}
+<div class="flash error" role="alert">{{ weak_message }}{% if rssi is not none %} ({{ rssi }} dBm){% endif %}</div>
+{% endif %}
 <div class="next-step">
     <div class="next-step-title">Next: scan the label on the box</div>
     <p>Your phone camera opens BlueSignal Cloud, shows the unit checking in, and adds it

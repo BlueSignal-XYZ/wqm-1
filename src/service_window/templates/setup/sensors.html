@@ -31,6 +31,7 @@ this can take a minute after power-on.</p>
 {% if not_fitted %}
 <p class="skip-note">Not fitted on this unit: {{ not_fitted|join(', ') }}.</p>
 {% endif %}
+{% include "setup/_probes_status.html" %}
 <p class="refresh-note">Refreshes every 15 seconds.</p>
 
 <div class="setup-actions">

@@ -40,6 +40,7 @@ from flask import (
 )
 from flask.typing import ResponseReturnValue
 
+from diagnostics.boot_status import read_published_status
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
 from service_window.config_editor import read_config, update_config, update_config_section
@@ -51,6 +52,26 @@ from service_window.health import (
     sensor_cards,
     system_cards,
     worst_status,
+)
+from utils.identity import ap_name
+from utils.wifi_setup import (
+    HIDDEN_NOTE,
+    WEAK_SIGNAL_MESSAGE,
+    annotate_network,
+    band_notice,
+    block_reason,
+    blocked_networks,
+    cell_data_note,
+    find_network,
+    has_hidden,
+    is_weak_rssi,
+    joinable_networks,
+    missing_probe_message,
+    normalize_password,
+    password_problem,
+    probe_rows,
+    unconfirmed_missing,
+    unseen_ssid_notice,
 )
 
 setup_bp = Blueprint("setup", __name__, url_prefix="/setup")
@@ -113,6 +134,32 @@ def _identity() -> dict[str, str]:
     return _get_identity()
 
 
+def _ap_ssid() -> str:
+    try:
+        return ap_name()
+    except Exception:  # noqa: BLE001 — the landing note still has to render
+        return "WQM1-xxxx"
+
+
+def _live_probe_rows() -> list[dict[str, str]]:
+    """ADC from the firmware (or the status file) and 1-Wire from the status file."""
+    report = hardware_report(current_app.config["CMD_SOCK"])
+    status = read_published_status()
+    adc = str(report.get("adc") or status.get("adc") or "")
+    onewire = str(status.get("onewire") or "")
+    return probe_rows(adc, onewire)
+
+
+def _probe_block(form: dict | None = None) -> tuple[list[dict[str, str]], str | None]:
+    rows = _live_probe_rows()
+    if form is None:
+        return rows, None
+    pending = unconfirmed_missing(rows, form)
+    if not pending:
+        return rows, None
+    return rows, missing_probe_message(pending)
+
+
 @setup_bp.route("/")
 @login_required
 def welcome() -> str:
@@ -122,6 +169,7 @@ def welcome() -> str:
         steps=steps_for(config),
         step="welcome",
         carded=is_carded(config),
+        cell_note=cell_data_note(_ap_ssid()),
     )
 
 
@@ -184,6 +232,16 @@ def _finish_setup(keep_ssid: str | None) -> dict:
     )
     restarted = bool(send_command(current_app.config["CMD_SOCK"], "restart").get("ok"))
     return {"forgotten": forgot.get("forgotten", []), "restarted": restarted}
+
+
+def _notice_for(ssid: str, result: dict, networks: list[dict]) -> dict:
+    """Join notice, plus the 2.4 GHz sentence when that name was not in the scan."""
+    notice = _join_notice(ssid, result)
+    extra = unseen_ssid_notice(networks, ssid)
+    told = str(notice.get("error") or "")
+    if extra and extra not in told:
+        notice["error"] = f"{told} {extra}".strip()
+    return notice
 
 
 def _join_notice(ssid: str, result: dict) -> dict:
@@ -249,6 +307,64 @@ def network() -> ResponseReturnValue:
 
     config_path = current_app.config["CONFIG_PATH"]
 
+    def _scanned() -> list[dict]:
+        on_ap_now = ap_active()
+        wifi_now = wifi_status()
+        station = None if on_ap_now else wifi_now.get("ssid")
+        if not (on_ap_now or not station):
+            return []
+        return [annotate_network(row) for row in scan_networks()]
+
+    def _render_network(**extra: object) -> str:
+        config = read_config(config_path)
+        on_ap_now = ap_active()
+        wifi_now = wifi_status()
+        station_ssid = None if on_ap_now else wifi_now.get("ssid")
+        cards = (
+            {
+                "wifi": explain(
+                    "wifi",
+                    wifi_now["state"],
+                    {"ssid": wifi_now["ssid"], "rssi": wifi_now["rssi_dbm"]},
+                )
+            }
+            if station_ssid
+            else {}
+        )
+        scanned = _scanned()
+        rows, _ignored = _probe_block()
+        rssi = wifi_now.get("rssi_dbm")
+        choices = joinable_networks(scanned)
+        picked = str(extra.get("selected_ssid") or "")
+        hidden_prefill = picked
+        if not picked or any(n.get("ssid") == picked for n in choices):
+            hidden_prefill = ""
+        return render_template(
+            "setup/network.html",
+            steps=_steps(),
+            step="network",
+            wifi=wifi_now,
+            station_ssid=station_ssid,
+            station_weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
+            cards=cards,
+            on_ap=on_ap_now,
+            networks=choices,
+            blocked=blocked_networks(scanned),
+            hidden_prefill=hidden_prefill,
+            band_notice=band_notice(scanned),
+            hidden_note=HIDDEN_NOTE if has_hidden(scanned) else None,
+            weak_message=WEAK_SIGNAL_MESSAGE,
+            last_join=current_app.config.get("LAST_JOIN"),
+            backhaul=str(config.get("backhaul") or "wifi"),
+            lora_enabled=bool(config.get("lora_enabled", True)),
+            gps_enabled=bool(config.get("gps_enabled", True)),
+            identity=_identity(),
+            probe_rows=rows,
+            password=extra.get("password", ""),
+            trim_warning=extra.get("trim_warning"),
+            selected_ssid=extra.get("selected_ssid", ""),
+        )
+
     if request.method == "POST":
         action = request.form.get("action", "")
         if action in ("join", "keep") and current_app.config.get("PIN") == _FACTORY_PIN:
@@ -257,10 +373,36 @@ def network() -> ResponseReturnValue:
             flash("Set your own PIN first — the factory PIN is not allowed.", "error")
             return redirect(url_for("setup.pin"))
         if action == "join":
-            ssid = request.form.get("ssid", "").strip()
-            password = request.form.get("password", "")
+            hidden_name = request.form.get("hidden_ssid", "").strip()
+            ssid = hidden_name or request.form.get("ssid", "").strip()
+            raw_password = request.form.get("password", "")
             if not _SSID_RE.match(ssid):
                 flash("Pick a network from the list.", "error")
+                return redirect(url_for("setup.network"))
+            scanned = _scanned()
+            match = find_network(scanned, ssid)
+            refused = block_reason(match)
+            if refused:
+                flash(refused, "error")
+                return redirect(url_for("setup.network"))
+            keep_space = request.form.get("keep_trailing_space") == "on"
+            acked = request.form.get("trim_ack") == "yes"
+            password, trim_warning = normalize_password(
+                raw_password, keep_trailing_space=keep_space
+            )
+            if trim_warning and not acked:
+                # Show the warning before the radio is touched. The trimmed
+                # password stays in the form so the next tap can join it.
+                return _render_network(
+                    password=password, trim_warning=trim_warning, selected_ssid=ssid
+                )
+            problem = password_problem(password, secured=bool(match and match.get("secured")))
+            if problem:
+                flash(problem, "error")
+                return redirect(url_for("setup.network"))
+            _rows, probe_error = _probe_block(request.form)
+            if probe_error:
+                flash(probe_error, "error")
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             ap_ssid, ap_pass = ap_credentials()
@@ -268,7 +410,7 @@ def network() -> ResponseReturnValue:
             def _remember(pending: dict) -> None:
                 # Before the hotspot is raised again. A phone that rejoins
                 # the moment the AP is up must already find this sentence.
-                current_app.config["LAST_JOIN"] = _join_notice(ssid, pending)
+                current_app.config["LAST_JOIN"] = _notice_for(ssid, pending, scanned)
 
             result = join_network(
                 ssid,
@@ -281,6 +423,7 @@ def network() -> ResponseReturnValue:
             if result.get("connected") and usable_ipv4(joined_ip):
                 current_app.config.pop("LAST_JOIN", None)
                 finished = _finish_setup(ssid)
+                rssi = result.get("rssi")
                 return render_template(
                     "setup/joined.html",
                     steps=_steps(),
@@ -289,11 +432,14 @@ def network() -> ResponseReturnValue:
                     ip=joined_ip,
                     identity=_identity(),
                     forgotten=finished["forgotten"],
+                    weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
+                    weak_message=WEAK_SIGNAL_MESSAGE,
+                    rssi=rssi,
                 )
             # Kept on the unit, not flashed: a flash rides in this response,
             # and this response is usually lost with the hotspot. The hook
             # above wrote the same notice before the AP came back.
-            current_app.config["LAST_JOIN"] = _join_notice(ssid, result)
+            current_app.config["LAST_JOIN"] = _notice_for(ssid, result, scanned)
             return redirect(url_for("setup.network"))
         if action == "keep":
             current_status = wifi_status()
@@ -305,8 +451,13 @@ def network() -> ResponseReturnValue:
                     "error",
                 )
                 return redirect(url_for("setup.network"))
+            _rows, probe_error = _probe_block(request.form)
+            if probe_error:
+                flash(probe_error, "error")
+                return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             finished = _finish_setup(current)
+            rssi = current_status.get("rssi_dbm")
             return render_template(
                 "setup/joined.html",
                 steps=_steps(),
@@ -315,6 +466,9 @@ def network() -> ResponseReturnValue:
                 ip=current_ip,
                 identity=_identity(),
                 forgotten=finished["forgotten"],
+                weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
+                weak_message=WEAK_SIGNAL_MESSAGE,
+                rssi=rssi,
             )
         if action == "declare":
             backhaul = request.form.get("backhaul", "")
@@ -332,39 +486,7 @@ def network() -> ResponseReturnValue:
         # "rescan" and anything else: fall through to a fresh render.
         return redirect(url_for("setup.network"))
 
-    config = read_config(config_path)
-    on_ap = ap_active()
-    wifi = wifi_status()
-    # While the hotspot is up, the "associated network" NetworkManager reports
-    # is the hotspot itself — not a site network.
-    station_ssid = None if on_ap else wifi.get("ssid")
-    cards = (
-        {
-            "wifi": explain(
-                "wifi",
-                wifi["state"],
-                {"ssid": wifi["ssid"], "rssi": wifi["rssi_dbm"]},
-            )
-        }
-        if station_ssid
-        else {}
-    )
-    networks = scan_networks() if (on_ap or not station_ssid) else []
-    return render_template(
-        "setup/network.html",
-        steps=_steps(),
-        step="network",
-        wifi=wifi,
-        station_ssid=station_ssid,
-        cards=cards,
-        on_ap=on_ap,
-        networks=networks,
-        last_join=current_app.config.get("LAST_JOIN"),
-        backhaul=str(config.get("backhaul") or "wifi"),
-        lora_enabled=bool(config.get("lora_enabled", True)),
-        gps_enabled=bool(config.get("gps_enabled", True)),
-        identity=_identity(),
-    )
+    return _render_network()
 
 
 @setup_bp.route("/cloud", methods=["GET", "POST"])
@@ -531,6 +653,7 @@ def sensors() -> ResponseReturnValue:
         fitment=fitment,
         carded=is_carded(config),
         board_fault=board_fault_banner(report),
+        probe_rows=_live_probe_rows(),
     )
 
 
@@ -556,6 +679,7 @@ def done() -> ResponseReturnValue:
     checklist = {**s_cards, **sys_cards}
     overall = worst_status(checklist)
 
+    rows, probe_error = _probe_block(request.form if request.method == "POST" else None)
     if request.method == "POST":
         # The wizard cannot finish on the factory PIN. The PIN step refuses
         # 1234 on its own page, but nothing stopped a unit reaching Finish
@@ -565,6 +689,9 @@ def done() -> ResponseReturnValue:
         if current_app.config.get("PIN") == _FACTORY_PIN:
             flash("Set your own PIN before finishing — the factory PIN is not allowed.", "error")
             return redirect(url_for("setup.pin"))
+        if probe_error:
+            flash(probe_error, "error")
+            return redirect(url_for("setup.done"))
         from utils.netctl import ap_active
         from utils.netinfo import wifi_status
 
@@ -593,4 +720,5 @@ def done() -> ResponseReturnValue:
         pending=pending,
         reading_count=count,
         backhaul=str(config.get("backhaul") or "wifi"),
+        probe_rows=rows,
     )

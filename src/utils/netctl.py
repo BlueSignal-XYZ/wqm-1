@@ -84,6 +84,16 @@ from utils.captive_portal import (
     ensure_dnsmasq_conf,
     wait_until_reachable,
 )
+from utils.wifi_setup import (
+    CAPTIVE_JOIN_MESSAGE,
+    annotate_network,
+    format_station_rssi,
+    parse_iw_link,
+    parse_nmcli_wifi,
+    probe_sign_in_page,
+    wifi_connect_argv,
+)
+from utils.wifi_setup import parse_iw_scan as _parse_iw_scan
 
 logger = logging.getLogger("wqm1.netctl")
 
@@ -128,6 +138,7 @@ _STATION_FAIL = {
     "no_internet": "no internet",
     "no_association": "could not join",
     "invalid_ssid": "invalid network name",
+    "captive_sign_in": "sign-in page",
 }
 _JOIN_MESSAGES = {
     "wrong_password": (
@@ -148,6 +159,7 @@ _JOIN_MESSAGES = {
         "The unit has an address but cannot reach the router or DNS (no internet). "
         "Check the router's connection, then try again."
     ),
+    "captive_sign_in": CAPTIVE_JOIN_MESSAGE,
     "no_association": (
         "The unit could not join that network. Check the password and that the router "
         "is on, then try again."
@@ -556,50 +568,15 @@ def stop_ap(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
     return {"ok": True}
 
 
-def _dbm_to_percent(dbm: float) -> int:
-    """Map dBm onto the 0–100 scale the setup page already shows."""
-    return max(0, min(100, int(round((dbm + 100.0) * 2))))
-
-
 def parse_iw_scan(text: str) -> list[dict[str, Any]]:
     """SSIDs from ``iw dev wlan0 scan``, strongest first.
 
     NetworkManager cannot scan while ``wlan0`` is unmanaged for hostapd.
-    ``iw`` can. A BSS with an RSN or WPA information element is secured.
+    ``iw`` can. Band, bars, and security (enterprise, WPA3-only, open) come
+    from the same text. A hidden SSID is kept so the setup page can ask for
+    the name.
     """
-    found: dict[str, dict[str, Any]] = {}
-    ssid: str | None = None
-    signal = 0
-    secured = False
-
-    def flush() -> None:
-        nonlocal ssid, signal, secured
-        if ssid:
-            prev = found.get(ssid)
-            if prev is None or int(prev["signal"]) < signal:
-                found[ssid] = {"ssid": ssid, "signal": signal, "secured": secured}
-        ssid = None
-        signal = 0
-        secured = False
-
-    for raw in (text or "").splitlines():
-        if raw.startswith("BSS "):
-            flush()
-            continue
-        line = raw.strip()
-        if line.startswith("SSID:"):
-            ssid = line.split(":", 1)[1].strip() or None
-        elif line.startswith("signal:"):
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    signal = _dbm_to_percent(float(parts[1]))
-                except ValueError:
-                    signal = 0
-        elif line.startswith("RSN:") or line.startswith("WPA:"):
-            secured = True
-    flush()
-    return sorted(found.values(), key=lambda item: -int(item["signal"]))
+    return _parse_iw_scan(text)
 
 
 def _scan_iw(iface: str) -> list[dict[str, Any]]:
@@ -616,33 +593,46 @@ def scan_networks(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, Any]]:
     so the scan goes through ``iw``. A station link still uses ``nmcli``.
     """
     if netsim.is_virtual():
-        return netsim.scan_networks()
+        return [annotate_network(n) for n in netsim.scan_networks()]
     if ap_active(iface) or iface_state(iface) == "unmanaged":
         return _scan_iw(iface)
     _nmcli("device", "wifi", "rescan", "ifname", iface, timeout=20)
     rc, out, _ = _nmcli(
-        "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list", "ifname", iface
+        "-t",
+        "-f",
+        "SSID,SIGNAL,SECURITY,FREQ",
+        "device",
+        "wifi",
+        "list",
+        "ifname",
+        iface,
     )
     if rc != 0:
         return []
-    seen: dict[str, dict[str, Any]] = {}
-    for line in out.splitlines():
-        parts = line.split(":")
-        if len(parts) < 2 or not parts[0]:
-            continue
-        ssid = parts[0]
-        try:
-            signal = int(parts[1])
-        except ValueError:
-            signal = 0
-        security = parts[2] if len(parts) > 2 else ""
-        if ssid not in seen or seen[ssid]["signal"] < signal:
-            seen[ssid] = {
-                "ssid": ssid,
-                "signal": signal,
-                "secured": bool(security and security != "--"),
-            }
-    return sorted(seen.values(), key=lambda n: -n["signal"])
+    return parse_nmcli_wifi(out)
+
+
+def read_station_rssi(iface: str = DEFAULT_WIFI_IFACE) -> int | None:
+    """dBm of the station link just joined, or None when ``iw`` did not say.
+
+    Called after a successful join so ``wqm1-status.txt`` can record
+    ``station_rssi``. A simulated unit reports the virtual radio.
+    """
+    if netsim.is_virtual():
+        return netsim.rssi_dbm()
+    rc, out, _ = _run(["iw", "dev", iface, "link"], timeout=5)
+    if rc != 0:
+        return None
+    return parse_iw_link(out)
+
+
+def _sign_in_verdict() -> str:
+    """``captive``, ``clear``, or ``unknown``. A probe error stays unknown."""
+    try:
+        return probe_sign_in_page()
+    except Exception:  # noqa: BLE001 — the join result must not depend on the probe
+        logger.debug("Sign-in probe failed", exc_info=True)
+        return "unknown"
 
 
 def usable_ipv4(addr: str) -> bool:
@@ -957,10 +947,13 @@ def join_network(
             _notify_failure(on_failure, result)
         _portal_after_join(result)
         if result.get("connected"):
+            rssi = netsim.rssi_dbm()
+            result["rssi"] = rssi
             _publish_station(
                 station=f"ok {result.get('ip') or ''}".strip(),
                 hotspot="station",
                 portal="down: station",
+                station_rssi=format_station_rssi(rssi),
             )
         else:
             short = _STATION_FAIL.get(str(result.get("reason") or ""), "could not join")
@@ -978,9 +971,9 @@ def join_network(
         # so a phone that is still associated is not kept on our portal,
         # and a successful join cannot leave the listener up (#136).
         _disarm_portal("joining")
-    argv = ["device", "wifi", "connect", ssid, "ifname", iface]
-    if password:
-        argv += ["password", password]
+    # One argv element for the password, so a space or a quote is the
+    # password and not a shell metacharacter. Nothing here logs that element.
+    argv = wifi_connect_argv(ssid, password, iface)
     remaining = max(1.0, deadline - clock())
     rc, out, err = _nmcli(*argv, timeout=min(float(JOIN_TIMEOUT_S), remaining))
     nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
@@ -1013,19 +1006,43 @@ def join_network(
             deadline=deadline,
         )
         if on_target and reached:
+            if _sign_in_verdict() == "captive":
+                return _fail_join(
+                    ssid=ssid,
+                    password=password,
+                    kind="captive_sign_in",
+                    nm_text=nm_text,
+                    link_local=list(snap.get("link_local") or []),
+                    had_ap=had_ap,
+                    ap_ssid=ap_ssid,
+                    ap_passphrase=ap_passphrase,
+                    iface=iface,
+                    sleep=sleep,
+                    on_failure=on_failure,
+                )
             ip = str(usable[0])
+            rssi = read_station_rssi(iface)
             logger.info("Joined %s at %s", ssid, ip)
             _disarm_portal("station")
-            _publish_station(station=f"ok {ip}", hotspot="station", portal="down: station")
-            return _join_result(
+            _publish_station(
+                station=f"ok {ip}",
+                hotspot="station",
+                portal="down: station",
+                station_rssi=format_station_rssi(rssi),
+            )
+            joined = _join_result(
                 ok=True,
                 connected=True,
                 ap_restored=False,
                 error=None,
                 ip=ip,
             )
+            joined["rssi"] = rssi
+            return joined
         if clock() >= deadline:
             kind = _failure_kind(ssid, snap, nm_text)
+            if kind == "no_internet" and _sign_in_verdict() == "captive":
+                kind = "captive_sign_in"
             return _fail_join(
                 ssid=ssid,
                 password=password,
