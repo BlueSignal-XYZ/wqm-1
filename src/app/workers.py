@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from app.state import StateStore
-from cloud.register import STOP_BACKOFF_S, attempt_register
+from cloud.register import STOP_BACKOFF_S, attempt_register, set_config_path
 from utils.config import FIRMWARE_VERSION
 from utils.device_keys import load_http_key, load_register_state
 
@@ -808,11 +808,16 @@ class DeviceRegisterWorker(Worker):
         self._settings = settings_provider
         self._config_path = config_path
         self._on_api_key = on_api_key
+        set_config_path(config_path)
 
     def interval_s(self) -> float:
         state = load_register_state()
-        if state.get("status") in ("registered", "conflict"):
+        if state.get("status") == "conflict":
             return float(STOP_BACKOFF_S)
+        # A revoked key is written as pending by CloudClient. Do not sleep the
+        # 1h registered cadence or we would miss it until the next hour.
+        if state.get("status") == "registered" and load_http_key():
+            return 30.0
         delay = float(state.get("backoff_s") or 5)
         due = float(state.get("next_attempt_unix") or 0)
         wait = due - time.time()

@@ -33,6 +33,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from cloud.register import note_http_key_revoked
+
 logger = logging.getLogger("wqm1.cloud")
 
 # DB column -> cloud sensor name. Cloud SENSOR_RANGES keys (functions/readings.js).
@@ -260,6 +262,9 @@ class CloudClient:
                 # 4xx (bad key / bad request) won't fix on retry — stop early.
                 if 400 <= e.code < 500:
                     logger.warning("Cloud %s %s -> HTTP %d (no retry)", method, url, e.code)
+                    if e.code == 401 and self._api_key:
+                        self._api_key = ""
+                        note_http_key_revoked(reason="unauthorized")
                     return e.code, None
                 logger.warning(
                     "Cloud %s %s -> HTTP %d (attempt %d)", method, url, e.code, attempt + 1

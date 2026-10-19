@@ -318,11 +318,128 @@ class TestRegisterClient:
         from cloud.register import attempt_register
 
         _write_seed(tmp_path)
+        monkeypatch.setattr("cloud.register._ntp_synced", lambda: False)
         self._patch_http(monkeypatch, 401, {"code": "stale_ts"})
         state = attempt_register(api_base="https://example.test/app")
         assert state["status"] == "pending"
         assert state["last_code"] == "stale_ts"
-        assert state["backoff_s"] == 1
+        assert state["backoff_s"] >= 60
+
+    def test_pending_identity_202_is_pending_not_error(self, tmp_path, monkeypatch):
+        from cloud.register import PENDING_IDENTITY_MESSAGE, attempt_register, registration_view
+
+        _write_seed(tmp_path)
+        self._patch_http(monkeypatch, 202, {"code": "pending_identity"})
+        state = attempt_register(api_base="https://example.test/app")
+        assert state["status"] == "pending"
+        assert state["last_code"] == "pending_identity"
+        assert state["backoff_s"] >= 5
+        view = registration_view()
+        assert view["status"] == "pending"
+        assert "Waiting for installer to assign this unit" in view["message"]
+        assert view["message"] == PENDING_IDENTITY_MESSAGE
+        assert "Registration did not complete" not in view["message"]
+
+    def test_stale_ts_uses_server_time_offset(self, tmp_path, monkeypatch):
+        from cloud.register import attempt_register, build_register_body
+
+        _write_seed(tmp_path)
+        local_s = 1_760_840_000.0
+        server_ms = int(local_s * 1000) + 2 * 3600 * 1000
+        monkeypatch.setattr("cloud.register._CLOCK", lambda: local_s)
+        monkeypatch.setattr("cloud.register._ntp_synced", lambda: False)
+        self._patch_http(monkeypatch, 401, {"code": "stale_ts", "serverTime": server_ms})
+        state = attempt_register(api_base="https://example.test/app")
+        assert state["status"] == "pending"
+        assert state["ts_offset_ms"] == 2 * 3600 * 1000
+        assert state["backoff_s"] == 5
+        body = build_register_body(device_id=VECTOR_DEVICE_ID, fw="2.4.0")
+        assert body["ts"] == server_ms
+
+    def test_stale_ts_without_server_time_waits_for_ntp(self, tmp_path, monkeypatch):
+        from cloud.register import attempt_register
+
+        _write_seed(tmp_path)
+        monkeypatch.setattr("cloud.register._ntp_synced", lambda: True)
+        self._patch_http(monkeypatch, 401, {"code": "stale_ts"})
+        ntp_state = attempt_register(api_base="https://example.test/app")
+        assert ntp_state["status"] == "pending"
+        assert ntp_state["backoff_s"] == 5
+
+        monkeypatch.setattr("cloud.register._ntp_synced", lambda: False)
+        self._patch_http(monkeypatch, 401, {"code": "stale_ts"})
+        waiting = attempt_register(api_base="https://example.test/app")
+        assert waiting["status"] == "pending"
+        assert waiting["backoff_s"] >= 60
+        assert waiting["attempts"] >= ntp_state["attempts"]
+
+    def test_revoked_http_key_on_401_reregisters_with_backoff(self, tmp_path, monkeypatch):
+        from cloud.client import CloudClient
+        from cloud.register import attempt_register, note_http_key_revoked
+        from utils.device_keys import (
+            load_http_key,
+            load_register_state,
+            store_http_key,
+            store_register_state,
+        )
+
+        _write_seed(tmp_path)
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("cloud_enabled: true\napi_key: livekey0123456789ab\n")
+        monkeypatch.setattr("cloud.register._active_config_path", str(cfg))
+        store_http_key("livekey0123456789ab")
+        store_register_state({"status": "registered"})
+        client = CloudClient(
+            device_id=VECTOR_DEVICE_ID,
+            ingest_url="https://example.test/ingestReading",
+            command_url="https://example.test/deviceCommands",
+            api_base="https://example.test/app",
+            api_key="livekey0123456789ab",
+            fw_version="2.4.0",
+        )
+        client._sleep = lambda *_: None
+        self._patch_http(monkeypatch, 401, {"error": "unauthorized"})
+        assert client.send_heartbeat({"uptimeS": 1}) is False
+        assert client._api_key == ""
+        assert load_http_key() == ""
+        state = load_register_state()
+        assert state["status"] == "pending"
+        assert state["last_code"] == "key_revoked"
+        assert state["backoff_s"] >= 5
+        saved = yaml.safe_load(cfg.read_text())
+        assert saved.get("api_key") in ("", None)
+        # Second 401 must not hammer: no key, already pending.
+        attempts = state["attempts"]
+        again = note_http_key_revoked(reason="unauthorized")
+        assert again["attempts"] == attempts
+        assert again["status"] == "pending"
+        # Re-register the same pk once due.
+        self._patch_http(monkeypatch, 200, {"api_key": "newkey0123456789abcd"})
+        registered = attempt_register(api_base="https://example.test/app", config_path=str(cfg))
+        assert registered["status"] == "registered"
+        assert load_http_key() == "newkey0123456789abcd"
+
+    def test_transient_5xx_does_not_clear_http_key(self, tmp_path, monkeypatch):
+        from cloud.client import CloudClient
+        from utils.device_keys import load_http_key, store_http_key, store_register_state
+
+        _write_seed(tmp_path)
+        store_http_key("livekey0123456789ab")
+        store_register_state({"status": "registered"})
+        client = CloudClient(
+            device_id=VECTOR_DEVICE_ID,
+            ingest_url="https://example.test/ingestReading",
+            command_url="https://example.test/deviceCommands",
+            api_base="https://example.test/app",
+            api_key="livekey0123456789ab",
+            fw_version="2.4.0",
+            max_retries=1,
+        )
+        client._sleep = lambda *_: None
+        self._patch_http(monkeypatch, 503, {"error": "unavailable"})
+        assert client.send_heartbeat({"uptimeS": 1}) is False
+        assert load_http_key() == "livekey0123456789ab"
+        assert client._api_key == "livekey0123456789ab"
 
     def test_bad_sig_does_not_change_the_identity_key(self, tmp_path, monkeypatch):
         from cloud.register import attempt_register
@@ -401,6 +518,21 @@ class TestSetupOrder:
         assert "never pastes" in page.lower() or "never paste" in page.lower()
         assert 'name="api_key"' in page
         assert "required" not in page.split('name="api_key"', 1)[1].split(">", 1)[0]
+
+    def test_cloud_page_shows_waiting_for_installer_on_pending_identity(
+        self, tmp_path, mock_hardware
+    ):
+        from utils.device_keys import store_register_state
+
+        store_register_state({"status": "pending", "last_code": "pending_identity"})
+        app = make_app(tmp_path, mock_hardware)
+        with app.test_client() as c:
+            with c.session_transaction() as sess:
+                sess["pin_verified"] = True
+            page = c.get("/setup/cloud").get_data(as_text=True)
+        assert "Registration did not complete" not in page
+        assert "Waiting for installer to assign this unit" in page
+        assert "pending" in page
 
     def test_cloud_page_does_not_wait_on_register(self, tmp_path, mock_hardware, monkeypatch):
         """A slow or hanging Cloud must not stall the setup page."""
@@ -502,3 +634,16 @@ class TestRegisterDoesNotBlockStartup:
         setup_src = (ROOT / "src" / "service_window" / "routes" / "setup.py").read_text()
         assert "daemon=True" in setup_src
         assert "wqm1-register-kick" in setup_src
+
+
+class TestRegisterWorkerNoticesRevokedKey:
+    def test_registered_poll_is_short_enough_to_see_a_revoked_key(self, tmp_path):
+        from app.workers import DeviceRegisterWorker
+        from utils.device_keys import store_http_key, store_register_state
+
+        store_http_key("livekey0123456789ab")
+        store_register_state({"status": "registered"})
+        worker = DeviceRegisterWorker(lambda: object(), config_path=str(tmp_path / "c.yaml"))
+        assert worker.interval_s() == 30.0
+        store_register_state({"status": "pending", "backoff_s": 5, "next_attempt_unix": 0})
+        assert 1.0 <= worker.interval_s() <= 5.0

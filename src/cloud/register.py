@@ -6,24 +6,33 @@ Ed25519 identity key. The installer never pastes an HTTP key.
 
 Offline sites: pending state is persisted and retried with backoff (5s → 1h
 cap) across reboots. A 409 ``pk_conflict`` stops — the card and the cloud
-disagree and a human has to look. ``stale_ts`` retries immediately with a
-fresh clock. ``bad_sig`` does not generate a different key.
+disagree and a human has to look. ``stale_ts`` applies the server's
+``serverTime`` as a clock offset and retries; without that field it waits
+for NTP instead of signing again in a 1s loop. ``bad_sig`` does not
+generate a different key. HTTP 202 ``pending_identity`` stays pending.
+A 401 on heartbeat/ingest clears the HTTP key and re-registers.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any
 
 from service_window.config_editor import update_config
+from utils.clock import ClockDiscipline
 from utils.config import FIRMWARE_VERSION
 from utils.device_keys import (
     b64url_encode,
+    clear_http_key,
     identity_qr_payload,
     load_http_key,
     load_register_state,
@@ -46,12 +55,32 @@ REQUEST_TIMEOUT_S = 15.0
 # so a dark site is not a tight loop, and not a wait of days either.
 BACKOFF_S = (5, 15, 30, 60, 300, 900, 3600)
 STOP_BACKOFF_S = 3600
+# After a stale_ts with no server clock, wait at least this long for NTP
+# instead of signing the same wrong ts every second. The Pi Zero W has no RTC.
+STALE_WITHOUT_NTP_S = 60
+PENDING_IDENTITY_MESSAGE = "Waiting for installer to assign this unit."
 
 _CLOCK: Callable[[], float] = time.time
+_active_config_path = DEFAULT_CONFIG_PATH
+_REVOKE_LOCK = threading.Lock()
+
+
+def set_config_path(path: str) -> None:
+    """Where a revoked HTTP key should be stripped from config.yaml."""
+    global _active_config_path
+    _active_config_path = path or DEFAULT_CONFIG_PATH
+
+
+def _ntp_synced() -> bool:
+    try:
+        return ClockDiscipline().ntp_synced()
+    except Exception:  # noqa: BLE001 — absence of timedatectl is unsynced
+        return False
 
 
 def _now_ms() -> int:
-    return int(time.time() * 1000)
+    offset = int(load_register_state().get("ts_offset_ms") or 0)
+    return int(_CLOCK() * 1000) + offset
 
 
 def register_message(device_id: str, ts: int) -> str:
@@ -137,18 +166,97 @@ def _backoff_for(attempts: int) -> int:
 
 
 def _due_state(
-    status: str, *, attempts: int, http: int, code: str, error: str, delay: int
+    status: str,
+    *,
+    attempts: int,
+    http: int,
+    code: str,
+    error: str,
+    delay: int,
+    ts_offset_ms: int | None = None,
 ) -> dict[str, Any]:
     now = int(_CLOCK())
-    return _write_state(
-        status=status,
-        attempts=attempts,
-        backoff_s=delay,
-        next_attempt_unix=now + delay,
-        last_http=http,
-        last_code=code,
-        last_error=error[:200],
-    )
+    fields: dict[str, Any] = {
+        "status": status,
+        "attempts": attempts,
+        "backoff_s": delay,
+        "next_attempt_unix": now + delay,
+        "last_http": http,
+        "last_code": code,
+        "last_error": error[:200],
+    }
+    if ts_offset_ms is not None:
+        fields["ts_offset_ms"] = int(ts_offset_ms)
+    return _write_state(**fields)
+
+
+def _coerce_epoch_ms(raw: Any) -> int | None:
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        value = int(raw)
+        if value > 10**12:
+            return value
+        if value > 10**9:
+            return value * 1000
+        return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return _coerce_epoch_ms(int(text))
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                dt = parsedate_to_datetime(text)
+            except (TypeError, ValueError, IndexError):
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    return None
+
+
+def _extract_server_time_ms(payload: dict[str, Any] | None) -> int | None:
+    """Marketplace 401 stale_ts body: ``serverTime`` (unix ms)."""
+    if not payload:
+        return None
+    candidates: list[Any] = [
+        payload.get("serverTime"),
+        payload.get("server_time"),
+        payload.get("serverTimeMs"),
+        payload.get("server_time_ms"),
+    ]
+    nested = payload.get("error")
+    if isinstance(nested, dict):
+        candidates.extend(
+            (
+                nested.get("serverTime"),
+                nested.get("server_time"),
+                nested.get("serverTimeMs"),
+            )
+        )
+    data = payload.get("data")
+    if isinstance(data, dict):
+        candidates.extend((data.get("serverTime"), data.get("server_time")))
+    for raw in candidates:
+        ms = _coerce_epoch_ms(raw)
+        if ms is not None:
+            return ms
+    return None
+
+
+def _date_header_ms(headers: Any) -> int | None:
+    if headers is None:
+        return None
+    raw = None
+    try:
+        raw = headers.get("Date") or headers.get("date")
+    except Exception:  # noqa: BLE001
+        raw = None
+    return _coerce_epoch_ms(raw)
 
 
 def _post_register(
@@ -174,7 +282,12 @@ def _post_register(
             raw = e.read() or b""
         except Exception:  # noqa: BLE001
             raw = b""
-        return e.code, _parse_json(raw)
+        payload = _parse_json(raw) or {}
+        if e.code == 401 and _extract_server_time_ms(payload) is None:
+            header_ms = _date_header_ms(getattr(e, "headers", None) or getattr(e, "hdrs", None))
+            if header_ms is not None:
+                payload["serverTime"] = header_ms
+        return e.code, payload or None
     except (urllib.error.URLError, OSError, ValueError) as e:
         logger.warning("Register POST failed: %s", e)
         return 0, {"error": str(e)}
@@ -250,14 +363,45 @@ def attempt_register(
         )
 
     if http == 401 and code == "stale_ts":
-        logger.warning("Register ts rejected as stale — will retry with a current clock")
+        server_ms = _extract_server_time_ms(payload)
+        local_ms = int(_CLOCK() * 1000)
+        if server_ms is not None:
+            offset = server_ms - local_ms
+            logger.warning(
+                "Register ts rejected as stale; applying serverTime offset %+d ms",
+                offset,
+            )
+            return _due_state(
+                "pending",
+                attempts=attempts,
+                http=http,
+                code=code,
+                error="stale_ts",
+                delay=BACKOFF_S[0],
+                ts_offset_ms=offset,
+            )
+        if _ntp_synced():
+            logger.warning("Register ts rejected as stale; NTP is synced, retrying shortly")
+            return _due_state(
+                "pending",
+                attempts=attempts,
+                http=http,
+                code=code,
+                error="stale_ts",
+                delay=BACKOFF_S[0],
+            )
+        delay = max(_backoff_for(attempts), STALE_WITHOUT_NTP_S)
+        logger.warning(
+            "Register ts rejected as stale and no serverTime; waiting %ss for NTP",
+            delay,
+        )
         return _due_state(
             "pending",
-            attempts=max(0, attempts - 1),
+            attempts=attempts,
             http=http,
             code=code,
             error="stale_ts",
-            delay=1,
+            delay=delay,
         )
 
     if http == 401 and code == "bad_sig":
@@ -291,6 +435,22 @@ def attempt_register(
             delay=delay,
         )
 
+    if http == 202 or code == "pending_identity":
+        delay = _backoff_for(attempts)
+        logger.info(
+            "Register pending_identity (HTTP %s); retry in %ss until the installer assigns",
+            http or 202,
+            delay,
+        )
+        return _due_state(
+            "pending",
+            attempts=attempts,
+            http=http or 202,
+            code=code or "pending_identity",
+            error="pending_identity",
+            delay=delay,
+        )
+
     delay = _backoff_for(attempts)
     logger.warning("Register refused HTTP %s code=%s", http, code)
     return _due_state(
@@ -301,6 +461,37 @@ def attempt_register(
         error=code or f"http_{http}",
         delay=delay,
     )
+
+
+def note_http_key_revoked(*, reason: str = "unauthorized") -> dict[str, Any]:
+    """Clear a rejected HTTP key and schedule re-registration. Idempotent.
+
+    Heartbeat / ingest 401 means the cloud revoked or disabled the key
+    (unclaim, rotation). Transient 5xx must not call this.
+    """
+    with _REVOKE_LOCK:
+        had_key = bool(load_http_key())
+        clear_http_key()
+        cfg = Path(_active_config_path)
+        if cfg.is_file():
+            try:
+                update_config(str(cfg), {"api_key": ""})
+            except Exception as e:  # noqa: BLE001 — file unlink is the source of truth
+                logger.warning("Could not clear api_key in config.yaml: %s", e)
+        state = load_register_state()
+        status_now = str(state.get("status") or "pending")
+        if not had_key and status_now == "pending":
+            return state
+        attempts = int(state.get("attempts") or 0) + 1
+        logger.warning("HTTP device key rejected (%s); will re-register with backoff", reason)
+        return _due_state(
+            "pending",
+            attempts=attempts,
+            http=401,
+            code="key_revoked",
+            error=reason,
+            delay=_backoff_for(attempts),
+        )
 
 
 def kick_register(**kwargs: Any) -> dict[str, Any]:
@@ -335,9 +526,12 @@ def registration_view() -> dict[str, str]:
         "error": ("Registration did not complete. The unit will retry when it has a link."),
     }
     state = load_register_state()
+    message = copies.get(status, copies["pending"])
+    if str(state.get("last_code") or "") == "pending_identity":
+        message = PENDING_IDENTITY_MESSAGE
     return {
         "status": status,
-        "message": copies.get(status, copies["pending"]),
+        "message": message,
         "code": str(state.get("last_code") or ""),
         "pk": identity_qr_payload().get("pk", ""),
     }

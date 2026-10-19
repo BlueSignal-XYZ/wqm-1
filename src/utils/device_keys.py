@@ -309,6 +309,15 @@ def store_http_key(api_key: str) -> None:
     atomic_write_bytes(http_key_path(), key.encode("ascii"), FILE_MODE)
 
 
+def clear_http_key() -> None:
+    """Remove the issued HTTP key so the unit can re-register the same pk."""
+    path = http_key_path()
+    with contextlib.suppress(OSError):
+        path.unlink()
+    with contextlib.suppress(OSError):
+        path.with_name(path.name + ".tmp").unlink()
+
+
 def default_register_state() -> dict[str, Any]:
     return {
         "status": "pending",
@@ -318,6 +327,7 @@ def default_register_state() -> dict[str, Any]:
         "last_http": 0,
         "last_code": "",
         "last_error": "",
+        "ts_offset_ms": 0,
     }
 
 
