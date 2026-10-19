@@ -6,11 +6,14 @@ Ed25519 identity key. The installer never pastes an HTTP key.
 
 Offline sites: pending state is persisted and retried with backoff (5s → 1h
 cap) across reboots. A 409 ``pk_conflict`` stops — the card and the cloud
-disagree and a human has to look. ``stale_ts`` applies the server's
-``serverTime`` as a clock offset and retries; without that field it waits
-for NTP instead of signing again in a 1s loop. ``bad_sig`` does not
-generate a different key. HTTP 202 ``pending_identity`` stays pending.
-A 401 on heartbeat/ingest clears the HTTP key and re-registers.
+disagree and a human has to look. ``stale_ts`` and ``replayed_ts`` apply
+the server's ``serverTime`` as a clock offset and retry in 5s; without
+that field they wait for NTP instead of signing again in a 1s loop.
+``replayed_ts`` bumps the offset by 1 ms so the next ts is past the
+server's last accepted. ``bad_sig`` does not generate a different key.
+HTTP 202 ``pending_identity`` stays pending. A 401 on heartbeat/ingest
+clears the HTTP key and re-registers. A 200 resets the attempt count so
+a later revoke is not delayed by lifetime retries.
 """
 
 from __future__ import annotations
@@ -293,6 +296,61 @@ def _post_register(
         return 0, {"error": str(e)}
 
 
+def _handle_clock_reject(
+    code: str, payload: dict[str, Any] | None, *, attempts: int, http: int
+) -> dict[str, Any]:
+    """stale_ts / replayed_ts: skew the clock from serverTime, stay pending.
+
+    ``replayed_ts`` means this ts was already accepted (clock stepped backward
+    on a Pi with no RTC). The next ts must be greater than the last accepted
+    one; ``serverTime`` plus 1 ms is enough.
+    """
+    server_ms = _extract_server_time_ms(payload)
+    local_ms = int(_CLOCK() * 1000)
+    if server_ms is not None:
+        offset = server_ms - local_ms
+        if code == "replayed_ts":
+            offset += 1
+        logger.warning(
+            "Register ts rejected (%s); applying serverTime offset %+d ms",
+            code,
+            offset,
+        )
+        return _due_state(
+            "pending",
+            attempts=attempts,
+            http=http,
+            code=code,
+            error=code,
+            delay=BACKOFF_S[0],
+            ts_offset_ms=offset,
+        )
+    if _ntp_synced():
+        logger.warning("Register ts rejected (%s); NTP is synced, retrying shortly", code)
+        return _due_state(
+            "pending",
+            attempts=attempts,
+            http=http,
+            code=code,
+            error=code,
+            delay=BACKOFF_S[0],
+        )
+    delay = max(_backoff_for(attempts), STALE_WITHOUT_NTP_S)
+    logger.warning(
+        "Register ts rejected (%s) and no serverTime; waiting %ss for NTP",
+        code,
+        delay,
+    )
+    return _due_state(
+        "pending",
+        attempts=attempts,
+        http=http,
+        code=code,
+        error=code,
+        delay=delay,
+    )
+
+
 def attempt_register(
     *,
     api_base: str | None = None,
@@ -337,7 +395,7 @@ def attempt_register(
         logger.info("Device registered with BlueSignal Cloud")
         return _write_state(
             status="registered",
-            attempts=attempts,
+            attempts=0,
             backoff_s=STOP_BACKOFF_S,
             next_attempt_unix=int(_CLOCK()) + STOP_BACKOFF_S,
             last_http=http,
@@ -362,47 +420,8 @@ def attempt_register(
             last_error="pk_conflict",
         )
 
-    if http == 401 and code == "stale_ts":
-        server_ms = _extract_server_time_ms(payload)
-        local_ms = int(_CLOCK() * 1000)
-        if server_ms is not None:
-            offset = server_ms - local_ms
-            logger.warning(
-                "Register ts rejected as stale; applying serverTime offset %+d ms",
-                offset,
-            )
-            return _due_state(
-                "pending",
-                attempts=attempts,
-                http=http,
-                code=code,
-                error="stale_ts",
-                delay=BACKOFF_S[0],
-                ts_offset_ms=offset,
-            )
-        if _ntp_synced():
-            logger.warning("Register ts rejected as stale; NTP is synced, retrying shortly")
-            return _due_state(
-                "pending",
-                attempts=attempts,
-                http=http,
-                code=code,
-                error="stale_ts",
-                delay=BACKOFF_S[0],
-            )
-        delay = max(_backoff_for(attempts), STALE_WITHOUT_NTP_S)
-        logger.warning(
-            "Register ts rejected as stale and no serverTime; waiting %ss for NTP",
-            delay,
-        )
-        return _due_state(
-            "pending",
-            attempts=attempts,
-            http=http,
-            code=code,
-            error="stale_ts",
-            delay=delay,
-        )
+    if http == 401 and code in ("stale_ts", "replayed_ts"):
+        return _handle_clock_reject(code, payload, attempts=attempts, http=http)
 
     if http == 401 and code == "bad_sig":
         logger.error(
@@ -482,15 +501,14 @@ def note_http_key_revoked(*, reason: str = "unauthorized") -> dict[str, Any]:
         status_now = str(state.get("status") or "pending")
         if not had_key and status_now == "pending":
             return state
-        attempts = int(state.get("attempts") or 0) + 1
         logger.warning("HTTP device key rejected (%s); will re-register with backoff", reason)
         return _due_state(
             "pending",
-            attempts=attempts,
+            attempts=1,
             http=401,
             code="key_revoked",
             error=reason,
-            delay=_backoff_for(attempts),
+            delay=BACKOFF_S[0],
         )
 
 

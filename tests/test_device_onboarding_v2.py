@@ -255,6 +255,7 @@ class TestRegisterClient:
         assert again["status"] == "registered"
         assert calls["n"] == 0
         assert load_register_state()["status"] == "registered"
+        assert load_register_state()["attempts"] == 0
 
     def test_pk_conflict_is_a_clear_status_not_a_crash_loop(self, tmp_path, monkeypatch):
         from cloud.register import attempt_register
@@ -356,6 +357,48 @@ class TestRegisterClient:
         body = build_register_body(device_id=VECTOR_DEVICE_ID, fw="2.4.0")
         assert body["ts"] == server_ms
 
+    def test_replayed_ts_stays_pending_and_signs_a_newer_ts(self, tmp_path, monkeypatch):
+        from cloud.register import attempt_register, build_register_body, registration_view
+
+        _write_seed(tmp_path)
+        local_s = 1_760_840_000.0
+        # Clock restored 45 s behind the last accepted ts (fake-hwclock / no RTC).
+        last_accepted_ms = int(local_s * 1000) + 45_000
+        server_ms = last_accepted_ms
+        monkeypatch.setattr("cloud.register._CLOCK", lambda: local_s)
+        monkeypatch.setattr("cloud.register._ntp_synced", lambda: False)
+        self._patch_http(monkeypatch, 401, {"code": "replayed_ts", "serverTime": server_ms})
+        state = attempt_register(api_base="https://example.test/app")
+        assert state["status"] == "pending"
+        assert state["last_code"] == "replayed_ts"
+        assert state["backoff_s"] == 5
+        view = registration_view()
+        assert view["status"] == "pending"
+        assert "Registration did not complete" not in view["message"]
+        body = build_register_body(device_id=VECTOR_DEVICE_ID, fw="2.4.0")
+        assert body["ts"] > last_accepted_ms
+        assert body["ts"] == server_ms + 1
+
+    def test_success_resets_lifetime_attempts_so_revoke_is_fast(self, tmp_path, monkeypatch):
+        from cloud.register import attempt_register, note_http_key_revoked
+        from utils.device_keys import store_http_key, store_register_state
+
+        _write_seed(tmp_path)
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("cloud_enabled: true\n")
+        store_register_state({"status": "pending", "attempts": 7})
+        self._patch_http(monkeypatch, 200, {"api_key": "issuedkey0123456789ab"})  # noqa: S105
+        state = attempt_register(api_base="https://example.test/app", config_path=str(cfg))
+        assert state["status"] == "registered"
+        assert state["attempts"] == 0
+
+        store_http_key("issuedkey0123456789ab")
+        store_register_state({"status": "registered", "attempts": 7})
+        revoked = note_http_key_revoked(reason="unauthorized")
+        assert revoked["status"] == "pending"
+        assert revoked["attempts"] == 1
+        assert revoked["backoff_s"] == 5
+
     def test_stale_ts_without_server_time_waits_for_ntp(self, tmp_path, monkeypatch):
         from cloud.register import attempt_register
 
@@ -417,6 +460,7 @@ class TestRegisterClient:
         self._patch_http(monkeypatch, 200, {"api_key": "newkey0123456789abcd"})
         registered = attempt_register(api_base="https://example.test/app", config_path=str(cfg))
         assert registered["status"] == "registered"
+        assert registered["attempts"] == 0
         assert load_http_key() == "newkey0123456789abcd"
 
     def test_transient_5xx_does_not_clear_http_key(self, tmp_path, monkeypatch):
