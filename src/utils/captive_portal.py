@@ -27,6 +27,7 @@ onto the site network.
 
 from __future__ import annotations
 
+import html
 import http.client
 import logging
 import os
@@ -41,6 +42,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from utils.identity import get_device_id
+
 logger = logging.getLogger("wqm1.captive_portal")
 
 PORTAL_HOST = "192.168.4.1"
@@ -50,6 +53,13 @@ DNSMASQ_CONF = Path("/run/wqm1/dnsmasq-ap.conf")
 _MODE_PATH = Path("/run/bluesignal/captive-portal.mode")
 _UNIT_NAME = "bluesignal-captive-portal.service"
 _MAX_BODY = 2_000_000
+READY_PATH = "/ready"
+SETUP_PATH = "/setup/"
+UNAVAILABLE_REFRESH_S = 3
+UNAVAILABLE_HTML_BUDGET = 8192
+STARTING_UP_TEXT = "Your WQM-1 is starting up. This takes about 2–3 minutes. Keep this page open."
+_PLAIN_AGENTS = frozenset({"curl", "wget", "httpie"})
+_BLANK_UNIT_ID = "BS-WQM1-000000000000"
 
 # Paths a captive check fetches. Answering any of these with the vendor's
 # "success" body (or with 204) tells the phone the network has internet
@@ -281,6 +291,140 @@ def rewrite_location(location: str, backend_port: int) -> str:
     return location
 
 
+def prefers_html(accept: str, user_agent: str = "") -> bool:
+    """HTML for browsers and captive sheets; plain text for curl and friends."""
+    agent = (user_agent or "").split("/", 1)[0].strip().lower()
+    if agent in _PLAIN_AGENTS:
+        return False
+    accept_l = (accept or "").lower()
+    if "text/html" in accept_l:
+        return True
+    return "text/plain" not in accept_l
+
+
+def portal_unit_id() -> str:
+    """Printed or derived unit id. Empty when it is missing or the all-zero fallback."""
+    try:
+        value = get_device_id()
+    except (OSError, TypeError, ValueError, KeyError):
+        return ""
+    if not value or value == _BLANK_UNIT_ID:
+        return ""
+    return value
+
+
+def unavailable_plain(unit: str = "") -> bytes:
+    text = STARTING_UP_TEXT
+    clean = (unit or "").strip()
+    if clean:
+        text = f"{text}\n\nUnit: {clean}"
+    return f"{text}\n".encode()
+
+
+def unavailable_html(unit: str = "") -> bytes:
+    """Self-contained waiting page for iOS and Android captive sheets.
+
+    Inline CSS and JS only. No CDN, no external assets. Size stays under
+    ``UNAVAILABLE_HTML_BUDGET`` so a phone can render it from the hotspot
+    with nothing else up yet.
+    """
+    safe = html.escape((unit or "").strip(), quote=True)
+    unit_block = f'<p class="unit">Unit <b>{safe}</b></p>' if safe else ""
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="{UNAVAILABLE_REFRESH_S};url={SETUP_PATH}">
+<title>Starting up — WQM-1</title>
+<style>
+:root{{color-scheme:dark}}
+*{{box-sizing:border-box}}
+html,body{{margin:0;min-height:100vh}}
+body{{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:#0e141b;color:#e8eef4;display:flex;
+  align-items:center;justify-content:center;padding:2.25rem 1.5rem
+}}
+main{{width:min(22rem,100%)}}
+.brand{{
+  display:flex;align-items:center;gap:.65rem;margin-bottom:2.25rem;
+  color:#9fb0c0;font-size:.78rem;font-weight:650;
+  letter-spacing:.14em;text-transform:uppercase
+}}
+h1{{
+  font-size:1.55rem;font-weight:620;letter-spacing:-.02em;
+  line-height:1.25;margin:0 0 .85rem
+}}
+p{{margin:0;color:#b7c3cf;font-size:1.05rem;line-height:1.55}}
+.bar{{
+  margin:2rem 0 1.75rem;height:3px;border-radius:99px;
+  background:#243040;overflow:hidden
+}}
+.bar i{{
+  display:block;height:100%;width:42%;border-radius:inherit;
+  background:#4da3ff;animation:slide 1.8s ease-in-out infinite
+}}
+@keyframes slide{{
+  0%{{transform:translateX(-8%)}}
+  100%{{transform:translateX(140%)}}
+}}
+@media (prefers-reduced-motion:reduce){{
+  .bar i{{animation:none;width:100%;opacity:.45}}
+}}
+.unit{{font-size:.82rem;color:#8b98a5;letter-spacing:.02em}}
+.unit b{{color:#d5dee6;font-weight:600}}
+</style>
+</head>
+<body>
+<main>
+<div class="brand">
+<svg viewBox="0 0 28 28" width="22" height="22" aria-hidden="true">
+<path d="M4 8c4-3 12-3 20 0M4 14c4-3 12-3 20 0M4 20c4-3 12-3 20 0"
+ fill="none" stroke="#4da3ff" stroke-width="2.2" stroke-linecap="round"/>
+</svg>
+BlueSignal
+</div>
+<h1>Your WQM-1 is starting up.</h1>
+<p>This takes about 2–3 minutes. Keep this page open.</p>
+<div class="bar" aria-hidden="true"><i></i></div>
+{unit_block}
+</main>
+<script>
+(function(){{
+function go(){{location.replace("/setup/")}}
+function poll(){{
+fetch("/ready",{{cache:"no-store"}}).then(function(r){{
+if(r.ok)go();else setTimeout(poll,2000)
+}}).catch(function(){{setTimeout(poll,2000)}})
+}}
+setTimeout(poll,800)
+}})();
+</script>
+</body>
+</html>
+"""
+    return page.encode()
+
+
+def backend_ready(port: int, timeout: float = 0.4) -> bool:
+    """True when the Service Window answers. Short timeout: one request at a time."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request(
+            "HEAD",
+            SETUP_PATH,
+            headers={"Host": "127.0.0.1", "Connection": "close"},
+        )
+        resp = conn.getresponse()
+        resp.read()
+        return resp.status < 500
+    except OSError:
+        return False
+    finally:
+        conn.close()
+
+
 def address_is_local(ip: str) -> bool:
     """True when ``ip`` is configured on this host. No nmcli, no port 80."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -417,15 +561,36 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         host = self.headers.get("Host", "")
+        if request_path(self.path) == READY_PATH and is_own_host(host):
+            self._ready()
+            return
         if classify_request(self.path, host) == "redirect":
             self._redirect()
             return
         self._proxy()
 
+    def _ready(self) -> None:
+        """Lightweight poll target. Empty body so a phone can ask often."""
+        up = backend_ready(self._backend())
+        self.send_response(204 if up else 503)
+        self.send_header("Cache-Control", "no-store")
+        if not up:
+            self.send_header("Retry-After", "2")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _unavailable(self) -> None:
-        body = b"setup page is not up yet\n"
+        unit = portal_unit_id()
+        accept = self.headers.get("Accept", "")
+        user_agent = self.headers.get("User-Agent", "")
+        if prefers_html(accept, user_agent):
+            body = unavailable_html(unit)
+            content_type = "text/html; charset=utf-8"
+        else:
+            body = unavailable_plain(unit)
+            content_type = "text/plain; charset=utf-8"
         self.send_response(503)
-        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Type", content_type)
         self.send_header("Retry-After", "2")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
