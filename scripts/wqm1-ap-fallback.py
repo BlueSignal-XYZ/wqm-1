@@ -84,18 +84,30 @@ def hotspot_failure_status(detail: object, passphrase: str) -> str:
     return f"failed: {error or 'unknown'}"
 
 
-def _write_status(*, hotspot: str, ssid: str, portal: str, station: str | None = None) -> None:
+def _write_status(
+    *,
+    hotspot: str,
+    portal: str,
+    ssid: str | None = None,
+    station: str | None = None,
+) -> None:
     """Best-effort. A status-file failure must not decide whether the AP
     stays up — the file is how a pulled card is read, not the hotspot."""
     try:
         from diagnostics.boot_status import write_boot_status
 
-        write_boot_status(hotspot=hotspot, ssid=ssid, portal=portal, station=station)
+        if ssid is None:
+            write_boot_status(hotspot=hotspot, portal=portal, station=station)
+        else:
+            write_boot_status(hotspot=hotspot, ssid=ssid, portal=portal, station=station)
     except Exception as e:  # noqa: BLE001 — never fail the AP over the status file
         logger.error("Could not write boot status: %s", e)
 
 
 def main() -> int:
+    # Before the radio wait. A card pulled while hostapd is still coming
+    # up would otherwise show a stale hotspot line, or none.
+    _write_status(hotspot="starting", portal="down: starting")
     from utils.captive_portal import (
         ensure_dnsmasq_conf,
         ensure_portal_service,

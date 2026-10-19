@@ -94,6 +94,10 @@ AP_GRACE_S = 45
 # fails the 4-way handshake on BCM43430/1 firmware 7.45.98 when PMF is off.
 HOSTAPD_UNIT = "wqm1-setup-hostapd.service"
 DNSMASQ_UNIT = "wqm1-setup-dnsmasq.service"
+# Where setup.sh installs units. Patchable so a test can point at a tmp dir.
+# An image that has the units here and not under the release tree must still
+# be able to start hostapd.
+SYSTEMD_DIR = Path("/etc/systemd/system")
 HOSTAPD_CTRL = "/run/wqm1/hostapd"
 # Channel 6. 11 is the other non-overlapping 2.4 GHz channel; one is pinned
 # so the beacon does not move between boots.
@@ -426,9 +430,13 @@ def _packaged_unit(name: str) -> Path | None:
 def ensure_ap_units() -> dict[str, Any]:
     """Install the hostapd and dnsmasq units if this process is root.
 
-    ``setup.sh`` copies them. An image that has not re-run setup still
-    needs them the first time the AP is raised. They are not enabled:
-    nothing starts them at boot except ``start_ap``.
+    ``setup.sh`` copies them into the release tree and into
+    ``SYSTEMD_DIR``. An image that has not re-run setup still needs them
+    the first time the AP is raised. A unit already installed under
+    ``SYSTEMD_DIR`` is enough when the release tree has no ``systemd/``
+    directory — that is the bench image that reported the unit missing
+    and never started hostapd. They are not enabled: nothing starts
+    them at boot except ``start_ap``.
     """
     try:
         root = os.geteuid() == 0
@@ -439,9 +447,11 @@ def ensure_ap_units() -> dict[str, Any]:
     changed = False
     for name in (HOSTAPD_UNIT, DNSMASQ_UNIT):
         src = _packaged_unit(name)
+        dest = SYSTEMD_DIR / name
         if src is None:
+            if dest.is_file():
+                continue
             return {"ok": False, "error": f"{name} unit file missing"}
-        dest = Path("/etc/systemd/system") / name
         text = src.read_text(encoding="utf-8")
         try:
             if dest.is_file() and dest.read_text(encoding="utf-8") == text:

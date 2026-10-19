@@ -1,0 +1,13 @@
+[Unit]
+Description=Write the WQM-1 setup-AP failure clue onto the boot partition
+# Started by OnFailure= of bluesignal-ap-fallback.service. Not enabled:
+# a successful boot must not run this, and a failure must still leave
+# the last journal lines on the FAT partition after the cable is pulled.
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-apfail.py
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=30

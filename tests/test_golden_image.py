@@ -26,6 +26,11 @@ def test_tree_is_present():
     assert (GOLDEN / "bootfs/user-data").is_file()
 
 
+def test_build_requires_the_setup_ap_unit_in_the_release_tree():
+    script = (GOLDEN / "build-golden.sh").read_text()
+    assert "/opt/bluesignal/current/systemd/wqm1-setup-hostapd.service" in script
+
+
 def test_build_does_not_hardcode_a_board_name():
     script = (GOLDEN / "build-golden.sh").read_text()
     assert 'BOARD_MODEL="Raspberry Pi Zero W' not in script

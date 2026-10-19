@@ -390,8 +390,16 @@ sudo chmod +x "$RELEASE_DIR/scripts/diagnostics.sh"
 # being copied until 2026-10-12, so no carded unit ever consumed its key or
 # raised its setup hotspot; tests/test_setup_installs_service_scripts.py pins
 # every ExecStart in systemd/ to a copy line here.
-for svc_script in wqm1-consume-card.py wqm1-ap-fallback.py burn-in.sh; do
+for svc_script in wqm1-consume-card.py wqm1-ap-fallback.py wqm1-apfail.py burn-in.sh; do
     sudo cp "$SCRIPT_DIR/scripts/$svc_script" "$RELEASE_DIR/scripts/"
+done
+# Units the running tree looks up beside itself (netctl._packaged_unit,
+# captive_portal.release_unit_path). /etc/systemd/system gets the same
+# files below; this copy is what /opt/bluesignal/current/systemd and an
+# OTA extract share. Without it the setup AP reports the unit missing.
+sudo mkdir -p "$RELEASE_DIR/systemd"
+for unit in wqm1-setup-hostapd.service wqm1-setup-dnsmasq.service bluesignal-captive-portal.service; do
+    sudo cp "$SCRIPT_DIR/systemd/$unit" "$RELEASE_DIR/systemd/"
 done
 if [ -f "$SCRIPT_DIR/scripts/host-pins.py" ]; then
     sudo cp "$SCRIPT_DIR/scripts/host-pins.py" "$RELEASE_DIR/scripts/"
@@ -460,6 +468,8 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# Not enabled. OnFailure= of bluesignal-ap-fallback.service starts it.
+sudo cp "$SCRIPT_DIR/systemd/wqm1-apfail.service" /etc/systemd/system/
 # Setup AP processes. Not enabled: netctl starts and stops them. The distro
 # hostapd.service and dnsmasq.service stay masked above.
 sudo cp "$SCRIPT_DIR/systemd/wqm1-setup-hostapd.service" /etc/systemd/system/
