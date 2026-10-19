@@ -234,3 +234,29 @@ def test_shell_entry_skips_without_the_flag_and_runs_when_it_is_present(tmp_path
     assert "PASS" in text or "FAIL" in text
     assert ran.returncode in (0, 1)
     assert "passphrase" not in text
+
+
+def test_system_python_can_import_boot_status_without_pycryptodome(tmp_path):
+    """burn-in.sh hardcodes /usr/bin/python3, not the pytest interpreter.
+
+    boot_status now reads registration state, which lives next to the
+    identity key module. Importing that module must not require Crypto or
+    burn-in never writes wqm1-burnin.txt (CI Test on 5b68e20).
+    """
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": str(ROOT / "src"),
+        "BLUESIGNAL_STATE_DIR": str(tmp_path / "state"),
+    }
+    result = subprocess.run(
+        [
+            "/usr/bin/python3",
+            "-c",
+            "from diagnostics.boot_status import read_power; read_power()",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

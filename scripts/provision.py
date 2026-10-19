@@ -33,6 +33,11 @@ _DIAG_PATHS = [
 
 _HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
+try:
+    from utils.device_keys import identity_qr_payload as _v2_qr_payload
+except Exception:  # noqa: BLE001 — CLI still prints identity without a key
+    _v2_qr_payload = None
+
 
 def _get_identity() -> dict[str, str]:
     """Get device identity from Pi serial."""
@@ -92,14 +97,25 @@ def _run_diagnostics() -> bool:
     return result.returncode == 0
 
 
-def _generate_qr(identity: dict[str, str], output_path: str) -> bool:
+def _identity_qr_payload() -> dict[str, Any]:
+    """v2 identity JSON for the existing label printer. One printer, one payload."""
+    if _v2_qr_payload is not None:
+        try:
+            return _v2_qr_payload()
+        except Exception:
+            pass
+    ident = _get_identity()
+    return {"v": 2, "device_id": ident["device_id"]}
+
+
+def _generate_qr(identity: dict[str, Any], output_path: str) -> bool:
     """Generate QR code SVG."""
     try:
         import qrcode
         import qrcode.image.svg
 
         qr = qrcode.QRCode(box_size=10, border=2)
-        qr.add_data(json.dumps(identity))
+        qr.add_data(json.dumps(identity, separators=(",", ":")))
         qr.make(fit=True)
         img = qr.make_image(image_factory=qrcode.image.svg.SvgImage)
         with open(output_path, "wb") as f:
@@ -157,10 +173,10 @@ def main() -> int:
             return 1
     print()
 
-    # Step 3: Generate device label
+    # Step 3: Generate device label (same printer, v2 identity JSON)
     print("Step 3/4: Generate Device Label")
     qr_path = "/tmp/wqm1-label.svg"
-    if _generate_qr(identity, qr_path):
+    if _generate_qr(_identity_qr_payload(), qr_path):
         print(f"  QR code saved to {qr_path}")
 
     report_path = "/tmp/wqm1-identity.json"

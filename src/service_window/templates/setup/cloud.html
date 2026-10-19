@@ -1,63 +1,52 @@
 {% extends "setup_base.html" %}
 {% block title %}Setup — Cloud{% endblock %}
 {% block content %}
-<h1 class="setup-h1">Connect to BlueSignal Cloud</h1>
-<p class="lead">The cloud issues this unit a key so it can report readings and
-receive updates. Two minutes on any other device — this page can stay open.</p>
+<h1 class="setup-h1">Cloud registration</h1>
+<p class="lead">This unit proves itself to BlueSignal Cloud with its own key.
+An installer never pastes a device API key.</p>
 
-{% if key_set %}
-<div class="flash success">A cloud key is already saved for this unit.</div>
+{% if registration %}
+<div class="flash {{ 'success' if registration.status == 'registered' else ('error' if registration.status in ('conflict', 'error') else 'info') }}">
+    Registration: <b>{{ registration.status }}</b> — {{ registration.message }}
+</div>
 {% endif %}
 
-<div class="howto">
-    <div class="howto-title">Get the key</div>
-    <ol class="howto-list">
-        <li>On your phone or laptop, sign in at <b>cloud.bluesignal.xyz</b> and open
-            <b>Devices&nbsp;→&nbsp;Commission&nbsp;Device</b>.</li>
-        <li>Enter this device ID (no QR sticker needed):
-            <span class="chip-row">
-                <code class="chip-mono">{{ identity.device_id }}</code>
-                <button type="button" class="btn btn-ghost btn-xs" data-copy="{{ identity.device_id }}">Copy</button>
-            </span></li>
-        <li>When asked for the LoRa DevEUI, enter:
-            <span class="chip-row">
-                <code class="chip-mono">{{ identity.dev_eui }}</code>
-                <button type="button" class="btn btn-ghost btn-xs" data-copy="{{ identity.dev_eui }}">Copy</button>
-            </span></li>
-        <li>The cloud shows the device API key <b>once</b> — copy it and paste it below.</li>
-    </ol>
-</div>
+{% if key_set %}
+<div class="flash success">An HTTP device key is already saved for this unit.</div>
+{% endif %}
 
 <form method="post" class="setup-form">
-    <label>Device API key
-        <input type="text" name="api_key" autocomplete="off" spellcheck="false"
-               placeholder="paste the key here" {% if not key_set %}required{% endif %}>
-        <small>Used for readings over WiFi. This is the one that matters today.</small>
-    </label>
-
-    <details class="qr-detail">
-        <summary>Also using the LoRa radio? Add its join credentials</summary>
-        <p class="skip-note">The cloud issues these with the same claim. Leave them
-        blank for a WiFi-only site — but a unit that finishes setup without an
-        AppKey can never join a LoRa network.</p>
-        <label>LoRa AppKey (32 hex characters)
-            <input type="text" name="app_key" autocomplete="off" spellcheck="false"
-                   placeholder="optional" maxlength="32">
-        </label>
-        <label>JoinEUI / AppEUI (16 hex characters)
-            <input type="text" name="app_eui" autocomplete="off" spellcheck="false"
-                   placeholder="0000000000000000" maxlength="16">
-            <small>Must match the JoinEUI this device is registered under on the
-            network server.</small>
-        </label>
-    </details>
     <div class="setup-actions">
-        <button type="submit" class="btn btn-primary btn-lg">Save and continue</button>
-        <button type="submit" name="skip" value="1" class="btn btn-secondary" formnovalidate>
-            {{ 'Keep current key' if key_set else 'Skip for now' }}
-        </button>
+        <button type="submit" name="continue" value="1" class="btn btn-primary btn-lg">Continue</button>
     </div>
-    <p class="skip-note">Skipping is fine — the unit monitors and logs locally either way.
-    Add the key any time under <b>Provisioning</b>.</p>
 </form>
+
+<details class="qr-detail">
+    <summary>Bench / dev override — paste an HTTP key</summary>
+    <p class="skip-note">Not the installer path. Use this only on the bench or in
+    development, when a key was issued by hand. Production units register themselves.</p>
+    <form method="post" class="setup-form">
+        <label>Device API key
+            <input type="text" name="api_key" autocomplete="off" spellcheck="false"
+                   placeholder="bench/dev override only">
+            <small>Used for readings over WiFi. Leave blank on a real install.</small>
+        </label>
+        <details class="qr-detail">
+            <summary>Also using the LoRa radio? Add its join credentials</summary>
+            <p class="skip-note">Leave them blank for a WiFi-only site — but a unit that
+            finishes setup without an AppKey can never join a LoRa network.</p>
+            <label>LoRa AppKey (32 hex characters)
+                <input type="text" name="app_key" autocomplete="off" spellcheck="false"
+                       placeholder="optional" maxlength="32">
+            </label>
+            <label>JoinEUI / AppEUI (16 hex characters)
+                <input type="text" name="app_eui" autocomplete="off" spellcheck="false"
+                       placeholder="0000000000000000" maxlength="16">
+            </label>
+        </details>
+        <div class="setup-actions">
+            <button type="submit" class="btn btn-secondary">Save bench override</button>
+        </div>
+    </form>
+</details>
 {% endblock %}

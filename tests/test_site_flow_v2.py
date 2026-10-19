@@ -9,8 +9,9 @@ What is pinned here, in the order an installer meets it:
    skipped — the WPA2 passphrase on the card is the proof of presence.
 3. A carded unit (identity + cloud key from the bench) skips the identity
    and cloud-key steps.
-4. The network step is last, and a successful join finishes setup on the
-   unit: other saved Wi-Fi forgotten, setup recorded.
+4. The network step is last before cloud registration; a successful Wi-Fi
+   join finishes setup on the unit (other saved Wi-Fi forgotten). LTE /
+   no-network sites go through the cloud status page, then Finish.
 5. The virtual radio (``utils.netsim``) behaves like the real one and is the
    only radio a simulated unit can reach.
 """
@@ -211,7 +212,7 @@ class TestCardedUnit:
             r = c.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
             assert r.headers["Location"].endswith("/setup/sensors")
             assert c.get("/setup/identity").headers["Location"].endswith("/setup/sensors")
-            assert c.get("/setup/cloud").headers["Location"].endswith("/setup/sensors")
+            assert c.get("/setup/cloud").headers["Location"].endswith("/setup/done")
             page = c.get("/setup/").data
         assert b"already knows who it" in page
 
@@ -285,6 +286,8 @@ class TestJoinFinishesSetup:
 
         c, app = self._client(tmp_path, mock_hardware, virtual_net)
         r = c.post("/setup/network", data={"action": "declare", "backhaul": "none"})
+        assert r.headers["Location"].endswith("/setup/cloud")
+        r = c.post("/setup/cloud", data={"continue": "1"})
         assert r.headers["Location"].endswith("/setup/done")
         c.post("/setup/done", data={})
         state = json.loads(virtual_net.read_text())
@@ -545,6 +548,8 @@ class TestSiteScenarios:
         _seed_networks(virtual_net, [])
         c, app = self._client(tmp_path, mock_hardware)
         r = c.post("/setup/network", data={"action": "declare", "backhaul": "lte"})
+        assert r.headers["Location"].endswith("/setup/cloud")
+        r = c.post("/setup/cloud", data={"continue": "1"})
         assert r.headers["Location"].endswith("/setup/done")
         c.post("/setup/done", data={})
         cfg = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())

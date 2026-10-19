@@ -17,6 +17,33 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # non-interactive environment on a system without a "pi" user.
 INSTALL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 
+# Persistent data dir. Firmware (bluesignal-wqm) and the Service Window
+# (bluesignal-service-window) both run as this user — User=pi in the unit
+# files, rewritten to $INSTALL_USER at install. Identity / HTTP / register
+# files are 0600 inside a 0700 directory so other accounts cannot list or
+# read them. OTA and the card consumer run as root and do not need the seed.
+# WQM1_STATE_DIR is for tests; a unit never sets it.
+wqm1_ensure_state_dir() {
+    local user="${1:-pi}"
+    local dir="${WQM1_STATE_DIR:-/var/lib/bluesignal}"
+    sudo mkdir -p "$dir"
+    sudo chown "$user:$user" "$dir"
+    sudo chmod 0700 "$dir"
+}
+
+wqm1_runtime_user() {
+    local unit="${WQM1_WQM_UNIT:-/etc/systemd/system/bluesignal-wqm.service}"
+    local user=""
+    if [ -r "$unit" ]; then
+        user="$(sed -n 's/^User=//p' "$unit" | head -n1 | tr -d '\r')"
+    fi
+    if [ -n "$user" ]; then
+        printf '%s\n' "$user"
+    else
+        printf '%s\n' "$INSTALL_USER"
+    fi
+}
+
 # OTA-managed layout: every install lands in /opt/bluesignal/releases/<version>/
 # and /opt/bluesignal/current is a symlink to the active release. The systemd
 # units run from current/src, so the OTA agent can swap releases atomically by
@@ -53,9 +80,16 @@ if [ "${1:-}" = "--golden" ]; then
     echo "[golden] Stopping the firmware and the service window..."
     sudo systemctl stop bluesignal-wqm.service bluesignal-service-window.service 2>/dev/null || true
     echo "[golden] Removing unit 1's state from the image..."
-    sudo rm -f /var/lib/bluesignal/wqm1.db /var/lib/bluesignal/wqm1.db-wal /var/lib/bluesignal/wqm1.db-shm
-    sudo rm -f /var/lib/bluesignal/water-profile.json /var/lib/bluesignal/ota-check-now /var/lib/bluesignal/reboot-request
+    STATE_DIR="${WQM1_STATE_DIR:-/var/lib/bluesignal}"
+    sudo rm -f "$STATE_DIR/wqm1.db" "$STATE_DIR/wqm1.db-wal" "$STATE_DIR/wqm1.db-shm"
+    sudo rm -f "$STATE_DIR/water-profile.json" "$STATE_DIR/ota-check-now" "$STATE_DIR/reboot-request"
+    sudo rm -f "$STATE_DIR/device-ed25519.key" "$STATE_DIR/device-ed25519.key.tmp" \
+               "$STATE_DIR/device-http.key" "$STATE_DIR/device-http.key.tmp" \
+               "$STATE_DIR/device-register.json" "$STATE_DIR/device-register.json.tmp"
     sudo rm -f /etc/bluesignal/.provisioned
+    # Keep the directory. Clones must find it 0700 and owned by the service
+    # user so first boot can write a new identity (never share unit 1's pk).
+    wqm1_ensure_state_dir "$(wqm1_runtime_user)"
     sudo journalctl --rotate 2>/dev/null || true
     sudo journalctl --vacuum-time=1s 2>/dev/null || true
     echo "[golden] Done. Power off now (sudo poweroff), move the card to the Mac, run: npm run bench -- golden /dev/diskN"
@@ -345,7 +379,7 @@ if [ -d "$INSTALL_DIR/src" ] && [ ! -d "$INSTALL_DIR/releases" ]; then
 fi
 
 sudo mkdir -p "$RELEASE_DIR"/{config,scripts}
-sudo mkdir -p /var/lib/bluesignal
+wqm1_ensure_state_dir "$INSTALL_USER"
 sudo mkdir -p /var/log/bluesignal
 sudo mkdir -p /etc/bluesignal
 
@@ -438,6 +472,7 @@ echo "  current -> $RELEASE_DIR"
 # /etc/bluesignal makes every save fail with a 500 and the provisioning page
 # is read-only in practice — which is the one thing it exists to do.
 sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal /etc/bluesignal
+sudo chmod 0700 /var/lib/bluesignal
 
 # --- systemd services ---
 echo "[6/9] Installing systemd services..."
@@ -528,6 +563,7 @@ echo "[7/9] Installing service window and provisioning tools..."
 # that recreates /var/run/bluesignal owned by the install user on every boot.
 sudo tee /etc/tmpfiles.d/bluesignal.conf > /dev/null <<EOF
 d /var/run/bluesignal 0755 $INSTALL_USER $INSTALL_USER -
+d /var/lib/bluesignal 0700 $INSTALL_USER $INSTALL_USER -
 EOF
 sudo mkdir -p /var/run/bluesignal
 if [ -f "$SCRIPT_DIR/scripts/provision.py" ]; then

@@ -158,6 +158,9 @@ def no_outbound_http(monkeypatch):
         raise netinfo.urllib.error.URLError("outbound HTTP blocked in tests")
 
     monkeypatch.setattr(netinfo.urllib.request, "urlopen", blocked)
+    import urllib.request as urllib_request
+
+    monkeypatch.setattr(urllib_request, "urlopen", blocked)
 
 
 @pytest.fixture(autouse=True)
@@ -182,6 +185,8 @@ def _no_real_network_mutation(monkeypatch, tmp_path):
     # hostapd.conf holds the setup passphrase. Tests must not write it under /run.
     monkeypatch.setenv("WQM1_HOSTAPD_CONF", str(tmp_path / "hostapd.conf"))
     monkeypatch.setenv("WQM1_DNSMASQ_CONF", str(tmp_path / "dnsmasq-ap.conf"))
+    monkeypatch.setenv("BLUESIGNAL_STATE_DIR", str(tmp_path / "var-lib-bluesignal"))
+    monkeypatch.delenv("BLUESIGNAL_ROOT", raising=False)
     try:
         from service_window import captive
 
