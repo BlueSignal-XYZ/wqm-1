@@ -8,6 +8,14 @@ After=network.target
 # A hung worker (blocking call that never returns) starves the pet and systemd
 # restarts the service — Restart=on-failure alone could never catch a hang.
 Type=notify
+# Yield the one core on a Pi Zero W while this process imports hardware
+# and starts workers. The Service Window no longer waits for READY=1, but
+# both still share the CPU. StartupCPUWeight applies until we go active;
+# CPUWeight is the steady share after that. Nice= is the portable fallback
+# when the cpu controller is missing.
+Nice=10
+StartupCPUWeight=20
+CPUWeight=50
 NotifyAccess=main
 WatchdogSec=180
 User=pi

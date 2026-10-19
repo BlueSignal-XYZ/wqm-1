@@ -352,6 +352,13 @@ sudo mkdir -p /etc/bluesignal
 # --- Install firmware ---
 echo "[5/9] Installing firmware to $RELEASE_DIR..."
 sudo cp -r "$SCRIPT_DIR/src" "$RELEASE_DIR/"
+# Bytecode for THIS python. First boot on a golden Pi Zero W card must not
+# compile the Service Window on one ARM1176 core. The OTA tarball also
+# ships __pycache__ (scripts/build-ota-bundle.sh); this step is what
+# matches Trixie's interpreter inside the image chroot. Hash-based pyc
+# stay valid across cp/tar mtimes. A failure is a warning: import will
+# compile, which is the old first-boot cost, not an install abort.
+sudo python3 -m compileall -q -f --invalidation-mode=checked-hash "$RELEASE_DIR/src" || echo "  WARNING: compileall failed — first import will compile on this python"
 sudo cp "$SCRIPT_DIR/requirements.txt" "$RELEASE_DIR/"
 for extra in requirements-rpi.txt requirements-gpiochip.txt requirements-apple-home.txt requirements-home-assistant.txt; do
     if [ -f "$SCRIPT_DIR/$extra" ]; then

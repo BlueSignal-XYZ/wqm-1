@@ -1,6 +1,19 @@
 [Unit]
 Description=BlueSignal WQM-1 Service Window
-After=network.target bluesignal-wqm.service
+# network.target only: bind :8080 as soon as local interfaces exist.
+# Do NOT After=/Requires=/Wants= bluesignal-wqm. That unit is Type=notify,
+# so After= waits for READY=1 after workers are started. On a Pi Zero W
+# (one ARM1176 core) that is minutes, and a phone on WQM1-xxxx sits on
+# the captive waiting page the whole time. The setup UI already degrades
+# when cmd.sock is missing; it does not need the firmware process.
+# hostapd/dnsmasq are started on demand by netctl after the fallback
+# script decides to raise the AP. After= those units would delay this
+# process until the beacon is up; we want :8080 listening before that.
+# wqm1-firstboot.service and bluesignal-card.service already declare
+# Before= this unit, so radio unblock and the bench card still finish
+# first when they are in the boot transaction.
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
@@ -17,6 +30,9 @@ ExecStart=/usr/bin/python3 -m service_window
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONPATH=/opt/bluesignal/src
+# Win the single core while the firmware is still importing. Default
+# CPUWeight is 100; bluesignal-wqm starts at 20 and settles at 50.
+CPUWeight=200
 
 [Install]
 WantedBy=multi-user.target
