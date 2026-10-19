@@ -334,6 +334,7 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 
 ## Next Steps
 
+- [WQM-1 bench card process (Mac mini), fw2.4.0](#wqm-1-bench-card-process-mac-mini-fw240)
 - [Sensor Calibration](sensor-calibration.md) — calibrate pH, TDS,
   turbidity, and ORP probes
 - [Firmware Overview](firmware-overview.md) — architecture and data
@@ -422,3 +423,18 @@ address before you connect the following one.
 Notes for the chlorine probe: activate a new probe in 3M KCL before first
 use, keep sample pH between 5 and 9, and install it in the flow cell —
 immersion installs read unstably and foul quickly.
+
+---
+
+## WQM-1 bench card process (Mac mini), fw2.4.0
+
+Rules: never put home Wi-Fi or any Mac password on a card. No OTA until the bench test passes and the Captain approves. The Pi Zero W needs the 32-bit (armhf) image.
+
+1. **Image:** `~/wqm1-flash/wqm1-golden-zerow.img` (Pi Zero W, armhf, fw2.4.0). Release candidate sha256 `8284e49d7e1b8a8f8e509dc0cc4236e369f16b858d1fa0c15ec3542b74de1c89`. Earlier images are kept as `.prev-<sha>`.
+2. **Flash:** `bash ~/flash-card.sh ~/wqm1-flash/wqm1-golden-zerow.img`. Always pass the path, because the default (`wqm1-golden.img`) is older. The script stops unless exactly one external 16 GB card is plugged in. It asks for the Mac password (sudo dd), takes about 10 minutes, then ejects the card and prints `FLASH DONE`.
+3. **Verify:** reinsert the card and wait for `bootfs` to mount. Check that `network-config` and `user-data` hold no saved Wi-Fi (no ssid or psk), and that `meta-data` has `instance_id: wqm1-golden-2.4.0`. The hostname is set from the serial on first boot.
+4. **Burn-in flag:** `touch /Volumes/bootfs/burnin`, then `cd ~` (a shell inside /Volumes/bootfs blocks the eject), then `diskutil eject <disk>`.
+5. **Boot:** put the card in the Pi on the HAT and power it on. Burn-in takes about 10 minutes, and the `WQM1-XXXX` hotspot comes up. Its password comes from the serial.
+6. **Phone join (mandatory):** burn-in only checks that the AP is up. Join the hotspot from a real phone and load the setup page.
+7. **Read results:** put the card back in the mini and run `read-card-logs.sh`. It passes when `wqm1-status.txt` shows `COMMISSION: READY` and `BURN-IN: PASS`, with no undervoltage.
+8. **Commission:** run `bash ~/commission-card.sh`. It logs to `~/wqm1-commission-log.csv`.

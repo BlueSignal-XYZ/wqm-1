@@ -135,6 +135,10 @@ sudo apt-get install -y git
 Full instructions for deploying the WQM-1 firmware onto a Raspberry Pi
 Zero 2W with the WQM-1 HAT attached.
 
+Production bench cards on the Mac mini (golden image, fw2.4.0) follow
+[WQM-1 bench card process (Mac mini), fw2.4.0](docs/getting-started.md#wqm-1-bench-card-process-mac-mini-fw240).
+The steps below are the from-scratch Raspberry Pi Imager path.
+
 ### Prerequisites
 
 **Hardware:**
