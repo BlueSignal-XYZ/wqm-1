@@ -26,7 +26,9 @@ only as a bench/dev override, clearly marked, not on the installer path.
 """
 
 import json
+import logging
 import re
+import threading
 
 from flask import (
     Blueprint,
@@ -78,6 +80,7 @@ from utils.wifi_setup import (
 )
 
 setup_bp = Blueprint("setup", __name__, url_prefix="/setup")
+logger = logging.getLogger("wqm1.setup")
 
 _PIN_RE = re.compile(r"^\d{4,8}$")
 _CLOUD_KEY_RE = re.compile(r"^[0-9a-zA-Z]{16,128}$")
@@ -139,14 +142,32 @@ def _identity() -> dict[str, str]:
 
 
 def _kick_register() -> None:
-    """One self-register attempt after a link exists. Never raises."""
-    config = read_config(current_app.config["CONFIG_PATH"])
-    kick_register(
-        api_base=str(config.get("cloud_api_base") or ""),
-        device_id=_identity()["device_id"],
-        fw=read_firmware_version(),
-        config_path=current_app.config["CONFIG_PATH"],
-    )
+    """Start one self-register attempt. Never blocks the setup page.
+
+    The POST can take ``REQUEST_TIMEOUT_S`` (15s) or hang on a half-up
+    link. Firmware ``DeviceRegisterWorker`` retries in its own thread;
+    this only fires an extra attempt the moment a join succeeds. Values
+    are captured here so the worker thread does not need the Flask
+    request context.
+    """
+    config_path = current_app.config["CONFIG_PATH"]
+    config = read_config(config_path)
+    api_base = str(config.get("cloud_api_base") or "")
+    device_id = _identity()["device_id"]
+    fw = read_firmware_version()
+
+    def _run() -> None:
+        try:
+            kick_register(
+                api_base=api_base,
+                device_id=device_id,
+                fw=fw,
+                config_path=config_path,
+            )
+        except Exception as e:  # noqa: BLE001 — join/page must still finish
+            logger.warning("background register kick failed: %s", e)
+
+    threading.Thread(target=_run, name="wqm1-register-kick", daemon=True).start()
 
 
 def _ap_ssid() -> str:

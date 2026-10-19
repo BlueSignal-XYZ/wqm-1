@@ -13,6 +13,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
@@ -92,6 +93,8 @@ if not register_state_path().is_file():
 if register_state_path().is_relative_to(release):
     raise SystemExit("register state in release tree")
 
+st = key_path.stat()
+dst = state_dir().stat()
 print(json.dumps({
     "key": str(key_path),
     "state_dir": str(state_dir()),
@@ -100,6 +103,11 @@ print(json.dumps({
     "register_state": str(register_state_path()),
     "http_key": str(http_key_path()),
     "msg": register_message("BS-WQM1-0000abcdef01", 1760840000000),
+    "key_mode": st.st_mode & 0o777,
+    "dir_mode": dst.st_mode & 0o777,
+    "key_uid": st.st_uid,
+    "dir_uid": dst.st_uid,
+    "euid": os.geteuid(),
 }))
 """
 
@@ -153,6 +161,7 @@ class TestIdempotentKeyGen:
         path = private_key_path()
         mode = path.stat().st_mode
         assert stat.S_IMODE(mode) == 0o600
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
         seed = path.read_bytes()
         second = ensure_keypair()
         assert first == second
@@ -393,6 +402,23 @@ class TestSetupOrder:
         assert 'name="api_key"' in page
         assert "required" not in page.split('name="api_key"', 1)[1].split(">", 1)[0]
 
+    def test_cloud_page_does_not_wait_on_register(self, tmp_path, mock_hardware, monkeypatch):
+        """A slow or hanging Cloud must not stall the setup page."""
+
+        def hang(*_a, **_k):
+            time.sleep(30)
+            raise URLError("hung")
+
+        monkeypatch.setattr("urllib.request.urlopen", hang)
+        app = make_app(tmp_path, mock_hardware)
+        with app.test_client() as c:
+            with c.session_transaction() as sess:
+                sess["pin_verified"] = True
+            started = time.monotonic()
+            resp = c.get("/setup/cloud")
+        assert resp.status_code == 200
+        assert time.monotonic() - started < 2.0
+
 
 class TestInstalledImageLayout:
     def test_key_and_register_state_live_outside_the_release(self, tmp_path):
@@ -432,6 +458,10 @@ class TestInstalledImageLayout:
         assert key.is_file()
         assert key.read_bytes()  # still the seed
         assert Path(data["register_state"]).is_file()
+        assert data["key_mode"] == 0o600
+        assert data["dir_mode"] == 0o700
+        assert data["key_uid"] == data["euid"]
+        assert data["dir_uid"] == data["euid"]
 
 
 class TestBootStatusRegistration:
@@ -455,3 +485,20 @@ class TestBootStatusRegistration:
         parsed = parse_status(write_boot_status())
         assert parsed["registration"] == "conflict"
         assert "identity conflict" in commission_verdict(parsed)
+
+
+class TestRegisterDoesNotBlockStartup:
+    def test_worker_is_a_daemon_thread_after_notify_ready(self):
+        supervisor = (ROOT / "src" / "app" / "supervisor.py").read_text()
+        assert supervisor.index("t.start()") < supervisor.index("self._notifier.ready()")
+        assert "daemon=True" in supervisor.split("def start")[1].split("def _on_fault")[0]
+        app = (ROOT / "src" / "service_window" / "app.py").read_text()
+        assert "kick_register" not in app
+        assert "attempt_register" not in app
+        wqm = (ROOT / "systemd" / "bluesignal-wqm.service").read_text()
+        assert "Type=notify" in wqm
+        sw = (ROOT / "systemd" / "bluesignal-service-window.service").read_text()
+        assert "bluesignal-wqm.service" in sw
+        setup_src = (ROOT / "src" / "service_window" / "routes" / "setup.py").read_text()
+        assert "daemon=True" in setup_src
+        assert "wqm1-register-kick" in setup_src

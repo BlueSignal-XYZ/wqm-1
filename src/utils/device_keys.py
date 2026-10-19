@@ -6,11 +6,15 @@ data path (``/var/lib/bluesignal``). That directory survives OTA release
 swaps of ``/opt/bluesignal/releases/<ver>`` and the ``current`` symlink. It
 is never stored inside a release tree.
 
-Writes are atomic (temp file + fsync + rename + directory fsync) and the
-secret files are mode 0600. ``ensure_keypair`` is idempotent: a present,
-valid seed is never regenerated. After an unclean power loss the completed
-file is used; a leftover ``.tmp`` of the right size is promoted, a truncated
-one is discarded.
+Writes are atomic (temp file + fsync + rename + directory fsync). Secret
+files are mode 0600 and the directory is 0700, owned by the runtime user
+of ``bluesignal-wqm.service`` and ``bluesignal-service-window.service``
+(``User=pi`` in the unit files; ``setup.sh`` rewrites that to
+``$INSTALL_USER``). That is not root: OTA and the card consumer run as
+root and do not read the identity seed. ``ensure_keypair`` is idempotent:
+a present, valid seed is never regenerated. After an unclean power loss
+the completed file is used; a leftover ``.tmp`` of the right size is
+promoted, a truncated one is discarded.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import contextlib
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +48,8 @@ REGISTER_STATE_NAME = "device-register.json"
 
 SEED_BYTES = 32
 FILE_MODE = 0o600
+DIR_MODE = 0o700
+_STATE_LOCK = threading.RLock()
 
 REGISTER_STATUSES = ("pending", "registered", "conflict", "error")
 
@@ -56,6 +63,18 @@ def state_dir() -> Path:
     if root:
         return Path(root) / "var" / "lib" / "bluesignal"
     return DEFAULT_STATE_DIR
+
+
+def ensure_state_dir() -> Path:
+    """Create the persistent data dir at 0700 so only the runtime user enters."""
+    path = state_dir()
+    _assert_not_in_release(path)
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, DIR_MODE)
+    except OSError as e:
+        logger.debug("state dir chmod %s failed: %s", path, e)
+    return path
 
 
 def private_key_path() -> Path:
@@ -91,9 +110,21 @@ def _assert_not_in_release(path: Path) -> None:
 
 def atomic_write_bytes(path: Path, data: bytes, mode: int = FILE_MODE) -> None:
     """Write ``data`` so a power cut cannot leave a half file as the live path."""
+    with _STATE_LOCK:
+        _atomic_write_bytes_locked(path, data, mode)
+
+
+def _atomic_write_bytes_locked(path: Path, data: bytes, mode: int = FILE_MODE) -> None:
     _assert_not_in_release(path)
     parent = path.parent
-    parent.mkdir(parents=True, exist_ok=True)
+    if parent == state_dir() or parent == state_dir().resolve():
+        ensure_state_dir()
+    else:
+        parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(parent, DIR_MODE)
+        except OSError as e:
+            logger.debug("state dir chmod %s failed: %s", parent, e)
     tmp = path.with_name(path.name + ".tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(tmp, flags, mode)
@@ -174,6 +205,12 @@ def ensure_keypair() -> bytes:
     Disk is the source of truth. Two first-boot processes racing both end up
     using whichever seed won the rename, never a discarded in-memory pair.
     """
+    with _STATE_LOCK:
+        return _ensure_keypair_locked()
+
+
+def _ensure_keypair_locked() -> bytes:
+    ensure_state_dir()
     path = private_key_path()
     seed = _read_seed(path)
     if seed is None:
@@ -209,15 +246,16 @@ def public_key_b64url() -> str:
 
 def sign_bytes(message: bytes) -> bytes:
     """Ed25519 signature (64 bytes) over ``message`` with the device seed."""
-    path = private_key_path()
-    seed = _read_seed(path)
-    if seed is None:
-        ensure_keypair()
+    with _STATE_LOCK:
+        path = private_key_path()
         seed = _read_seed(path)
-    if seed is None:
-        raise RuntimeError("identity key missing")
-    key = _key_from_seed(seed)
-    return eddsa.new(key, "rfc8032").sign(message)
+        if seed is None:
+            _ensure_keypair_locked()
+            seed = _read_seed(path)
+        if seed is None:
+            raise RuntimeError("identity key missing")
+        key = _key_from_seed(seed)
+        return eddsa.new(key, "rfc8032").sign(message)
 
 
 def identity_qr_payload() -> dict[str, Any]:
