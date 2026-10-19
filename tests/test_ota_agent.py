@@ -11,6 +11,8 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -23,8 +25,11 @@ from Crypto.PublicKey import ECC
 from Crypto.Signature import eddsa
 
 from ota.agent import (
+    COMPILE_NICE,
+    COMPILE_TIMEOUT_S,
     REBOOT_REQUEST_MAX_AGE_S,
     OTAAgent,
+    compile_release_bytecode,
     sha256_file,
     validate_tar_members,
     verify_manifest_signature,
@@ -308,6 +313,16 @@ class TestHappyPath:
         assert not (env.releases / "2.1.0.staging").exists()
         # Previous release retained for rollback
         assert (env.releases / "2.0.0").is_dir()
+        compiles = [c for c in env.run_cmd.calls if "compileall" in c]
+        assert len(compiles) == 1
+        assert compiles[0][0] == "nice"
+        assert compiles[0][1:3] == ["-n", str(COMPILE_NICE)]
+        assert "--invalidation-mode=checked-hash" in compiles[0]
+        restart_at = next(
+            i for i, c in enumerate(env.run_cmd.calls) if c[:2] == ["systemctl", "restart"]
+        )
+        compile_at = next(i for i, c in enumerate(env.run_cmd.calls) if "compileall" in c)
+        assert compile_at < restart_at
 
     def test_pubkey_loaded_from_current_release_with_comment_header(self, env, tmp_path):
         env.insert_reading()
@@ -321,6 +336,69 @@ class TestHappyPath:
 
         agent = env.agent(opener, pubkey_path=None)  # force fallback resolution
         assert agent.check_and_apply() == "success"
+
+
+class TestDeviceBytecode:
+    """CI .pyc is 3.11; the Pi runs 3.13. Compile on the extracted tree."""
+
+    def test_compileall_runs_before_current_flips(self, env, tmp_path):
+        env.insert_reading()
+        bundle = make_bundle(tmp_path)
+
+        class Spy(FakeRunCmd):
+            def __init__(self) -> None:
+                super().__init__()
+                self.current_during_compile: str | None = None
+
+            def __call__(self, argv, **kwargs):
+                if "compileall" in argv:
+                    self.current_during_compile = env.current_release()
+                return super().__call__(argv, **kwargs)
+
+        spy = Spy()
+        env.run_cmd = spy
+        opener = FakeOpener(poll_data=make_target(bundle), bundle_path=bundle)
+        assert env.agent(opener).check_and_apply() == "success"
+        assert spy.current_during_compile == "2.0.0"
+        assert env.current_release() == "2.1.0"
+        compile_argv = next(c for c in spy.calls if "compileall" in c)
+        assert str(env.releases / "2.1.0" / "src") in compile_argv
+
+    def test_compileall_timeout_still_flips_current(self, env, tmp_path):
+        env.insert_reading()
+        bundle = make_bundle(tmp_path)
+
+        class Slow(FakeRunCmd):
+            def __call__(self, argv, **kwargs):
+                if "compileall" in argv:
+                    raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+                return super().__call__(argv, **kwargs)
+
+        env.run_cmd = Slow()
+        opener = FakeOpener(poll_data=make_target(bundle), bundle_path=bundle)
+        assert env.agent(opener).check_and_apply() == "success"
+        assert env.current_release() == "2.1.0"
+
+    def test_compile_release_bytecode_uses_this_python_in_installed_layout(self, tmp_path):
+        version = "2.4.0"
+        root = tmp_path / "opt" / "bluesignal"
+        release = root / "releases" / version
+        src = release / "src" / "service_window"
+        src.mkdir(parents=True)
+        (src / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (release / "VERSION").write_text(version + "\n", encoding="utf-8")
+        cache = src / "__pycache__"
+        cache.mkdir()
+        (cache / "app.cpython-311.pyc").write_bytes(b"ci-pyc")
+        current = root / "current"
+        current.symlink_to(release)
+
+        assert compile_release_bytecode(release, run_cmd=subprocess.run, timeout_s=30)
+        tag = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
+        found = list(cache.glob(f"app.{tag}*.pyc"))
+        assert found, list(cache.iterdir())
+        assert current.resolve() == release.resolve()
+        assert COMPILE_TIMEOUT_S >= 30
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +532,8 @@ class TestRollback:
         # Services restarted twice: once to apply, once to roll back.
         restarts = [c for c in env.run_cmd.calls if c[:2] == ["systemctl", "restart"]]
         assert len(restarts) == 2
+        # Rollback only flips current — it must not compile the bad tree again.
+        assert len([c for c in env.run_cmd.calls if "compileall" in c]) == 1
 
     def test_service_not_active_rolls_back(self, env, tmp_path):
         env.insert_reading()

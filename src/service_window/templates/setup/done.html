@@ -3,7 +3,10 @@
 {% block title %}Setup — Finish{% endblock %}
 {% block content %}
 <h1 class="setup-h1">Go / no-go checklist</h1>
-{% if overall == 'ok' %}
+{% if firmware_starting %}
+<p class="lead">The unit is still starting. Checking sensors… You can wait for
+the cards to go green, or finish and the unit keeps monitoring.</p>
+{% elif overall == 'ok' %}
 <p class="lead">Everything checks out. Finish setup and this unit is on its own.</p>
 {% else %}
 <p class="lead">You can finish now and fix the flagged items later — the unit

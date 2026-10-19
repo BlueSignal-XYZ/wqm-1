@@ -76,6 +76,16 @@ class TestSensorCopy:
         assert explain("ph", "stuck")["status"] == "fault"
         assert explain("ph", "stuck_no_data")["status"] == "fault"
 
+    def test_starting_is_attention_not_a_missing_probe(self):
+        info = explain("ph", "starting")
+        assert info["status"] == "attention"
+        assert "still starting" in info["message"].lower()
+        assert "checking sensors" in info["message"].lower()
+        assert "no data" not in info["message"].lower()
+        cloud = explain("cloud", "starting")
+        assert cloud["status"] == "attention"
+        assert cloud["message"] == info["message"]
+
     def test_calibration_overdue_includes_age(self):
         info = explain("orp", "calibration_overdue", {"age_days": 104})
         assert "104 days" in info["message"]

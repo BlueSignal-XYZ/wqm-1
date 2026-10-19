@@ -162,6 +162,31 @@ def test_ota_bundle_contains_service_window_pyc_and_current_layout(tmp_path: Pat
     assert found, found
 
 
+def test_ota_compileall_after_extract_in_installed_layout(tmp_path: Path) -> None:
+    """releases/<ver> + current, then device-python compileall — not the CI tag."""
+    from ota.agent import compile_release_bytecode
+
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    root = tmp_path / "opt" / "bluesignal"
+    release = root / "releases" / version
+    app = release / "src" / "service_window"
+    app.mkdir(parents=True)
+    (app / "app.py").write_text("READY = True\n", encoding="utf-8")
+    (release / "VERSION").write_text(version + "\n", encoding="utf-8")
+    stale = app / "__pycache__"
+    stale.mkdir()
+    (stale / "app.cpython-311.pyc").write_bytes(b"wrong-tag")
+    current = root / "current"
+    current.symlink_to(release)
+
+    assert compile_release_bytecode(release, run_cmd=subprocess.run, timeout_s=30)
+    tag = f"cpython-{sys.version_info.major}{sys.version_info.minor}"
+    found = list((app / "__pycache__").glob(f"app.{tag}*.pyc"))
+    assert found, list((app / "__pycache__").iterdir())
+    assert current.resolve() == release.resolve()
+    assert (current / "src" / "service_window" / "app.py").is_file()
+
+
 def test_setup_sh_precompiles_src_into_the_release() -> None:
     setup = (ROOT / "setup.sh").read_text(encoding="utf-8")
     assert "python3 -m compileall" in setup

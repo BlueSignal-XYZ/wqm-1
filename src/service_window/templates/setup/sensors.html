@@ -11,12 +11,12 @@
     <p><b>Try this:</b> {{ board_fault.action }}</p>
 </div>
 {% endif %}
-{% if not fitted_cards %}
+{% if firmware_starting or not have_readings %}
+<p class="lead">The unit is still starting. Checking sensors… Make sure the probes
+are in the water; this can take a minute after power-on.</p>
+{% elif not fitted_cards %}
 <p class="lead">No probes are declared on this unit yet. Tick the ones that are
 connected below.</p>
-{% elif not have_readings %}
-<p class="lead">Waiting for the first readings. Make sure the probes are in the water;
-this can take a minute after power-on.</p>
 {% elif ready %}
 <p class="lead">Every fitted probe is reading.</p>
 {% else %}
