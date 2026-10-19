@@ -52,7 +52,7 @@ from service_window.db_reader import DBReader
 from service_window.health import (
     apply_board_fault,
     board_fault_banner,
-    hardware_report,
+    firmware_snapshot,
     sensor_cards,
     system_cards,
     worst_status,
@@ -81,6 +81,17 @@ from utils.wifi_setup import (
 
 setup_bp = Blueprint("setup", __name__, url_prefix="/setup")
 logger = logging.getLogger("wqm1.setup")
+
+
+@setup_bp.context_processor
+def _firmware_starting_ctx() -> dict[str, bool]:
+    """Every setup template can show the starting banner and poll."""
+    try:
+        ready, _report = firmware_snapshot(current_app.config["CMD_SOCK"])
+    except Exception:  # noqa: BLE001 — the page must still render
+        ready = False
+    return {"firmware_starting": not ready}
+
 
 _PIN_RE = re.compile(r"^\d{4,8}$")
 _CLOUD_KEY_RE = re.compile(r"^[0-9a-zA-Z]{16,128}$")
@@ -179,11 +190,20 @@ def _ap_ssid() -> str:
 
 def _live_probe_rows() -> list[dict[str, str]]:
     """ADC from the firmware (or the status file) and 1-Wire from the status file."""
-    report = hardware_report(current_app.config["CMD_SOCK"])
+    ready, report = firmware_snapshot(current_app.config["CMD_SOCK"])
     status = read_published_status()
     adc = str(report.get("adc") or status.get("adc") or "")
     onewire = str(status.get("onewire") or "")
-    return probe_rows(adc, onewire)
+    rows = probe_rows(adc, onewire)
+    if ready:
+        return rows
+    # Firmware has not answered. Empty/unknown must not look like a missing
+    # probe. A status file that already says faulted/absent is a report from
+    # a previous firmware run (#139) and still needs the confirm tick.
+    for row in rows:
+        if row.get("kind") == "unchecked":
+            row["word"] = "checking"
+    return rows
 
 
 def _probe_block(form: dict | None = None) -> tuple[list[dict[str, str]], str | None]:
@@ -677,10 +697,16 @@ def sensors() -> ResponseReturnValue:
         readings = db.get_readings(limit=30)
     except Exception:
         readings = []
-    report = hardware_report(current_app.config["CMD_SOCK"])
+    fw_ready, report = firmware_snapshot(current_app.config["CMD_SOCK"])
+    awaiting = (not fw_ready) or (not readings)
     cards = apply_board_fault(
-        sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config),
-        report,
+        sensor_cards(
+            readings,
+            orp_enabled=bool(config.get("orp_enabled")),
+            config=config,
+            awaiting=awaiting,
+        ),
+        report if fw_ready or report.get("adc") == "faulted" else {},
     )
     ready = all(c["status"] in ("ok", "disabled") for c in cards.values())
     # Absent key = fitted for the core four ONLY, matching health.py — a unit
@@ -723,12 +749,18 @@ def done() -> ResponseReturnValue:
     except Exception:
         readings, count, pending, session = [], 0, 0, None
 
-    report = hardware_report(current_app.config["CMD_SOCK"])
+    fw_ready, report = firmware_snapshot(current_app.config["CMD_SOCK"])
+    awaiting = (not fw_ready) or (not readings)
     s_cards = apply_board_fault(
-        sensor_cards(readings, orp_enabled=bool(config.get("orp_enabled")), config=config),
-        report,
+        sensor_cards(
+            readings,
+            orp_enabled=bool(config.get("orp_enabled")),
+            config=config,
+            awaiting=awaiting,
+        ),
+        report if fw_ready or report.get("adc") == "faulted" else {},
     )
-    sys_cards = system_cards(readings, config, session, count, pending=pending)
+    sys_cards = system_cards(readings, config, session, count, pending=pending, awaiting=awaiting)
     checklist = {**s_cards, **sys_cards}
     overall = worst_status(checklist)
 

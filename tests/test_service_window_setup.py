@@ -599,6 +599,15 @@ class TestHealthModule:
         assert "flat" in cards["ph"]["message"]
         assert cards["ph"]["action"]
 
+    def test_awaiting_firmware_keeps_system_cards_off_fault(self, mock_hardware):
+        from service_window.health import sensor_cards, system_cards
+
+        s_cards = sensor_cards([], config={}, awaiting=True)
+        sys_cards = system_cards([], {}, None, 0, awaiting=True)
+        assert all(c["status"] != "fault" for c in s_cards.values())
+        assert sys_cards["storage"]["status"] == "attention"
+        assert "still starting" in sys_cards["storage"]["message"].lower()
+
     def test_stale_readings_flag_everything(self, mock_hardware):
         from service_window.health import sensor_cards, system_cards
 

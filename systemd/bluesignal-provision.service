@@ -6,6 +6,9 @@ ConditionPathExists=!/etc/bluesignal/.provisioned
 
 [Service]
 Type=oneshot
+# Journal hint only. Must not steal the core from the setup page.
+Nice=10
+CPUWeight=20
 ExecStart=/opt/bluesignal/current/scripts/first-boot-check.sh
 RemainAfterExit=no
 

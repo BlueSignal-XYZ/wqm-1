@@ -39,6 +39,19 @@ def test_build_requires_the_setup_ap_unit_in_the_release_tree():
     assert f'chroot "$R" test -f {unit}' in script
 
 
+def test_build_precompiles_service_window_bytecode_in_the_chroot():
+    """First boot must not compile Flask on one ARM1176 core.
+
+    /opt/bluesignal/current is an absolute symlink, so the compile and
+    the pyc check run inside the chroot the same way the hostapd check does.
+    """
+    script = (GOLDEN / "build-golden.sh").read_text()
+    assert "compileall" in script
+    assert "/opt/bluesignal/current/src" in script
+    assert "app.cpython-*.pyc" in script
+    assert "chroot_env python3 -m compileall" in script
+
+
 def test_build_does_not_hardcode_a_board_name():
     script = (GOLDEN / "build-golden.sh").read_text()
     assert 'BOARD_MODEL="Raspberry Pi Zero W' not in script

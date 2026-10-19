@@ -237,6 +237,18 @@ chroot "$R" dpkg -s dnsmasq >/dev/null
 # to /opt/bluesignal/releases/<ver>, so a host-side [ -f "$R/..." ]
 # follows it off the image. Test inside the chroot.
 chroot "$R" test -f /opt/bluesignal/current/systemd/wqm1-setup-hostapd.service
+# setup.sh already compileall'd with this chroot python. Run it again
+# against /opt/bluesignal/current/src so a future copy path that skips
+# that step still ships service_window pyc, and so the check below is
+# against the live symlink layout (absolute current -> releases/<ver>).
+# Host-side [ -f "$R/opt/bluesignal/current/..." ] follows that link
+# off the image — same reason the hostapd check is inside the chroot.
+chroot_env python3 -m compileall -q -f --invalidation-mode=checked-hash \
+    /opt/bluesignal/current/src
+chroot_env python3 -c 'from pathlib import Path
+import sys
+pyc = list(Path("/opt/bluesignal/current/src/service_window/__pycache__").glob("app.cpython-*.pyc"))
+sys.exit(0 if pyc else "no service_window app.pyc in the release tree")'
 
 install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-firstboot" "$R/usr/local/sbin/"
 install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-firstboot.service" "$R/etc/systemd/system/"

@@ -39,6 +39,9 @@
         {% endwith %}
 
         <section class="setup-card">
+            {% if firmware_starting %}
+            <div class="flash info" id="firmware-starting">The unit is still starting. Checking sensors… Keep this page open.</div>
+            {% endif %}
             {% block content %}{% endblock %}
         </section>
 
@@ -47,5 +50,10 @@
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
     {% block scripts %}{% endblock %}
+    {% if firmware_starting %}
+    <script>
+    setTimeout(function () { window.location.reload(); }, 5000);
+    </script>
+    {% endif %}
 </body>
 </html>

@@ -11,8 +11,12 @@ Device-side over-the-air firmware updates:
    tar packaging sanity (no absolute paths, no ``..``, no escaping links) ->
    ``minFromVersion`` downgrade guard -> ``requiresDeps`` refusal.
 4. Apply atomically: extract to ``releases/<version>.staging``, rename to
-   ``releases/<version>``, flip the ``current`` symlink in one ``os.replace``,
-   restart the firmware services.
+   ``releases/<version>``, compile ``src`` with this unit's Python (CI-built
+   ``.pyc`` uses the builder's cache tag and is ignored on Trixie 3.13),
+   flip the ``current`` symlink in one ``os.replace``, restart the firmware
+   services. Compile is niced, bounded, and must not fail the apply or run
+   during rollback — the running Service Window stays on the previous
+   ``current`` until the flip.
 5. Self-test: main service active AND a fresh sensor reading lands in SQLite
    within ``ota_self_test_timeout_s`` — otherwise flip the symlink back to the
    previous release and report ``rolled_back``.
@@ -36,6 +40,7 @@ import random
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import time
 import urllib.request
@@ -81,6 +86,13 @@ FREE_DISK_FACTOR = 3
 
 MAIN_SERVICE = "bluesignal-wqm.service"
 RESTART_SERVICES = [MAIN_SERVICE, "bluesignal-service-window.service"]
+
+# Device-side bytecode after extract. Actions builds on CPython 3.11; Trixie
+# on the Pi is 3.13, so the tarball's ``.pyc`` has the wrong PEP 3147 tag.
+# Bounded and niced so a wedged compile cannot stall the setup page or the
+# rollback path (rollback only flips ``current``).
+COMPILE_NICE = 15
+COMPILE_TIMEOUT_S = 90
 
 # Phases mid-apply: if the agent dies while the state file records one of
 # these, the boot-time safety net treats the update as failed and rolls back.
@@ -156,6 +168,49 @@ def version_tuple(version: str) -> tuple[int, ...] | None:
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def compile_release_bytecode(
+    release_dir: Path,
+    run_cmd: Any = subprocess.run,
+    timeout_s: float = COMPILE_TIMEOUT_S,
+) -> bool:
+    """Compile ``release_dir/src`` with this unit's Python.
+
+    Returns True when compileall exited 0. False on timeout, a missing tree,
+    or any other failure — the caller must still flip ``current``. Runs
+    before the symlink flip so the Service Window process serving :8080 is
+    not the tree being compiled, and rollback never calls this.
+    """
+    src = Path(release_dir) / "src"
+    if not src.is_dir():
+        return False
+    python = sys.executable or "python3"
+    argv = [
+        "nice",
+        "-n",
+        str(COMPILE_NICE),
+        python,
+        "-m",
+        "compileall",
+        "-q",
+        "-f",
+        "--invalidation-mode=checked-hash",
+        str(src),
+    ]
+    try:
+        result = run_cmd(argv, timeout=timeout_s, check=False, capture_output=True)
+    except subprocess.TimeoutExpired:
+        logger.warning("compileall timed out after %.0fs — first import will compile", timeout_s)
+        return False
+    except Exception as e:  # noqa: BLE001 — apply must proceed without bytecode
+        logger.warning("compileall failed: %s", e)
+        return False
+    code = getattr(result, "returncode", 1)
+    if code != 0:
+        logger.warning("compileall exited %s", code)
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -485,10 +540,10 @@ class OTAAgent:
             return None
 
     def _apply(self, version: str, bundle: Path) -> str | None:
-        """Extract, stage, flip the symlink, restart services.
+        """Extract, compile on this Python, flip the symlink, restart services.
 
         Returns the previous ``current`` target path (for rollback), or None
-        when there was no previous release.
+        when there was no previous release. Compile failure does not abort.
         """
         staging = self._releases_dir / f"{version}.staging"
         if staging.exists():
@@ -509,6 +564,9 @@ class OTAAgent:
         if final.exists():
             shutil.rmtree(final)
         staging.rename(final)
+        # Compile the new tree while ``current`` still points at the previous
+        # release so :8080 is not blocked and rollback never has to undo this.
+        compile_release_bytecode(final, run_cmd=self._run_cmd)
 
         previous: str | None = None
         if self._current_link.is_symlink() or self._current_link.exists():

@@ -101,6 +101,9 @@ _STATE_STATUS: dict[str, str] = {
     # will upload when a link exists. That is the design working, not a
     # fault (commissioning plan, PR 5).
     "buffering": "ok",
+    # Service Window can bind :8080 before bluesignal-wqm is READY. Empty
+    # readings must not read as a missing probe.
+    "starting": "attention",
 }
 
 # Generic sensor copy per state: (message, likelyCause, action).
@@ -117,6 +120,11 @@ _SENSOR_COPY: dict[str, tuple[str, str | None, str | None]] = {
         "{name} has returned no data for {minutes} minutes.",
         "The probe is likely unplugged, or its wiring is damaged.",
         "Check the cable and connector. If it stays blank, power-cycle the unit.",
+    ),
+    "starting": (
+        "The unit is still starting. Checking sensors…",
+        "The monitoring service has not published a reading yet.",
+        "Keep this page open — it refreshes by itself.",
     ),
     "spike": (
         "{name} briefly jumped to an unusual value.",
@@ -384,6 +392,17 @@ def explain(sensor: str, state: str, context: dict[str, Any] | None = None) -> d
         ctx.update({k: v for k, v in context.items() if v is not None})
     ctx["name"] = display_name(sensor)
     ctx["state"] = state
+
+    if state == "starting":
+        # Same sentence for every subject. Not in SENSOR_STATES/SYSTEM_STATES
+        # so the golden matrix does not grow a starting card for every pair.
+        message, cause, action = _SENSOR_COPY["starting"]
+        return {
+            "status": "attention",
+            "message": _fmt(message, ctx),
+            "likelyCause": _fmt(cause, ctx),
+            "action": _fmt(action, ctx),
+        }
 
     entry: tuple[str, str | None, str | None] | None = None
     if sensor in SYSTEM_SUBJECTS:

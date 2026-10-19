@@ -15,10 +15,14 @@ import statistics
 from datetime import UTC, datetime
 from typing import Any
 
+from flask import g, has_request_context
+
+from diagnostics.boot_status import read_published_status
 from diagnostics.explain import explain
 from sensing.monitor import FIELD_TO_SENSOR as _FIELD_TO_SENSOR
 from sensing.monitor import NO_FLATLINE as _NO_FLATLINE
 from sensing.monitor import NOISE_FLOOR as _NOISE_FLOOR
+from service_window.cmd_client import send_command
 
 # A reading is "recent" within 3x the default sample cadence.
 _RECENT_S = 3 * 60
@@ -69,12 +73,16 @@ def sensor_cards(
     orp_enabled: bool = False,
     now: datetime | None = None,
     config: dict[str, Any] | None = None,
+    awaiting: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """
     Per-sensor plain-language card from the recent readings (newest first).
     A sensor is: fault when its recent values are all missing or flat;
     ok otherwise. Disabled sensors (ORP without hardware, RS485 probes not
     fitted) say so.
+
+    ``awaiting`` is True while the firmware process is not READY or has not
+    stored a reading yet. Those cards must not read as a missing probe.
     """
     now = now or datetime.now(UTC)
     cards: dict[str, dict[str, Any]] = {}
@@ -85,6 +93,9 @@ def sensor_cards(
     for field, sensor in _FIELD_TO_SENSOR.items():
         if not _sensor_enabled(sensor, orp_enabled, config):
             cards[sensor] = explain(sensor, "disabled")
+            continue
+        if awaiting:
+            cards[sensor] = explain(sensor, "starting")
             continue
         if not readings or stale:
             cards[sensor] = explain(sensor, "stuck_no_data", {"minutes": _RECENT_S // 60})
@@ -111,6 +122,7 @@ def system_cards(
     reading_count: int,
     now: datetime | None = None,
     pending: int | None = None,
+    awaiting: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Cloud / LoRa / GPS / storage cards — graded against what THIS variant
     has (commissioning plan, PR 5).
@@ -127,6 +139,22 @@ def system_cards(
     now = now or datetime.now(UTC)
     cards: dict[str, dict[str, Any]] = {}
     backhaul = str(config.get("backhaul") or "wifi")
+
+    if awaiting:
+        cloud_enabled = bool(config.get("cloud_enabled")) and bool(config.get("api_key"))
+        cards["cloud"] = explain("cloud", "starting" if cloud_enabled else "down")
+        if backhaul == "lte":
+            cards["lte"] = explain("lte", "starting")
+        if config.get("lora_enabled", True):
+            cards["lora"] = explain("lora", "starting")
+        else:
+            cards["lora"] = explain("lora", "disabled")
+        if config.get("gps_enabled", True):
+            cards["gps"] = explain("gps", "starting")
+        else:
+            cards["gps"] = explain("gps", "disabled")
+        cards["storage"] = explain("storage", "starting")
+        return cards
 
     # Cloud: configured + recent rows actually syncing (synced flag on latest).
     cloud_enabled = bool(config.get("cloud_enabled")) and bool(config.get("api_key"))
@@ -235,6 +263,50 @@ def smart_breaker_card(config: dict[str, Any], awg: dict[str, Any] | None) -> di
 _ANALOG_CHANNELS = ("ph", "tds", "turbidity", "orp")
 
 
+def firmware_snapshot(sock_path: str) -> tuple[bool, dict[str, Any]]:
+    """Whether the firmware answered, plus the live or published hardware report.
+
+    Cached on ``flask.g`` for the request so the setup context processor and
+    the view share one socket attempt.
+    """
+    if has_request_context() and hasattr(g, "_wqm1_fw_snap"):
+        cached: tuple[bool, dict[str, Any]] = g._wqm1_fw_snap
+        return cached
+    resp = send_command(sock_path, "hardware_status")
+    ready = bool(resp.get("ok"))
+    report: dict[str, Any] = {}
+    if ready and resp.get("adc"):
+        faulted = resp.get("faulted") or []
+        if isinstance(faulted, str):
+            faulted = [part.strip() for part in faulted.split(",") if part.strip()]
+        report = {
+            "adc": str(resp.get("adc")),
+            "adc_error": str(resp.get("adcError") or ""),
+            "faulted": [str(name) for name in faulted],
+            "fatal": str(resp.get("fatal") or ""),
+        }
+    else:
+        parsed = read_published_status()
+        if parsed:
+            names = [part.strip() for part in parsed.get("faulted", "").split(",") if part.strip()]
+            report = {
+                "adc": parsed.get("adc", ""),
+                "adc_error": parsed.get("adc_error", ""),
+                "faulted": names,
+                "fatal": parsed.get("fatal", ""),
+            }
+    result = (ready, report)
+    if has_request_context():
+        g._wqm1_fw_snap = result
+    return result
+
+
+def firmware_ready(sock_path: str) -> bool:
+    """True when the firmware command socket answered."""
+    ready, _report = firmware_snapshot(sock_path)
+    return ready
+
+
 def hardware_report(sock_path: str) -> dict[str, Any]:
     """Live fault report from the firmware, else the boot status file.
 
@@ -244,31 +316,8 @@ def hardware_report(sock_path: str) -> dict[str, Any]:
     facts. An empty dict means neither source had anything to say — the
     cards stay as the readings describe them.
     """
-    from service_window.cmd_client import send_command
-
-    resp = send_command(sock_path, "hardware_status")
-    if resp.get("ok") and resp.get("adc"):
-        faulted = resp.get("faulted") or []
-        if isinstance(faulted, str):
-            faulted = [part.strip() for part in faulted.split(",") if part.strip()]
-        return {
-            "adc": str(resp.get("adc")),
-            "adc_error": str(resp.get("adcError") or ""),
-            "faulted": [str(name) for name in faulted],
-            "fatal": str(resp.get("fatal") or ""),
-        }
-    from diagnostics.boot_status import read_published_status
-
-    parsed = read_published_status()
-    if not parsed:
-        return {}
-    names = [part.strip() for part in parsed.get("faulted", "").split(",") if part.strip()]
-    return {
-        "adc": parsed.get("adc", ""),
-        "adc_error": parsed.get("adc_error", ""),
-        "faulted": names,
-        "fatal": parsed.get("fatal", ""),
-    }
+    _ready, report = firmware_snapshot(sock_path)
+    return report
 
 
 def apply_board_fault(

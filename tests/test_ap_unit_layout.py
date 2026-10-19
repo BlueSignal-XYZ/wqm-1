@@ -348,6 +348,7 @@ def test_installed_layout_finds_ap_units(tmp_path: Path) -> None:
     release = tmp_path / "opt" / "bluesignal" / "releases" / "X"
     script = materialize_release(ROOT, release)
     assert 'cp -r "$SCRIPT_DIR/src"' in script or "cp -r" in script
+    assert "compileall" in script
     assert (release / "src" / "utils" / "netctl.py").is_file()
     probe = tmp_path / "probe_units.py"
     probe.write_text(_PROBE, encoding="utf-8")
@@ -359,13 +360,24 @@ def test_installed_layout_finds_ap_units(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "found" in result.stdout
+    pyc = list((release / "src" / "service_window" / "__pycache__").glob("app.cpython-*.pyc"))
+    assert pyc, "setup.sh RELEASE_DIR copy did not compile service_window app.pyc"
 
 
 def test_workflows_pack_systemd_into_the_ota_bundle() -> None:
+    packager = (ROOT / "scripts" / "build-ota-bundle.sh").read_text(encoding="utf-8")
     members = "src config scripts systemd requirements.txt requirements-rpi.txt VERSION setup.sh"
-    for name in ("ci.yml", "release.yml"):
-        text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
-        assert members in text, name
+    assert members in packager
+    assert "compileall" in packager
+    assert "--exclude='__pycache__'" not in packager
+    assert "--exclude='*.pyc'" not in packager
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "scripts/build-ota-bundle.sh" in ci
+    assert "scripts/build-ota-bundle.sh" in release
+    ota_step = release.split("Build OTA firmware bundle", 1)[1].split("Generate and sign", 1)[0]
+    assert "--exclude='__pycache__'" not in ota_step
+    assert "--exclude='*.pyc'" not in ota_step
 
 
 def test_status_and_apfail_writes_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

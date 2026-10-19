@@ -59,9 +59,7 @@ jobs:
           PYTHONPATH: src
         run: |
           VERSION=$(cat VERSION)
-          tar --exclude='__pycache__' --exclude='*.pyc' \
-            -czf "wqm1-firmware-${VERSION}.tar.gz" \
-            src config scripts systemd requirements.txt requirements-rpi.txt VERSION setup.sh
+          bash scripts/build-ota-bundle.sh "wqm1-firmware-${VERSION}.tar.gz"
           python3 <<'PYEOF'
           import base64, json, tarfile
           from datetime import UTC, datetime
@@ -124,6 +122,17 @@ jobs:
               "OTA bundle carries "
               f"{sum(1 for name in bundled if name.startswith('systemd/'))} systemd paths"
           )
+          setup_pyc = [
+              name
+              for name in bundled
+              if name.startswith("src/service_window/") and name.endswith(".pyc")
+          ]
+          if not any("/app.cpython-" in name and name.endswith(".pyc") for name in setup_pyc):
+              raise SystemExit(
+                  "OTA bundle is missing service_window app.pyc; "
+                  f"got {setup_pyc[:8]!r}"
+              )
+          print(f"OTA bundle carries {len(setup_pyc)} service_window pyc files")
 
           # A tampered signature must be rejected.
           bad = bytearray(signature)
