@@ -28,8 +28,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from Crypto.PublicKey import ECC
-from Crypto.Signature import eddsa
+try:
+    from Crypto.PublicKey import ECC
+    from Crypto.Signature import eddsa
+except ImportError:
+    # burn-in.sh execs /usr/bin/python3; GitHub's system python has no pycryptodome
+    ECC = None  # type: ignore[assignment]
+    eddsa = None  # type: ignore[assignment]
 
 from utils.identity import get_device_id, is_label_serial, read_provisioned_identity
 
@@ -195,7 +200,14 @@ def _promote_tmp(path: Path) -> bytes | None:
     return _read_seed(path) or seed
 
 
-def _key_from_seed(seed: bytes) -> ECC.EccKey:
+def _require_crypto() -> None:
+    if ECC is None or eddsa is None:
+        raise RuntimeError("pycryptodome is required for the device identity key")
+
+
+def _key_from_seed(seed: bytes) -> Any:
+    _require_crypto()
+    assert ECC is not None
     return ECC.construct(curve="Ed25519", seed=seed)
 
 
@@ -224,6 +236,8 @@ def _ensure_keypair_locked() -> bytes:
             os.chmod(path, FILE_MODE)
         return _key_from_seed(seed).public_key().export_key(format="raw")
 
+    _require_crypto()
+    assert ECC is not None
     generated = ECC.generate(curve="Ed25519")
     new_seed = generated.seed
     if not isinstance(new_seed, (bytes, bytearray)) or len(new_seed) != SEED_BYTES:
@@ -254,6 +268,8 @@ def sign_bytes(message: bytes) -> bytes:
             seed = _read_seed(path)
         if seed is None:
             raise RuntimeError("identity key missing")
+        _require_crypto()
+        assert eddsa is not None
         key = _key_from_seed(seed)
         return eddsa.new(key, "rfc8032").sign(message)
 
