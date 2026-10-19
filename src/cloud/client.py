@@ -137,6 +137,10 @@ class CloudClient:
         self._sleep = time.sleep  # patchable in tests
         self._now_ms: Callable[[], int] = lambda: int(time.time() * 1000)  # patchable
 
+    def set_api_key(self, api_key: str) -> None:
+        """Hot-attach a key issued by self-registration."""
+        self._api_key = api_key
+
     def _device_url(self, suffix: str) -> str:
         return f"{self._api_base}/v2/devices/{self._device_id}/{suffix}"
 

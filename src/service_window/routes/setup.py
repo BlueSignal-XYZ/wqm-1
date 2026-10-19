@@ -3,29 +3,29 @@ Guided first-boot setup wizard — the installer-first commissioning path.
 
 Replaces the CLI wizard as the primary way a dealer/installer commissions a
 unit from a phone browser: set a real PIN (the shipped `1234` is banned),
-confirm device identity (QR), connect the cloud API key, watch live sensor
-checks come green, and finish on a go/no-go checklist. Config writes go
-through the atomic YAML editor; the firmware is restarted through the
-command socket instead of telling anyone to run systemctl.
+confirm device identity (v2 QR), watch live sensor checks come green, join
+the site network, and let the unit register itself with BlueSignal Cloud.
+The installer never pastes a device API key. Config writes go through the
+atomic YAML editor; the firmware is restarted through the command socket
+instead of telling anyone to run systemctl.
 
 While the unit still has the factory PIN and setup hasn't been completed,
 every page redirects here (see app.py) — a unit can't be left half set up
 by accident.
 
-Site flow v2 (2026-10-03): **the network is the LAST step, and joining the
-site's Wi-Fi is what finishes setup.** The wizard is usually served over the
-unit's own setup hotspot, which goes down the moment a join succeeds; when
-the join sat in the middle, every step after it had to be reached from the
-customer's network at a hostname every golden-image unit shares. Now
-everything that needs the page happens first, and the join is the one action
-whose response the phone may never see — so the join handler finishes setup
-on the unit itself (PIN checked before the radio is touched, other saved Wi-Fi
-forgotten, setup marked complete, firmware restarted). A failed join keeps its
-reason on the unit, so the page that reopens when the hotspot comes back says
-why. A unit whose bench card already carries its identity and cloud key skips
-the identity and cloud steps (``CARDED_STEPS``).
+Site flow v2 (2026-10-03, onboarding v2 2026-10-19): **the network step is
+last before cloud registration, and joining the site's Wi-Fi is what
+finishes setup on a Wi-Fi site.** The wizard is usually served over the
+unit's own setup hotspot, which goes down the moment a join succeeds; the
+join handler finishes setup on the unit itself (PIN checked before the radio
+is touched, other saved Wi-Fi forgotten, setup marked complete, firmware
+restarted) and kicks self-registration. A failed join keeps its reason on
+the unit. A unit whose bench card already carries its identity and cloud
+key skips the identity step (``CARDED_STEPS``). The HTTP key paste lives
+only as a bench/dev override, clearly marked, not on the installer path.
 """
 
+import json
 import re
 
 from flask import (
@@ -40,7 +40,9 @@ from flask import (
 )
 from flask.typing import ResponseReturnValue
 
+from cloud.register import kick_register, registration_view
 from diagnostics.boot_status import read_published_status
+from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.cmd_client import send_command
 from service_window.config_editor import read_config, update_config, update_config_section
@@ -53,6 +55,7 @@ from service_window.health import (
     system_cards,
     worst_status,
 )
+from utils.device_keys import identity_qr_payload
 from utils.identity import ap_name
 from utils.wifi_setup import (
     HIDDEN_NOTE,
@@ -84,9 +87,10 @@ _APP_EUI_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 _ZERO_APP_KEY = "00000000000000000000000000000000"
 _FACTORY_PIN = "1234"
 
-# Network last: see the module docstring. ``STEPS`` stays exported for
-# callers that render the full track; ``steps_for`` is what routes use.
-STEPS = ["welcome", "pin", "identity", "cloud", "sensors", "network", "done"]
+# Network, then cloud registration: see the module docstring. ``STEPS`` stays
+# exported for callers that render the full track; ``steps_for`` is what
+# routes use. Join still finishes setup because the hotspot drops.
+STEPS = ["welcome", "pin", "identity", "sensors", "network", "cloud", "done"]
 CARDED_STEPS = ["welcome", "pin", "sensors", "network", "done"]
 
 
@@ -132,6 +136,17 @@ def _identity() -> dict[str, str]:
     from service_window.routes.provision import _get_identity
 
     return _get_identity()
+
+
+def _kick_register() -> None:
+    """One self-register attempt after a link exists. Never raises."""
+    config = read_config(current_app.config["CONFIG_PATH"])
+    kick_register(
+        api_base=str(config.get("cloud_api_base") or ""),
+        device_id=_identity()["device_id"],
+        fw=read_firmware_version(),
+        config_path=current_app.config["CONFIG_PATH"],
+    )
 
 
 def _ap_ssid() -> str:
@@ -210,7 +225,9 @@ def identity() -> ResponseReturnValue:
         steps=STEPS,
         step="identity",
         identity=_identity(),
-        next_url=url_for("setup.cloud"),
+        qr_json=json.dumps(identity_qr_payload(), separators=(",", ":")),
+        registration=registration_view(),
+        next_url=url_for("setup.sensors"),
     )
 
 
@@ -359,6 +376,7 @@ def network() -> ResponseReturnValue:
             lora_enabled=bool(config.get("lora_enabled", True)),
             gps_enabled=bool(config.get("gps_enabled", True)),
             identity=_identity(),
+            registration=registration_view(),
             probe_rows=rows,
             password=extra.get("password", ""),
             trim_warning=extra.get("trim_warning"),
@@ -422,6 +440,7 @@ def network() -> ResponseReturnValue:
             joined_ip = str(result.get("ip") or "")
             if result.get("connected") and usable_ipv4(joined_ip):
                 current_app.config.pop("LAST_JOIN", None)
+                _kick_register()
                 finished = _finish_setup(ssid)
                 rssi = result.get("rssi")
                 return render_template(
@@ -431,6 +450,7 @@ def network() -> ResponseReturnValue:
                     ssid=ssid,
                     ip=joined_ip,
                     identity=_identity(),
+                    registration=registration_view(),
                     forgotten=finished["forgotten"],
                     weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
                     weak_message=WEAK_SIGNAL_MESSAGE,
@@ -456,6 +476,7 @@ def network() -> ResponseReturnValue:
                 flash(probe_error, "error")
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
+            _kick_register()
             finished = _finish_setup(current)
             rssi = current_status.get("rssi_dbm")
             return render_template(
@@ -465,6 +486,7 @@ def network() -> ResponseReturnValue:
                 ssid=current,
                 ip=current_ip,
                 identity=_identity(),
+                registration=registration_view(),
                 forgotten=finished["forgotten"],
                 weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
                 weak_message=WEAK_SIGNAL_MESSAGE,
@@ -479,10 +501,10 @@ def network() -> ResponseReturnValue:
             if backhaul == "none":
                 flash(
                     "Recorded: no network at this site. The unit buffers readings locally "
-                    "and uploads when a link exists.",
+                    "and registers / uploads when a link exists.",
                     "info",
                 )
-            return redirect(url_for("setup.done"))
+            return redirect(url_for("setup.cloud"))
         # "rescan" and anything else: fall through to a fresh render.
         return redirect(url_for("setup.network"))
 
@@ -492,21 +514,21 @@ def network() -> ResponseReturnValue:
 @setup_bp.route("/cloud", methods=["GET", "POST"])
 @login_required
 def cloud() -> ResponseReturnValue:
+    """Cloud registration status after the network step.
+
+    The installer path has no key-paste field. Saving an API key here is a
+    bench/dev override only.
+    """
     config = read_config(current_app.config["CONFIG_PATH"])
     if request.method == "GET" and is_carded(config):
-        # The bench card wrote the key and the bench verified it.
-        return redirect(url_for("setup.sensors"))
+        return redirect(url_for("setup.done"))
+    if request.method == "GET":
+        _kick_register()
+        config = read_config(current_app.config["CONFIG_PATH"])
     if request.method == "POST":
-        if request.form.get("skip"):
-            flash(
-                "Cloud connection skipped — you can add the key later under Provisioning.", "info"
-            )
-            return redirect(url_for("setup.sensors"))
+        if request.form.get("continue") or request.form.get("skip"):
+            return redirect(url_for("setup.done"))
         key = request.form.get("api_key", "").strip()
-        # LoRaWAN OTAA credentials come from the same claim as the HTTP key.
-        # Optional: a WiFi-only site never needs them, but a unit that finishes
-        # setup without them can never join — the wizard used to omit them
-        # entirely, so every wizard-commissioned unit had the all-zero sentinel.
         app_key = request.form.get("app_key", "").strip()
         app_eui = request.form.get("app_eui", "").strip()
         lora_updates: dict[str, str] = {}
@@ -522,45 +544,55 @@ def cloud() -> ResponseReturnValue:
             else:
                 lora_error = "The JoinEUI must be exactly 16 hex characters."
 
-        if not _CLOUD_KEY_RE.match(key):
-            flash("That doesn't look like a device API key (16–128 letters/numbers).", "error")
+        if key:
+            if not _CLOUD_KEY_RE.match(key):
+                flash("That doesn't look like a device API key (16–128 letters/numbers).", "error")
+            elif lora_error:
+                flash(lora_error, "error")
+            else:
+                update_config(
+                    current_app.config["CONFIG_PATH"],
+                    {"cloud_enabled": True, "api_key": key, **lora_updates},
+                )
+                from utils.netinfo import verify_device_key
+
+                check = verify_device_key(
+                    config.get(
+                        "cloud_api_base",
+                        "https://us-central1-waterquality-trading.cloudfunctions.net/app",
+                    ),
+                    _identity()["device_id"],
+                    key,
+                )
+                if check["state"] == "ok":
+                    flash(
+                        "Bench override saved and verified — the cloud accepted this unit.",
+                        "success",
+                    )
+                elif check["state"] == "degraded":
+                    flash(f"Key saved, but {check['detail']} Check it before you leave.", "error")
+                else:
+                    flash(
+                        "Key saved, but the cloud could not be reached to verify it. "
+                        "Re-check on the Finish step.",
+                        "info",
+                    )
+                return redirect(url_for("setup.done"))
+        elif lora_updates and not lora_error:
+            update_config(current_app.config["CONFIG_PATH"], lora_updates)
+            flash("LoRa credentials saved.", "success")
+            return redirect(url_for("setup.done"))
         elif lora_error:
             flash(lora_error, "error")
         else:
-            update_config(
-                current_app.config["CONFIG_PATH"],
-                {"cloud_enabled": True, "api_key": key, **lora_updates},
-            )
-            # Verify the key against the cloud NOW rather than reporting
-            # "saved" and letting a mistyped key surface as a device that
-            # simply never appears online. The probe is read-only.
-            from utils.netinfo import verify_device_key
-
-            check = verify_device_key(
-                config.get(
-                    "cloud_api_base",
-                    "https://us-central1-waterquality-trading.cloudfunctions.net/app",
-                ),
-                _identity()["device_id"],
-                key,
-            )
-            if check["state"] == "ok":
-                flash("Cloud key saved and verified — the cloud accepted this unit.", "success")
-            elif check["state"] == "degraded":
-                flash(f"Key saved, but {check['detail']} Check it before you leave.", "error")
-            else:
-                flash(
-                    "Key saved, but the cloud could not be reached to verify it. "
-                    "Re-check on the Finish step.",
-                    "info",
-                )
-            return redirect(url_for("setup.sensors"))
+            return redirect(url_for("setup.done"))
     return render_template(
         "setup/cloud.html",
-        steps=STEPS,
+        steps=_steps(),
         step="cloud",
         key_set=bool(config.get("api_key")),
         identity=_identity(),
+        registration=registration_view(),
     )
 
 
@@ -721,4 +753,5 @@ def done() -> ResponseReturnValue:
         reading_count=count,
         backhaul=str(config.get("backhaul") or "wifi"),
         probe_rows=rows,
+        registration=registration_view(),
     )

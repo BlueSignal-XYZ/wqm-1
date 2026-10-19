@@ -130,7 +130,7 @@ class TestCloudStep:
         client, app = factory_client
         resp = client.post("/setup/cloud", data={"skip": "1"}, follow_redirects=False)
         assert resp.status_code == 302
-        assert "/setup/sensors" in resp.headers["Location"]
+        assert "/setup/done" in resp.headers["Location"]
 
 
 class TestNetworkStep:
@@ -142,9 +142,10 @@ class TestNetworkStep:
         from service_window.routes.setup import CARDED_STEPS, STEPS
 
         for steps in (STEPS, CARDED_STEPS):
-            assert steps[-2:] == ["network", "done"]
+            assert steps[-1] == "done"
             assert steps.index("sensors") < steps.index("network")
-        assert STEPS.index("cloud") < STEPS.index("network")
+            assert steps[-2] in ("network", "cloud")
+        assert STEPS.index("network") < STEPS.index("cloud")
 
     def test_page_reports_the_link(self, factory_client, monkeypatch):
         import utils.netinfo as netinfo
@@ -324,8 +325,8 @@ class TestNetworkStepDeclaresTheVariant:
             follow_redirects=False,
         )
         assert resp.status_code == 302
-        # Network is last now: a no-network site goes to the go/no-go page.
-        assert resp.headers["Location"].endswith("/setup/done")
+        # Cloud registration follows the network step (LTE / no-network sites).
+        assert resp.headers["Location"].endswith("/setup/cloud")
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["backhaul"] == "none"
         assert saved["gps_enabled"] is True
@@ -429,7 +430,7 @@ class TestNetworkStepDeclaresTheVariant:
 
 class TestWizardWalkedInOrder:
     """Commissioning plan test #1, re-cut for site flow v2: a factory-fresh,
-    uncarded unit walks welcome→pin→identity→cloud→sensors→network IN ORDER,
+    uncarded unit walks welcome→pin→identity→sensors→network IN ORDER,
     and the network join is what finishes it — every config key written,
     setup_completed true, the bench network forgotten."""
 
@@ -483,12 +484,6 @@ class TestWizardWalkedInOrder:
         assert r.headers["Location"].endswith("/setup/identity")
         assert client.get("/setup/identity").status_code == 200
 
-        r = client.post(
-            "/setup/cloud",
-            data={"api_key": "k" * 40, "app_key": "B" * 32, "app_eui": "70B3D57ED0000001"},
-        )
-        assert r.headers["Location"].endswith("/setup/sensors")
-
         r = client.post("/setup/sensors", data={"ph_enabled": "on", "temperature_enabled": "on"})
         assert r.status_code == 302
 
@@ -513,9 +508,6 @@ class TestWizardWalkedInOrder:
         assert saved["backhaul"] == "wifi"
         assert saved["gps_enabled"] is True
         assert saved["lora_enabled"] is False
-        assert saved["api_key"] == "k" * 40
-        assert saved["cloud_enabled"] is True
-        assert saved["app_key"].lower() == "b" * 32
         assert saved["ph_enabled"] is True and saved["temperature_enabled"] is True
         # Unticked probes are written false, not left absent.
         assert saved["tds_enabled"] is False and saved["turbidity_enabled"] is False

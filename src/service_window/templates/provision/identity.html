@@ -26,7 +26,12 @@
 
     <h2>QR Code</h2>
     <img src="{{ url_for('provision.qr_svg') }}" alt="Device QR Code" class="qr-code">
+    <p>Identity QR (v2): device id and public key. Compatible with the existing label printer.</p>
+    <pre class="id-json"><code>{{ qr_json | safe }}</code></pre>
     <p><a href="{{ url_for('provision.qr_svg') }}" download="wqm1-qr.svg">Download SVG</a></p>
+    {% if registration %}
+    <p>Registration: <b>{{ registration.status }}</b> — {{ registration.message }}</p>
+    {% endif %}
 </div>
 
 <a href="{{ url_for('provision.index') }}">&larr; Back to Provisioning</a>

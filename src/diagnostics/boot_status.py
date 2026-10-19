@@ -30,6 +30,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from utils.device_keys import registration_status
+
 logger = logging.getLogger("wqm1.boot_status")
 
 _KEYS = (
@@ -47,6 +49,7 @@ _KEYS = (
     "station",
     "station_rssi",
     "portal",
+    "registration",
     "adc",
     "onewire",
     "gps",
@@ -392,6 +395,9 @@ def commission_verdict(fields: dict[str, str]) -> str:
     # back in. It is not a board failure. A station line that says fail
     # while we claim to be on that station is.
     station = (fields.get("station") or "").strip()
+    registration = (fields.get("registration") or "").strip()
+    if registration == "conflict":
+        reasons.append("identity conflict")
     if hotspot == "station" and station.startswith("fail"):
         detail = station.split(":", 1)[1].strip() if ":" in station else station
         reasons.append(detail or "station failed")
@@ -446,6 +452,18 @@ def _read_ssid() -> str:
     except Exception as e:  # noqa: BLE001 — status must still be writable
         logger.debug("ssid unavailable: %s", e)
         return ""
+
+
+def _registration_line() -> str:
+    """pending / registered / conflict / error. Never a secret."""
+    try:
+        status = registration_status()
+    except Exception as e:  # noqa: BLE001 — status must still be writable
+        logger.debug("registration status unavailable: %s", e)
+        return "unknown"
+    if status in ("pending", "registered", "conflict", "error"):
+        return status
+    return "unknown"
 
 
 def _firmware_version() -> str:
@@ -565,6 +583,7 @@ def write_boot_status(
     faulted: list[str] | None = None,
     fatal: str | None = None,
     portal: str | None = None,
+    registration: str | None = None,
 ) -> str:
     """Refresh the status file and return the text that was written.
 
@@ -610,6 +629,9 @@ def write_boot_status(
         portal_text = prev["portal"]
     else:
         portal_text = _portal_line(hotspot_text)
+    # Always re-read unless the caller overrode it: this lives on the
+    # persistent data path and must not stay "pending" after register.
+    registration_text = registration if registration is not None else _registration_line()
     fields = {
         "firmware": _firmware_version(),
         "board": board or prev.get("board") or read_board_model(),
@@ -624,6 +646,7 @@ def write_boot_status(
         "station": station_text,
         "station_rssi": rssi_text,
         "portal": portal_text,
+        "registration": registration_text,
         "adc": adc if adc is not None else prev.get("adc", "unknown"),
         "onewire": _kept(onewire, prev.get("onewire", ""), read_onewire_state()),
         "gps": _kept(gps, prev.get("gps", ""), read_gps_state()),

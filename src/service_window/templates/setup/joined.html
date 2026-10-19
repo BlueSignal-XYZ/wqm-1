@@ -3,7 +3,12 @@
 {% block content %}
 <h1 class="setup-h1">Joined {{ ssid }}. Setup is finished.</h1>
 <p class="lead">{{ identity.device_id }} is restarting on the owner&rsquo;s network{% if ip %}
-at {{ ip }}{% endif %}. It checks in to BlueSignal Cloud within a minute or two.</p>
+at {{ ip }}{% endif %}. It registers itself with BlueSignal Cloud — no key paste.</p>
+{% if registration %}
+<div class="flash {{ 'success' if registration.status == 'registered' else ('error' if registration.status in ('conflict', 'error') else 'info') }}">
+    Registration: <b>{{ registration.status }}</b> — {{ registration.message }}
+</div>
+{% endif %}
 {% if weak %}
 <div class="flash error" role="alert">{{ weak_message }}{% if rssi is not none %} ({{ rssi }} dBm){% endif %}</div>
 {% endif %}

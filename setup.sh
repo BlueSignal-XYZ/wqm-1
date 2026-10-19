@@ -55,6 +55,9 @@ if [ "${1:-}" = "--golden" ]; then
     echo "[golden] Removing unit 1's state from the image..."
     sudo rm -f /var/lib/bluesignal/wqm1.db /var/lib/bluesignal/wqm1.db-wal /var/lib/bluesignal/wqm1.db-shm
     sudo rm -f /var/lib/bluesignal/water-profile.json /var/lib/bluesignal/ota-check-now /var/lib/bluesignal/reboot-request
+    sudo rm -f /var/lib/bluesignal/device-ed25519.key /var/lib/bluesignal/device-ed25519.key.tmp \
+               /var/lib/bluesignal/device-http.key /var/lib/bluesignal/device-http.key.tmp \
+               /var/lib/bluesignal/device-register.json /var/lib/bluesignal/device-register.json.tmp
     sudo rm -f /etc/bluesignal/.provisioned
     sudo journalctl --rotate 2>/dev/null || true
     sudo journalctl --vacuum-time=1s 2>/dev/null || true

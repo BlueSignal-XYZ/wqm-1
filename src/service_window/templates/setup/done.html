@@ -38,7 +38,12 @@ keeps monitoring either way.</p>
     <div class="setup-actions">
         <button type="submit" class="btn btn-primary btn-lg">Finish setup</button>
     </div>
-    <p class="skip-note">Finishing restarts the monitoring service so everything you
-    entered (cloud key, PIN) takes effect immediately.</p>
+    {% if registration %}
+    <div class="flash {{ 'success' if registration.status == 'registered' else ('error' if registration.status in ('conflict', 'error') else 'info') }}">
+        Registration: <b>{{ registration.status }}</b> — {{ registration.message }}
+    </div>
+    {% endif %}
+    <p class="skip-note">Finishing restarts the monitoring service so the PIN and
+    the unit&rsquo;s self-registration take effect immediately.</p>
 </form>
 {% endblock %}

@@ -34,14 +34,14 @@ class TestCloudSkipIsNeverSilent:
 
     def test_enabled_without_a_key_logs_an_error(self, main_src):
         block = main_src[main_src.index("Cloud (HTTP/WiFi) transport") :][:2500]
-        assert "cloud_enabled and not self._settings.api_key" in block
-        assert "logger.error" in block
+        assert "cloud_enabled and not api_key" in block
+        assert "logger.info" in block
         # The message has to name the fix, not just the fault.
-        assert re.search(r"paste the key|Claim it", block, re.I)
+        assert re.search(r"register itself|identity QR", block, re.I)
 
     def test_key_without_enabled_warns_that_nothing_uploads(self, main_src):
         block = main_src[main_src.index("Cloud (HTTP/WiFi) transport") :][:2500]
-        assert "not self._settings.cloud_enabled and self._settings.api_key" in block
+        assert "not self._settings.cloud_enabled and api_key" in block
         assert "logger.warning" in block
         assert re.search(r"never uploaded|stored locally", block, re.I)
 

@@ -75,7 +75,16 @@ class TestGoldenMode:
 
     def test_removes_the_readings_database_and_wal(self):
         block = self._block()
-        for f in ("wqm1.db", "wqm1.db-wal", "wqm1.db-shm", "water-profile.json", ".provisioned"):
+        for f in (
+            "wqm1.db",
+            "wqm1.db-wal",
+            "wqm1.db-shm",
+            "water-profile.json",
+            ".provisioned",
+            "device-ed25519.key",
+            "device-http.key",
+            "device-register.json",
+        ):
             assert f in block, f
 
     def test_refuses_a_card_carrying_bench_files_before_deleting_anything(self):

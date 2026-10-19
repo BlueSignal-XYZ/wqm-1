@@ -35,6 +35,7 @@ from app.supervisor import LIVENESS_FILE, Supervisor
 from app.workers import (
     CloudSyncWorker,
     CommandWorker,
+    DeviceRegisterWorker,
     GpsWorker,
     HeartbeatWorker,
     RadioWorker,
@@ -42,6 +43,7 @@ from app.workers import (
     Worker,
 )
 from calibration.calibrate import CalibrationManager
+from cloud import CloudClient
 from control.irrigation_hold import IrrigationHold
 from control.led import StatusLEDs
 from control.relay import RelayController
@@ -70,6 +72,7 @@ from utils.config import (
     hot_keys,
     restart_keys,
 )
+from utils.device_keys import ensure_keypair, load_http_key
 from utils.health import HealthReporter
 from utils.identity import APP_EUI, get_dev_eui, get_device_id
 from utils.sdnotify import SdNotifier
@@ -179,9 +182,13 @@ class WQM1App:
         # not, and 'unsynced' stamped on every reading otherwise.
         self._clock = ClockDiscipline()
 
-        # Device identity
+        # Device identity (Ed25519 seed lives on the persistent data path)
         self._device_id = get_device_id()
         self._dev_eui = get_dev_eui()
+        try:
+            ensure_keypair()
+        except Exception as e:  # noqa: BLE001 — sampling must still start
+            logger.error("Could not ensure device identity key: %s", e)
 
         # Components (lazy-initialised in start(); typed Any to avoid
         # union-attr noise — init order is guaranteed by start())
@@ -503,14 +510,16 @@ class WQM1App:
         # sat offline while its dashboard said "no sensor data". The operator
         # has no way to tell "not configured" from "configured and broken"
         # without a message, and this is the cheapest message in the system.
-        if self._settings.cloud_enabled and not self._settings.api_key:
-            logger.error(
-                "Cloud reporting is ENABLED but no API key is set — the device "
-                "cannot report. Claim it in the cloud dashboard and paste the "
-                "key into the Service Window (Provisioning, or the setup "
-                "wizard's Cloud step), then restart this service."
+        api_key = self._settings.api_key or load_http_key()
+        if api_key and not self._settings.api_key:
+            logger.info("Loaded HTTP device key from persistent identity storage")
+        if self._settings.cloud_enabled and not api_key:
+            logger.info(
+                "Cloud reporting is enabled but no HTTP device key is set yet — "
+                "this unit will register itself once it has a link. Claim it in "
+                "the cloud dashboard by scanning the identity QR; do not paste a key."
             )
-        elif not self._settings.cloud_enabled and self._settings.api_key:
+        elif not self._settings.cloud_enabled and api_key:
             logger.warning(
                 "An API key is set but cloud_enabled is false — readings are "
                 "being stored locally and never uploaded. Enable cloud mode in "
@@ -519,29 +528,25 @@ class WQM1App:
         elif not self._settings.cloud_enabled:
             logger.info(
                 "Cloud reporting disabled (cloud_enabled=false, no API key). "
-                "Readings are stored locally only."
+                "The unit will still self-register when it has a link."
             )
 
-        if self._settings.cloud_enabled and self._settings.api_key:
-            from cloud import CloudClient
-
-            self._cloud = CloudClient(
-                device_id=self._device_id,
-                ingest_url=self._settings.cloud_ingest_url,
-                command_url=self._settings.cloud_command_url,
-                api_base=self._settings.cloud_api_base,
-                api_key=self._settings.api_key,
-                fw_version=FW_VERSION,
-                batch_size=self._settings.batch_size,
-                max_retries=self._settings.max_retries,
-                retry_delays=self._settings.retry_delays,
-                radios_provider=self._radios_snapshot,
-                health_provider=self._health.get_report,
-                irrigation_hold_provider=self._irrigation_hold_payload,
-            )
+        self._cloud = CloudClient(
+            device_id=self._device_id,
+            ingest_url=self._settings.cloud_ingest_url,
+            command_url=self._settings.cloud_command_url,
+            api_base=self._settings.cloud_api_base,
+            api_key=api_key,
+            fw_version=FW_VERSION,
+            batch_size=self._settings.batch_size,
+            max_retries=self._settings.max_retries,
+            retry_delays=self._settings.retry_delays,
+            radios_provider=self._radios_snapshot,
+            health_provider=self._health.get_report,
+            irrigation_hold_provider=self._irrigation_hold_payload,
+        )
+        if api_key and self._settings.cloud_enabled:
             logger.info("Cloud HTTP transport enabled (ingest=%s)", self._settings.cloud_ingest_url)
-        else:
-            self._cloud = None
 
         # --- Irrigation hold ---
         # Its own engine, not a Rule: rules cannot arrive from the cloud, and
@@ -871,6 +876,16 @@ class WQM1App:
             "fatal": None,
         }
 
+    def _on_registered_key(self, api_key: str) -> None:
+        """Hot-attach the HTTP key issued by POST /v2/devices/register."""
+        if self._cloud is not None:
+            self._cloud.set_api_key(api_key)
+        try:
+            self._config.reload()
+        except Exception as e:  # noqa: BLE001 — the 0600 key file is enough to upload
+            logger.warning("Config reload after register failed: %s", e)
+        self.publish_boot_status()
+
     def _build_workers(self) -> list[Worker]:
         sampler_cls: Any = SamplingWorker
         sampler_args: tuple[Any, ...] = ()
@@ -936,6 +951,13 @@ class WQM1App:
                     fport_app=FPORT_APP,
                 )
             )
+        workers.append(
+            DeviceRegisterWorker(
+                self._settings_provider,
+                config_path=str(self._config._base_path),
+                on_api_key=self._on_registered_key,
+            )
+        )
         if self._cloud is not None:
             workers.append(CloudSyncWorker(self._settings_provider, self._cloud, self._db))
             workers.append(
