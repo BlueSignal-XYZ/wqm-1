@@ -233,8 +233,10 @@ chroot "$R" dpkg -s dnsmasq >/dev/null
 [ -f "$R/etc/systemd/system/wqm1-setup-dnsmasq.service" ]
 # setup.sh used to install the unit into /etc and not into the release
 # tree. netctl looks beside the release first; without this file the
-# setup AP never starts.
-[ -f "$R/opt/bluesignal/current/systemd/wqm1-setup-hostapd.service" ]
+# setup AP never starts. /opt/bluesignal/current is an absolute symlink
+# to /opt/bluesignal/releases/<ver>, so a host-side [ -f "$R/..." ]
+# follows it off the image. Test inside the chroot.
+chroot "$R" test -f /opt/bluesignal/current/systemd/wqm1-setup-hostapd.service
 
 install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-firstboot" "$R/usr/local/sbin/"
 install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-firstboot.service" "$R/etc/systemd/system/"

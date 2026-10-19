@@ -27,8 +27,16 @@ def test_tree_is_present():
 
 
 def test_build_requires_the_setup_ap_unit_in_the_release_tree():
+    """The unit lives under /opt/bluesignal/current, an absolute symlink.
+
+    A host-side ``[ -f "$R/opt/bluesignal/current/..." ]`` follows that
+    link off the image. The check has to run inside the chroot.
+    """
     script = (GOLDEN / "build-golden.sh").read_text()
-    assert "/opt/bluesignal/current/systemd/wqm1-setup-hostapd.service" in script
+    unit = "/opt/bluesignal/current/systemd/wqm1-setup-hostapd.service"
+    assert unit in script
+    assert f"$R{unit}" not in script
+    assert f'chroot "$R" test -f {unit}' in script
 
 
 def test_build_does_not_hardcode_a_board_name():
