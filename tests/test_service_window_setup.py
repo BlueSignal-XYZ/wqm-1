@@ -280,6 +280,38 @@ class TestLoRaCredentials:
         assert b"16 hex characters" in resp.data
 
 
+class TestCardStatus:
+    def test_card_status_is_a_json_flag_the_page_can_read_later(
+        self, factory_client, tmp_path, monkeypatch
+    ):
+        from utils.cardmove import CardBinding, save
+
+        path = tmp_path / "card-binding"
+        save(
+            CardBinding(
+                commissioned_serial="00000000aabbccdd",
+                moved_from="00000000aabbccdd",
+                moved_to="1000000086544fd8",
+                wifi_reconfirm=True,
+            ),
+            path,
+        )
+        monkeypatch.setenv("WQM1_CARD_STATE", str(path))
+        client, _app = factory_client
+        resp = client.get("/setup/card-status")
+        assert resp.status_code == 200
+        assert resp.content_type.startswith("application/json")
+        body = resp.get_json()
+        assert body == {
+            "card_moved": True,
+            "wifi_reconfirm": True,
+            "from": "00000000aabbccdd",
+            "to": "1000000086544fd8",
+            "commissioned_serial": "00000000aabbccdd",
+        }
+        assert b"<html" not in resp.data.lower()
+
+
 class TestDoneStep:
     def test_finish_marks_setup_completed(self, factory_client):
         client, app = factory_client
@@ -467,6 +499,7 @@ class TestWizardWalkedInOrder:
             return {"ok": True, "forgotten": ["BlueSignal-Shop"], "failed": [], "kept": keep}
 
         monkeypatch.setattr(netctl, "forget_saved_wifi", fake_forget)
+        monkeypatch.setattr("service_window.routes.setup.forget_saved_wifi", fake_forget)
         client, app = factory_client
         cfg = lambda: yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())  # noqa: E731
 

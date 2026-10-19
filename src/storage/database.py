@@ -33,6 +33,7 @@ SCHEMA_VERSION = 7
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
+PRAGMA synchronous=FULL;
 PRAGMA busy_timeout=5000;
 
 CREATE TABLE IF NOT EXISTS readings (
@@ -140,6 +141,7 @@ class WQM1Database:
             conn = sqlite3.connect(self._path)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
             conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
             with self._conns_lock:

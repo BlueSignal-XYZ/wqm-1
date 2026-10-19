@@ -612,16 +612,17 @@ class TestSiteScenarios:
             },
         )
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "cedar-river-42"))
-        monkeypatch.setattr(
-            netctl,
-            "forget_saved_wifi",
-            lambda keep, iface="wlan0": {
+
+        def _forget(keep, iface="wlan0"):
+            return {
                 "ok": False,
                 "forgotten": [],
                 "failed": ["BlueSignal-Shop"],
                 "kept": keep,
-            },
-        )
+            }
+
+        monkeypatch.setattr(netctl, "forget_saved_wifi", _forget)
+        monkeypatch.setattr("service_window.routes.setup.forget_saved_wifi", _forget)
         c, app = self._client(tmp_path, mock_hardware)
         r = c.post(
             "/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "x" * 9}

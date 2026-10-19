@@ -1,0 +1,16 @@
+[Unit]
+Description=Persistent journal on the root filesystem
+DefaultDependencies=no
+After=var-log.mount wqm1-journal-dirs.service
+Before=systemd-journald.service
+Requires=var-log.mount wqm1-journal-dirs.service
+ConditionPathIsDirectory=/var/lib/wqm1/journal
+
+[Mount]
+What=/var/lib/wqm1/journal
+Where=/var/log/journal
+Type=none
+Options=bind
+
+[Install]
+WantedBy=local-fs.target

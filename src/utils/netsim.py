@@ -23,11 +23,13 @@ Every function returns the same shapes ``netctl`` returns and never raises.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
 from typing import Any
 
+from utils.atomic import atomic_write_text
 from utils.wifi_setup import CAPTIVE_JOIN_MESSAGE
 
 ENV_VAR = "WQM1_VIRTUAL_NET"
@@ -85,13 +87,17 @@ def _write(state: dict[str, Any]) -> None:
     path = state_path()
     if path is None:
         return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, indent=2))
-        tmp.replace(path)
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        atomic_write_text(path, json.dumps(state, indent=2))
+
+
+def release_station() -> None:
+    """Drop the station link and leave saved profiles in place."""
+    st = read_state()
+    if not st.get("station"):
+        return
+    st["station"] = None
+    _write(st)
 
 
 def station_connected() -> bool:

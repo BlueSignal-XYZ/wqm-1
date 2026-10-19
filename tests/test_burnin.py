@@ -94,7 +94,7 @@ def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
                 "fatal": "none",
             }
         )
-        == "FAIL: now undervoltage throttled=0x1; adc faulted"
+        == "FAIL: weak power supply or cable; adc faulted"
     )
     # The hotspot is up, so a failed site join is not a board failure.
     assert (
@@ -124,6 +124,7 @@ def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
         == "FAIL: no address"
     )
     # A GPS with no fix and a missing 1-Wire probe are not commissioning failures.
+    # Undervoltage since this boot is: a weak supply already happened.
     assert (
         commission_verdict(
             {
@@ -136,7 +137,7 @@ def test_verdict_is_ready_only_when_the_installer_can_reach_a_healthy_unit():
                 "fatal": "none",
             }
         )
-        == "READY"
+        == "FAIL: weak power supply or cable"
     )
 
 
