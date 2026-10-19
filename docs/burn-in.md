@@ -46,6 +46,25 @@ The same boot also writes `wqm1-status.txt`. Its first line is
 hotspot error when the AP did not come up. Neither file contains the
 hotspot passphrase.
 
+## Hotspot label
+
+Print the setup-hotspot label on the bench computer, from the Pi serial,
+before the unit ships. The installer scans it to join `WQM1-xxxx`.
+
+```bash
+python3 scripts/make-unit-label.py <pi-serial> --out-dir ./labels
+```
+
+The serial is the `Serial` line in `/proc/cpuinfo` (16 hex digits). The
+script writes `<SSID>-hotspot-label.svg` and `<SSID>-hotspot-label.pdf`:
+the SSID, the derived passphrase, and a Wi-Fi QR code
+(`WIFI:T:WPA;S:<ssid>;P:<pass>;;`).
+
+It prints the two file paths and nothing else. It does not write the
+passphrase into `wqm1-status.txt` or any firmware log. Do not run it on a
+field unit as part of boot. Details for the installer are in
+[`installer-mistakes.md`](installer-mistakes.md).
+
 ## Where it is installed
 
 `setup.sh` enables `bluesignal-burnin.service`. The unit stays installed

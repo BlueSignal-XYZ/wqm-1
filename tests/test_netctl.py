@@ -75,6 +75,8 @@ class FakeNm:
             return 0, f"country {self.regdom}: DFS-FCC", ""
         if argv[:4] == ["iw", "dev", "wlan0", "scan"]:
             return 0, self.iw_scan, ""
+        if argv[:4] == ["iw", "dev", "wlan0", "link"]:
+            return 0, getattr(self, "iw_link", "") or "", ""
         a = argv[1:] if argv and argv[0] == "nmcli" else argv
         if a[:4] == ["device", "set", "wlan0", "managed"]:
             self.managed = a[4]
@@ -122,7 +124,7 @@ class FakeNm:
             return 0, ("wqm1-setup-ap:wlan0" if self.ap else ""), ""
         if a[:3] == ["device", "wifi", "rescan"]:
             return 0, "", ""
-        if a[:4] == ["-t", "-f", "SSID,SIGNAL,SECURITY", "device"]:
+        if a[:2] == ["-t", "-f"] and str(a[2]).startswith("SSID,SIGNAL,SECURITY") and "device" in a:
             return 0, "PondHouse:72:WPA2\nPondHouse:40:WPA2\nBarn:55:--\n:10:WPA2", ""
         if a[:2] == ["device", "disconnect"]:
             self.station = False
@@ -464,9 +466,11 @@ class TestJoin:
         from utils.netctl import scan_networks
 
         nets = scan_networks()
-        assert [n["ssid"] for n in nets] == ["PondHouse", "Barn"]
+        visible = [n["ssid"] for n in nets if n["ssid"]]
+        assert visible == ["PondHouse", "Barn"]
         assert nets[0]["signal"] == 72 and nets[0]["secured"] is True
         assert nets[1]["secured"] is False
+        assert any(n.get("hidden") for n in nets)
 
     def test_good_join_tears_down_the_ap_and_stays_joined(self, nm):
         from utils.netctl import join_network

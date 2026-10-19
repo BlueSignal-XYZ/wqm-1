@@ -15,6 +15,8 @@ keeps monitoring either way.</p>
     {% endfor %}
 </div>
 
+{% include "setup/_probes_status.html" %}
+
 <div class="id-block">
     <div class="id-label">Readings waiting to upload</div>
     <div class="id-row">
@@ -27,6 +29,12 @@ keeps monitoring either way.</p>
     {% endif %}
 </div>
 <form method="post">
+    {% for row in probe_rows if row.kind == 'missing' %}
+    <label class="inline-check">
+        <input type="checkbox" name="confirm_{{ row.id }}" value="yes">
+        {{ row.confirm }}
+    </label>
+    {% endfor %}
     <div class="setup-actions">
         <button type="submit" class="btn btn-primary btn-lg">Finish setup</button>
     </div>

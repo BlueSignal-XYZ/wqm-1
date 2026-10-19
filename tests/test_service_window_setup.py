@@ -360,11 +360,11 @@ class TestNetworkStepDeclaresTheVariant:
         client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post(
             "/setup/network",
-            data={"action": "join", "ssid": "PondHouse", "password": "wrong"},
+            data={"action": "join", "ssid": "PondHouse", "password": "wrongpass"},
             follow_redirects=True,
         )
         assert resp.status_code == 200
-        assert calls["args"] == ("PondHouse", "wrong", "WQM1-0001", "river-cedar-42")
+        assert calls["args"] == ("PondHouse", "wrongpass", "WQM1-0001", "river-cedar-42")
         # The reason is kept ON THE UNIT — the response that carried a flash
         # is usually lost with the hotspot — so a fresh GET still shows it.
         again = client.get("/setup/network")

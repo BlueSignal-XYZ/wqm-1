@@ -9,8 +9,9 @@ state changes. The first line is the commissioning verdict
 the firmware, the board and its revision code, the kernel, the Wi-Fi chip
 and firmware, undervoltage, the I2C buses the kernel enumerated, wlan0,
 the setup hotspot (SSID and the last AP error), the station join
-(``station: ok <ip>`` or ``station: fail: <reason>``), the port-80 captive
-portal, ADC, 1-Wire, GPS, uptime, and the last fatal error.
+(``station: ok <ip>`` or ``station: fail: <reason>``), the station signal
+(``station_rssi``), the port-80 captive portal, ADC, 1-Wire, GPS, uptime,
+and the last fatal error.
 
 No secrets. A line that looks like a key, a passphrase, or a private key
 is replaced before the file is written. The hotspot passphrase is never a
@@ -44,6 +45,7 @@ _KEYS = (
     "ssid",
     "hotspot",
     "station",
+    "station_rssi",
     "portal",
     "adc",
     "onewire",
@@ -549,6 +551,7 @@ def write_boot_status(
     wlan0: str | None = None,
     hotspot: str | None = None,
     station: str | None = None,
+    station_rssi: str | None = None,
     ssid: str | None = None,
     adc: str | None = None,
     adc_error: str | None = None,
@@ -593,6 +596,12 @@ def write_boot_status(
         station_text = prev["station"]
     else:
         station_text = ""
+    if station_rssi is not None:
+        rssi_text = station_rssi
+    elif prev.get("station_rssi"):
+        rssi_text = prev["station_rssi"]
+    else:
+        rssi_text = ""
     if portal is not None:
         portal_text = portal
     elif hotspot_text == "up" or str(hotspot_text).startswith("up "):
@@ -613,6 +622,7 @@ def write_boot_status(
         "ssid": ssid_text,
         "hotspot": hotspot_text,
         "station": station_text,
+        "station_rssi": rssi_text,
         "portal": portal_text,
         "adc": adc if adc is not None else prev.get("adc", "unknown"),
         "onewire": _kept(onewire, prev.get("onewire", ""), read_onewire_state()),

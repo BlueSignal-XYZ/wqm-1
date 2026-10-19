@@ -11,6 +11,7 @@
 {% endif %}
 
 <form method="post" id="network-form">
+    {% include "setup/_probes.html" %}
     {% if station_ssid %}
     <p class="lead">This unit is on <b>{{ station_ssid }}</b>.</p>
     <div class="grid">
@@ -21,6 +22,7 @@
     <div class="id-block">
         <div class="id-label">Signal</div>
         <div class="id-row"><code class="id-value">{{ (wifi.rssi_dbm ~ ' dBm') if wifi.rssi_dbm is not none else '—' }}</code></div>
+        {% if station_weak %}<p class="weak-note">{{ weak_message }}</p>{% endif %}
     </div>
     <div class="id-block">
         <div class="id-label">Address on this network</div>
@@ -39,20 +41,53 @@
     {% else %}
     <h2>Or join a different network</h2>
     {% endif %}
+    {% if band_notice %}
+    <div class="flash error" role="alert">{{ band_notice }}</div>
+    {% endif %}
+    {% if hidden_note %}
+    <p class="setup-alert">{{ hidden_note }}</p>
+    {% endif %}
+    {% if networks or blocked %}
+    <ul class="net-list">
+        {% for n in networks %}
+        <li>
+            <span class="bars" aria-label="{{ n.bars }} of 4 bars">{% for i in range(4) %}<i class="{{ 'on' if i < n.bars else '' }}"></i>{% endfor %}</span>
+            <span class="net-name">{{ n.ssid }}{% if not n.secured %} (open){% endif %}</span>
+            {% if n.weak %}<span class="weak-note">{{ weak_message }}</span>{% endif %}
+            {% if n.security_note and n.security != 'wpa_psk' %}<span class="skip-note">{{ n.security_note }}</span>{% endif %}
+        </li>
+        {% endfor %}
+        {% for n in blocked %}
+        <li>
+            <span class="bars" aria-label="{{ n.bars }} of 4 bars">{% for i in range(4) %}<i class="{{ 'on' if i < n.bars else '' }}"></i>{% endfor %}</span>
+            <span class="net-name">{{ n.ssid }}</span>
+            <span class="skip-note">{{ n.security_note or band_notice }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
     <label for="ssid">Wi-Fi network</label>
     {% if networks %}
     <select id="ssid" name="ssid">
         {% for n in networks %}
-        <option value="{{ n.ssid }}" {{ 'selected' if last_join and last_join.ssid == n.ssid }}>{{ n.ssid }}{{ ' (open)' if not n.secured }} &middot; {{ n.signal }}%</option>
+        <option value="{{ n.ssid }}" {{ 'selected' if (selected_ssid or (last_join.ssid if last_join else '')) == n.ssid }}>{{ n.bar_text }} {{ n.ssid }}{{ ' (open)' if not n.secured }} &middot; {{ n.signal }}%</option>
         {% endfor %}
     </select>
     {% else %}
-    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" autocapitalize="off" autocorrect="off">
-    <p class="skip-note">No networks found. <button type="submit" class="link-button" form="rescan-form">Scan again</button></p>
+    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" autocapitalize="off" autocorrect="off" value="{{ selected_ssid or '' }}">
+    <p class="skip-note">No networks found. <button type="submit" class="link-button" form="rescan-form">Scan again</button>
+    {% if band_notice %} {{ band_notice }}{% endif %}</p>
+    {% endif %}
+    <label for="hidden-ssid">Hidden network name</label>
+    <input id="hidden-ssid" name="hidden_ssid" type="text" maxlength="32" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Only if the name is not in the list" value="{{ hidden_prefill or '' }}">
+    {% if trim_warning %}
+    <div class="flash error" role="alert">{{ trim_warning }}</div>
+    <input type="hidden" name="trim_ack" value="yes">
     {% endif %}
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Leave blank for an open network">
+    <input id="password" name="password" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Leave blank for an open network" value="{{ password or '' }}">
     <label class="inline-check"><input type="checkbox" id="show-password"> Show password</label>
+    <label class="inline-check"><input type="checkbox" name="keep_trailing_space" value="on"> The password ends with a space</label>
     {% if on_ap %}
     <p class="skip-note">This page goes away when you tap Join: the unit turns off its
     setup network and your phone drops back to its usual connection. If the password

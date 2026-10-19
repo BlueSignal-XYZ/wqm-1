@@ -272,7 +272,7 @@ class TestJoinFinishesSetup:
         c, app = self._client(tmp_path, mock_hardware, virtual_net)
         c.post(
             "/setup/network",
-            data={"action": "join", "ssid": netsim.DEMO_HOME_SSID, "password": "nope"},
+            data={"action": "join", "ssid": netsim.DEMO_HOME_SSID, "password": "not-the-one"},
         )
         state = json.loads(virtual_net.read_text())
         assert state["ap"] is True and state["station"] is None
@@ -515,7 +515,10 @@ class TestSiteScenarios:
 
         _seed_networks(virtual_net, [])
         c, app = self._client(tmp_path, mock_hardware)
-        c.post("/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "nope"})
+        c.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "Smith-Home", "password": "not-the-one"},
+        )
         assert "LAST_JOIN" in app.config
         c.post(
             "/setup/network",
@@ -529,7 +532,7 @@ class TestSiteScenarios:
     ):
         _seed_networks(virtual_net, [])
         c, app = self._client(tmp_path, mock_hardware)
-        for attempt in ("one", "two", "three"):
+        for attempt in ("one-wrong", "two-wrong", "three-wrong"):
             c.post(
                 "/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": attempt}
             )

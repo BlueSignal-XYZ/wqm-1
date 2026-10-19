@@ -175,6 +175,9 @@ def _no_real_network_mutation(monkeypatch, tmp_path):
     from utils import netctl
 
     monkeypatch.setattr(netctl, "_run", lambda argv, timeout=15.0: (127, "", "blocked in tests"))
+    # A successful join asks whether a sign-in page ate the internet. That
+    # probe is a real HTTP GET. The suite must not make it.
+    monkeypatch.setattr(netctl, "probe_sign_in_page", lambda *a, **k: "unknown")
     monkeypatch.delenv("WQM1_VIRTUAL_NET", raising=False)
     # hostapd.conf holds the setup passphrase. Tests must not write it under /run.
     monkeypatch.setenv("WQM1_HOSTAPD_CONF", str(tmp_path / "hostapd.conf"))

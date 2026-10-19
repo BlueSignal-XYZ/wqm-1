@@ -1,0 +1,7 @@
+{% include "setup/_probes_status.html" %}
+{% for row in probe_rows if row.kind == 'missing' %}
+<label class="inline-check">
+    <input type="checkbox" name="confirm_{{ row.id }}" value="yes">
+    {{ row.confirm }}
+</label>
+{% endfor %}
