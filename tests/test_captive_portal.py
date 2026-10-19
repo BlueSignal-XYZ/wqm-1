@@ -9,6 +9,7 @@ site network. These tests bind 127.0.0.1 only. Nothing here opens wlan0.
 from __future__ import annotations
 
 import http.client
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -19,15 +20,23 @@ from utils.captive_portal import (
     PORTAL_URL,
     PROBE_HOSTS,
     PROBE_PATHS,
+    READY_PATH,
+    STARTING_UP_TEXT,
+    UNAVAILABLE_HTML_BUDGET,
     arm_portal,
+    backend_ready,
     classify_request,
     disarm_portal,
     dnsmasq_shared_config,
     ensure_dnsmasq_conf,
     portal_should_bind,
+    portal_unit_id,
+    prefers_html,
     read_mode,
     rewrite_location,
     run_loop,
+    unavailable_html,
+    unavailable_plain,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +77,12 @@ class _Backend(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        self._answer(with_body=True)
+
+    def do_HEAD(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        self._answer(with_body=False)
+
+    def _answer(self, with_body: bool) -> None:
         type(self).hits.append(self.path)
         if self.path.startswith("/setup"):
             body = b"setup-page"
@@ -75,7 +90,8 @@ class _Backend(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if with_body:
+                self.wfile.write(body)
             return
         port = self.server.server_address[1]
         self.send_response(302)
@@ -104,13 +120,44 @@ def servers():
         thread.join(timeout=2)
 
 
-def _get(port: int, path: str, host: str) -> http.client.HTTPResponse:
+def _request(
+    port: int,
+    path: str,
+    host: str,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+) -> http.client.HTTPResponse:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-    conn.request("GET", path, headers={"Host": host, "Connection": "close"})
+    sent = {"Host": host, "Connection": "close"}
+    if headers:
+        sent.update(headers)
+    conn.request(method, path, headers=sent)
     resp = conn.getresponse()
     resp.body = resp.read()  # type: ignore[attr-defined]
     conn.close()
     return resp
+
+
+def _get(port: int, path: str, host: str) -> http.client.HTTPResponse:
+    return _request(port, path, host)
+
+
+@pytest.fixture
+def down_portal():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    closed = sock.getsockname()[1]
+    sock.close()
+    from utils.captive_portal import make_server
+
+    portal = make_server("127.0.0.1", 0, backend=closed)
+    thread = threading.Thread(target=portal.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield portal
+    finally:
+        portal.shutdown()
+        thread.join(timeout=2)
 
 
 class TestProbeResponses:
@@ -152,26 +199,13 @@ class TestProbeResponses:
         assert bounced.getheader("Location") == "http://192.168.4.1/setup/"
         assert ":8080" not in (bounced.getheader("Location") or "")
 
-    def test_a_down_service_window_does_not_loop_the_setup_page(self):
-        import socket
-
-        from utils.captive_portal import make_server
-
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        closed = sock.getsockname()[1]
-        sock.close()
-        portal = make_server("127.0.0.1", 0, backend=closed)
-        thread = threading.Thread(target=portal.serve_forever, daemon=True)
-        thread.start()
-        try:
-            resp = _get(portal.server_address[1], "/setup/", "192.168.4.1")
-        finally:
-            portal.shutdown()
-            thread.join(timeout=2)
+    def test_a_down_service_window_does_not_loop_the_setup_page(self, down_portal):
+        resp = _get(down_portal.server_address[1], "/setup/", "192.168.4.1")
         assert resp.status == 503
         assert b"Success" not in resp.body  # type: ignore[attr-defined]
         assert resp.getheader("Location") is None
+        assert resp.getheader("Retry-After") == "2"
+        assert resp.getheader("Cache-Control") == "no-store"
 
     def test_location_rewrite_strips_the_service_window_port(self):
         assert rewrite_location("http://192.168.4.1:8080/setup/", 8080) == PORTAL_URL
@@ -350,3 +384,136 @@ class TestTeardown:
                 assert response.status_code == 302
                 assert response.headers["Location"] == PORTAL_URL
                 assert b"Success" not in response.data
+
+
+class TestUnavailablePage:
+    def test_html_is_branded_and_under_the_size_budget(self):
+        body = unavailable_html("WQM-10001")
+        text = body.decode()
+        assert len(body) < UNAVAILABLE_HTML_BUDGET
+        assert len(unavailable_html("W" * 64)) < UNAVAILABLE_HTML_BUDGET
+        assert "BlueSignal" in text
+        assert "Your WQM-1 is starting up." in text
+        assert "This takes about 2–3 minutes. Keep this page open." in text
+        assert "WQM-10001" in text
+        assert "https://" not in text
+        assert "http://" not in text
+        assert "<link " not in text
+        assert "src=" not in text
+        assert "cdn" not in text.lower()
+
+    def test_html_auto_retries_setup_and_polls_ready(self):
+        text = unavailable_html().decode()
+        assert 'http-equiv="refresh"' in text
+        assert 'content="3;url=/setup/"' in text
+        assert 'fetch("/ready"' in text
+        assert 'location.replace("/setup/")' in text
+
+    def test_plain_text_stays_readable_without_markup(self):
+        body = unavailable_plain("WQM-10001")
+        assert body.startswith(STARTING_UP_TEXT.encode())
+        assert b"Unit: WQM-10001\n" in body
+        assert b"<" not in body
+
+    def test_prefers_html_for_browsers_and_plain_for_curl(self):
+        assert prefers_html("text/html,application/xhtml+xml") is True
+        assert prefers_html("*/*") is True
+        assert prefers_html("") is True
+        assert prefers_html("text/plain") is False
+        assert prefers_html("*/*", "curl/8.6.0") is False
+        assert prefers_html("text/html", "curl/8.6.0") is False
+
+    def test_portal_unit_id_omits_the_all_zero_fallback(self, monkeypatch):
+        monkeypatch.setattr("utils.captive_portal.get_device_id", lambda: "WQM-10001")
+        assert portal_unit_id() == "WQM-10001"
+        monkeypatch.setattr(
+            "utils.captive_portal.get_device_id",
+            lambda: "BS-WQM1-000000000000",
+        )
+        assert portal_unit_id() == ""
+
+        def _boom() -> str:
+            raise OSError("no id")
+
+        monkeypatch.setattr("utils.captive_portal.get_device_id", _boom)
+        assert portal_unit_id() == ""
+
+    def test_html_response_from_a_phone_accept_header(self, down_portal, monkeypatch):
+        monkeypatch.setattr("utils.captive_portal.portal_unit_id", lambda: "WQM-10001")
+        resp = _request(
+            down_portal.server_address[1],
+            "/setup/",
+            "192.168.4.1",
+            headers={"Accept": "text/html"},
+        )
+        assert resp.status == 503
+        assert resp.getheader("Retry-After") == "2"
+        assert resp.getheader("Cache-Control") == "no-store"
+        assert "text/html" in (resp.getheader("Content-Type") or "")
+        body = resp.body  # type: ignore[attr-defined]
+        assert b"BlueSignal" in body
+        assert b"Your WQM-1 is starting up." in body
+        assert b"Keep this page open." in body
+        assert b"WQM-10001" in body
+        assert b'http-equiv="refresh"' in body
+        assert b'fetch("/ready"' in body
+        assert len(body) < UNAVAILABLE_HTML_BUDGET
+
+    def test_curl_gets_plain_text(self, down_portal, monkeypatch):
+        monkeypatch.setattr("utils.captive_portal.portal_unit_id", lambda: "WQM-10001")
+        resp = _request(
+            down_portal.server_address[1],
+            "/setup/",
+            "192.168.4.1",
+            headers={"User-Agent": "curl/8.6.0", "Accept": "*/*"},
+        )
+        assert resp.status == 503
+        assert resp.getheader("Retry-After") == "2"
+        assert resp.getheader("Cache-Control") == "no-store"
+        assert "text/plain" in (resp.getheader("Content-Type") or "")
+        body = resp.body  # type: ignore[attr-defined]
+        assert STARTING_UP_TEXT.encode() in body
+        assert b"Unit: WQM-10001" in body
+        assert b"<html" not in body
+
+    def test_head_keeps_headers_and_has_no_body(self, down_portal):
+        resp = _request(
+            down_portal.server_address[1],
+            "/setup/",
+            "192.168.4.1",
+            method="HEAD",
+            headers={"Accept": "text/html"},
+        )
+        assert resp.status == 503
+        assert resp.getheader("Retry-After") == "2"
+        assert resp.getheader("Cache-Control") == "no-store"
+        assert "text/html" in (resp.getheader("Content-Type") or "")
+        assert int(resp.getheader("Content-Length") or "0") > 0
+        assert resp.body == b""  # type: ignore[attr-defined]
+
+    def test_ready_is_503_while_the_service_window_is_down(self, down_portal):
+        resp = _request(down_portal.server_address[1], READY_PATH, "192.168.4.1")
+        assert resp.status == 503
+        assert resp.getheader("Retry-After") == "2"
+        assert resp.getheader("Cache-Control") == "no-store"
+        assert resp.body == b""  # type: ignore[attr-defined]
+        assert backend_ready(down_portal.backend_port) is False
+
+    def test_ready_is_204_once_the_service_window_answers(self, servers):
+        portal, _backend = servers
+        resp = _request(portal.server_address[1], READY_PATH, "192.168.4.1")
+        assert resp.status == 204
+        assert resp.getheader("Cache-Control") == "no-store"
+        assert resp.body == b""  # type: ignore[attr-defined]
+        assert backend_ready(portal.backend_port) is True
+
+    def test_ready_head_stays_empty(self, down_portal):
+        resp = _request(
+            down_portal.server_address[1],
+            READY_PATH,
+            "192.168.4.1",
+            method="HEAD",
+        )
+        assert resp.status == 503
+        assert resp.getheader("Content-Length") == "0"
+        assert resp.body == b""  # type: ignore[attr-defined]
