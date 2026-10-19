@@ -674,7 +674,9 @@ class TestRegisterDoesNotBlockStartup:
         wqm = (ROOT / "systemd" / "bluesignal-wqm.service").read_text()
         assert "Type=notify" in wqm
         sw = (ROOT / "systemd" / "bluesignal-service-window.service").read_text()
-        assert "bluesignal-wqm.service" in sw
+        assert all(
+            "bluesignal-wqm" not in line for line in sw.splitlines() if line.startswith("After=")
+        )
         setup_src = (ROOT / "src" / "service_window" / "routes" / "setup.py").read_text()
         assert "daemon=True" in setup_src
         assert "wqm1-register-kick" in setup_src
