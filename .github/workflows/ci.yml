@@ -63,7 +63,7 @@ jobs:
             -czf "wqm1-firmware-${VERSION}.tar.gz" \
             src config scripts systemd requirements.txt requirements-rpi.txt VERSION setup.sh
           python3 <<'PYEOF'
-          import base64, json
+          import base64, json, tarfile
           from datetime import UTC, datetime
           from pathlib import Path
 
@@ -105,6 +105,25 @@ jobs:
           tar_error = validate_tar_members(bundle)
           assert tar_error is None, f"tar sanity failed: {tar_error}"
           assert version_tuple(version) is not None, "unparseable version"
+
+          # The device extracts this tarball as the release tree. netctl
+          # looks up setup-AP units under systemd/ there. Every file in
+          # systemd/ has to be in the bundle or an OTA flip cannot refresh it.
+          with tarfile.open(bundle, "r:gz") as bundle_tar:
+              bundled = set(bundle_tar.getnames())
+          missing_units = sorted(
+              path.relative_to(".").as_posix()
+              for path in Path("systemd").rglob("*")
+              if path.is_file() and path.relative_to(".").as_posix() not in bundled
+          )
+          if missing_units:
+              raise SystemExit(
+                  "OTA bundle is missing systemd units: " + ", ".join(missing_units)
+              )
+          print(
+              "OTA bundle carries "
+              f"{sum(1 for name in bundled if name.startswith('systemd/'))} systemd paths"
+          )
 
           # A tampered signature must be rejected.
           bad = bytearray(signature)

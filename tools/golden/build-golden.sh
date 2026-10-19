@@ -231,6 +231,10 @@ chroot "$R" dpkg -s dnsmasq >/dev/null
 [ "$(readlink -f "$R/etc/systemd/system/dnsmasq.service")" = "/dev/null" ]
 [ -f "$R/etc/systemd/system/wqm1-setup-hostapd.service" ]
 [ -f "$R/etc/systemd/system/wqm1-setup-dnsmasq.service" ]
+# setup.sh used to install the unit into /etc and not into the release
+# tree. netctl looks beside the release first; without this file the
+# setup AP never starts.
+[ -f "$R/opt/bluesignal/current/systemd/wqm1-setup-hostapd.service" ]
 
 install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-firstboot" "$R/usr/local/sbin/"
 install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-firstboot.service" "$R/etc/systemd/system/"

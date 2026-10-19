@@ -20,6 +20,9 @@ Wants=NetworkManager.service
 # failed hotspot then restarts without a cap, so the SSID blinks.
 StartLimitIntervalSec=600
 StartLimitBurst=8
+# The journal is gone if the cable is pulled. This oneshot copies the last
+# lines onto the FAT boot partition after the passphrase is removed.
+OnFailure=wqm1-apfail.service
 
 [Service]
 Type=oneshot

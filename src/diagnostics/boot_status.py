@@ -382,6 +382,8 @@ def commission_verdict(fields: dict[str, str]) -> str:
     if hotspot.startswith("failed"):
         detail = hotspot.split(":", 1)[1].strip() if ":" in hotspot else ""
         reasons.append(detail or "hotspot failed")
+    elif hotspot == "starting":
+        reasons.append("hotspot starting")
     elif not reachable:
         reasons.append("hotspot down")
     # A failed site join while the hotspot is up is how the installer gets
@@ -465,10 +467,13 @@ def _read_previous() -> dict[str, str]:
 
 
 def _write_atomic(path: Path, text: str) -> bool:
-    """Write ``path`` if its directory exists and is writable. The env
-    override may point at a directory we are allowed to create; the FAT
-    and /var/lib paths are never created here (a test must not mkdir
-    them on a developer machine)."""
+    """Write ``path`` if its directory exists and is writable.
+
+    The env override may point at a directory we are allowed to create;
+    the FAT and /var/lib paths are never created here (a test must not
+    mkdir them on a developer machine). The temp file is fsynced before
+    rename, and the directory is fsynced after, so a power cut still
+    leaves a readable ``wqm1-status.txt`` on the boot partition."""
     env = os.environ.get("WQM1_STATUS_FILE")
     create_parent = env is not None and path == Path(env)
     parent = path.parent
@@ -481,14 +486,32 @@ def _write_atomic(path: Path, text: str) -> bool:
         return False
     tmp = path.with_name(path.name + ".tmp")
     try:
-        tmp.write_text(text, encoding="utf-8")
-        os.chmod(tmp, 0o644)
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.chmod(tmp, 0o644)
+            os.fsync(handle.fileno())
         tmp.replace(path)
     except OSError as e:
         logger.debug("status write %s failed: %s", path, e)
         with contextlib.suppress(OSError):
             tmp.unlink()
         return False
+    # The rename is a directory entry. Without this fsync a power cut can
+    # leave the FAT directory pointing at neither the old nor the new file.
+    # Some filesystems reject a directory fsync; the file is already in place
+    # and the publish helper also calls sync.
+    try:
+        dir_fd = os.open(parent, os.O_RDONLY)
+    except OSError as e:
+        logger.debug("status dir open %s failed: %s", parent, e)
+        return True
+    try:
+        os.fsync(dir_fd)
+    except OSError as e:
+        logger.debug("status dir fsync %s failed: %s", parent, e)
+    finally:
+        os.close(dir_fd)
     return True
 
 
