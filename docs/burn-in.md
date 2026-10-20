@@ -35,8 +35,14 @@ BURN-IN: PASS
 - hostapd was not beaconing (`hostapd_cli status` did not report
   `state=ENABLED`)
 - the ADS1115 did not answer on I2C
-- `vcgencmd get_throttled` showed a current undervoltage, frequency cap,
-  or throttle (a since-boot flag alone does not fail)
+- `vcgencmd get_throttled` (or the firmware sysfs node) showed
+  undervoltage now or since this boot. The result says
+  `weak power supply or cable` and appends `undervoltage seen (N)`.
+  The same count is written to `wqm1-status.txt` as
+  `power: undervoltage seen (N)`, and that boot's `COMMISSION` line
+  fails with `weak power supply or cable`. A since-boot frequency cap
+  with no undervoltage does not fail. A current throttle that is not
+  undervoltage still fails.
 - `bluesignal-wqm`, `bluesignal-service-window`, `bluesignal-ap-fallback`,
   or NetworkManager was not active, or its restart count climbed during
   the ten minutes

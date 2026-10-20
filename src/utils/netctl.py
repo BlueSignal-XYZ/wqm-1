@@ -84,6 +84,7 @@ from utils.captive_portal import (
     ensure_dnsmasq_conf,
     wait_until_reachable,
 )
+from utils.cardmove import confirm_binding, wifi_reconfirm_required
 from utils.wifi_setup import (
     CAPTIVE_JOIN_MESSAGE,
     annotate_network,
@@ -965,6 +966,7 @@ def join_network(
                 portal="down: station",
                 station_rssi=format_station_rssi(rssi),
             )
+            _confirm_moved_card()
         else:
             short = _STATION_FAIL.get(str(result.get("reason") or ""), "could not join")
             _publish_station(
@@ -1040,6 +1042,7 @@ def join_network(
                 portal="down: station",
                 station_rssi=format_station_rssi(rssi),
             )
+            _confirm_moved_card()
             joined = _join_result(
                 ok=True,
                 connected=True,
@@ -1138,6 +1141,30 @@ def _fail_join(
     return pending
 
 
+def _confirm_moved_card() -> None:
+    """A finished join is the reconfirm. A missing binding file is a no-op."""
+    try:
+        confirm_binding()
+    except Exception:
+        logger.exception("Could not record card reconfirm")
+
+
+def _hold_site_wifi(iface: str) -> None:
+    """Do not keep a site profile that belongs to the Pi this card left.
+
+    Autoconnect is turned off and wlan0 is disconnected. The profiles stay,
+    so the setup page can join one again. A virtual radio only drops its
+    station; it must not call nmcli on the machine running the simulator.
+    """
+    if netsim.is_virtual():
+        netsim.release_station()
+        return
+    for prof in saved_wifi(iface):
+        _nmcli("connection", "modify", prof["name"], "connection.autoconnect", "no")
+    if station_connected(iface):
+        _nmcli("device", "disconnect", iface)
+
+
 def ensure_reachable(
     ap_ssid: str,
     ap_passphrase: str,
@@ -1162,12 +1189,29 @@ def ensure_reachable(
     to become usable before the hotspot command, and that command is retried:
     one hotspot activation against an interface that is still
     ``unavailable`` used to exit the oneshot for the rest of the boot.
+
+    A card that moved off the Pi it was commissioned on, with a site
+    profile still saved, does not take that station. Setup has to join
+    again. See ``utils.cardmove``.
     """
+    reconfirm = False
+    try:
+        reconfirm = wifi_reconfirm_required()
+    except Exception:
+        logger.exception("card move check failed")
+    if reconfirm:
+        logger.warning(
+            "Card moved onto this Pi with a site network saved — "
+            "not joining it until setup reconfirms"
+        )
+        _hold_site_wifi(iface)
     prepare_wifi_radio(iface)
     radio_deadline = clock() + radio_wait_s
     unusable_station = False
 
     def _take_station() -> dict[str, Any] | None:
+        if reconfirm:
+            return None
         snap = _station_ready(iface)
         if not snap:
             return None
@@ -1196,7 +1240,7 @@ def ensure_reachable(
     # profiles (nmcli missing or not up yet) also returns an empty list;
     # trying the AP is the point of this service, and the attempts below
     # still back off.
-    grace = grace_s if saved_wifi(iface) else 0.0
+    grace = 0.0 if reconfirm else (grace_s if saved_wifi(iface) else 0.0)
     started = clock()
     while clock() - started < grace:
         taken = _take_station()

@@ -25,6 +25,7 @@ key skips the identity step (``CARDED_STEPS``). The HTTP key paste lives
 only as a bench/dev override, clearly marked, not on the installer path.
 """
 
+import contextlib
 import json
 import logging
 import re
@@ -34,6 +35,7 @@ from flask import (
     Blueprint,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -57,8 +59,10 @@ from service_window.health import (
     system_cards,
     worst_status,
 )
+from utils.cardmove import card_status_payload, confirm_binding
 from utils.device_keys import identity_qr_payload
 from utils.identity import ap_name
+from utils.netctl import forget_saved_wifi
 from utils.wifi_setup import (
     HIDDEN_NOTE,
     WEAK_SIGNAL_MESSAGE,
@@ -282,9 +286,9 @@ def _finish_setup(keep_ssid: str | None) -> dict:
     Wi-Fi join (which finishes setup — its response may never reach the
     phone) and the Finish button (LTE / no-network sites). The caller has
     already refused the factory PIN."""
-    from utils.netctl import forget_saved_wifi
-
     forgot = forget_saved_wifi(keep_ssid)
+    with contextlib.suppress(OSError):
+        confirm_binding()
     update_config_section(
         current_app.config["CONFIG_PATH"], "service_window", {"setup_completed": True}
     )
@@ -808,3 +812,15 @@ def done() -> ResponseReturnValue:
         probe_rows=rows,
         registration=registration_view(),
     )
+
+
+@setup_bp.route("/card-status")
+@login_required
+def card_status() -> ResponseReturnValue:
+    """Flag the setup page can read later. No template, no Wi-Fi material.
+
+    ``wifi_reconfirm`` is true when this card was commissioned on another Pi
+    and still has that unit's site network. Boot will not join it. The page
+    that should ask the installer to join again is not changed here.
+    """
+    return jsonify(card_status_payload())

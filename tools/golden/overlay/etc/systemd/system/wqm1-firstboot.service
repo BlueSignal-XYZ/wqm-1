@@ -1,7 +1,7 @@
 [Unit]
-Description=WQM-1 radio (rfkill/regdom US) and per-card hostname from serial
-After=local-fs.target NetworkManager.service cloud-config.service
-Wants=NetworkManager.service
+Description=WQM-1 radio (rfkill/regdom US), hostname, and card/Pi binding
+After=local-fs.target NetworkManager.service cloud-config.service wqm1-boot-stage.service
+Wants=NetworkManager.service wqm1-boot-stage.service
 Before=bluesignal-ap-fallback.service bluesignal-service-window.service bluesignal-wqm.service
 
 [Service]

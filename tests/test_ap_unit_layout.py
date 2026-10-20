@@ -364,6 +364,125 @@ def test_installed_layout_finds_ap_units(tmp_path: Path) -> None:
     assert pyc, "setup.sh RELEASE_DIR copy did not compile service_window app.pyc"
 
 
+_LAYOUT_PROBE = """
+import os
+import sys
+from pathlib import Path
+
+current = Path(sys.argv[1])
+release = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(current / "src"))
+os.environ["WQM1_CARD_STATE"] = sys.argv[3]
+os.environ["WQM1_STATUS_FILE"] = sys.argv[4]
+
+import utils.cardmove as cardmove
+import utils.netctl as netctl
+from diagnostics.boot_status import write_boot_status
+
+loaded = Path(netctl.__file__).resolve()
+if not loaded.is_relative_to(release):
+    raise SystemExit(f"imported {loaded}, not the release behind current")
+unit = netctl._packaged_unit("wqm1-setup-hostapd.service")
+if unit is None or not unit.resolve().is_relative_to(release):
+    raise SystemExit(f"setup AP unit resolved to {unit}")
+
+first = cardmove.observe("1000000086544fd8", site_wifi=False)
+if first.commissioned_serial != "1000000086544fd8" or first.moved:
+    raise SystemExit(f"first boot was not recorded: {first}")
+moved = cardmove.observe("00000000aabbccdd", site_wifi=True)
+if not moved.wifi_reconfirm or moved.moved_from != "1000000086544fd8":
+    raise SystemExit(f"move was not latched: {moved}")
+
+text = write_boot_status(
+    hotspot="up",
+    portal="up (80)",
+    adc="ok",
+    fatal="none",
+    wlan0="up",
+    station="",
+    power="undervoltage seen (1)",
+    board="Raspberry Pi Zero W",
+    revision="9000c1",
+    kernel="test",
+    wifi="BCM43430/1",
+    i2c="ok",
+    onewire="not fitted",
+    gps="absent",
+    uptime="10",
+)
+if not text.startswith("COMMISSION: FAIL: weak power supply or cable\\n"):
+    raise SystemExit(text.splitlines()[0])
+if "card: moved from 1000000086544fd8 to 00000000aabbccdd" not in text:
+    raise SystemExit("card line missing")
+print("layout-ok")
+"""
+
+
+def test_resilience_runs_from_the_current_symlink(tmp_path: Path) -> None:
+    """Code under releases/<ver> reached only through the current symlink.
+
+    A host-side path that follows the absolute symlink leaves the image.
+    This imports the installed tree the way a unit does.
+    """
+    release = tmp_path / "opt" / "bluesignal" / "releases" / "2.4.0"
+    materialize_release(ROOT, release)
+    current = tmp_path / "opt" / "bluesignal" / "current"
+    current.symlink_to(release)
+    binding = tmp_path / "card-binding"
+    status = tmp_path / "wqm1-status.txt"
+    probe = tmp_path / "probe_layout.py"
+    probe.write_text(_LAYOUT_PROBE, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(probe), str(current), str(release), str(binding), str(status)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "layout-ok" in result.stdout
+    assert "weak power supply or cable" in status.read_text(encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (
+        ("hostname", "#!/bin/sh\nprintf '%s\\n' 'raspberrypi'\n"),
+        ("hostnamectl", "#!/bin/sh\nexit 0\n"),
+        ("systemctl", "#!/bin/sh\nexit 0\n"),
+        ("rfkill", "#!/bin/sh\nexit 0\n"),
+        ("iw", "#!/bin/sh\nexit 0\n"),
+        ("nmcli", "#!/bin/sh\nexit 0\n"),
+    ):
+        path = bin_dir / name
+        path.write_text(body, encoding="utf-8")
+        path.chmod(0o755)
+    cpu = tmp_path / "cpuinfo"
+    cpu.write_text("Serial\t\t: 1000000086544fd8\n", encoding="utf-8")
+    boot_status = tmp_path / "boot-status.txt"
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "WQM1_FIRMWARE_SRC": str(current / "src"),
+        "WQM1_HOSTS_FILE": str(tmp_path / "hosts"),
+        "WQM1_HOSTNAME_FILE": str(tmp_path / "hostname-file"),
+        "WQM1_CPUINFO": str(cpu),
+        "WQM1_STATUS_FILE": str(boot_status),
+        "WQM1_FIRSTBOOT_STATE": str(tmp_path / "firstboot-state"),
+        "WQM1_CARD_STATE": str(tmp_path / "firstboot-card"),
+    }
+    (tmp_path / "hosts").write_text("127.0.1.1\traspberrypi\n", encoding="utf-8")
+    script = ROOT / "tools" / "golden" / "overlay" / "usr" / "local" / "sbin" / "wqm1-firstboot"
+    boot = subprocess.run(
+        ["bash", str(script)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert boot.returncode == 0, boot.stderr
+    assert "firmware id unavailable" not in boot.stdout
+    assert "BOOT: stage=done" in boot_status.read_text(encoding="utf-8")
+
+
 def test_workflows_pack_systemd_into_the_ota_bundle() -> None:
     packager = (ROOT / "scripts" / "build-ota-bundle.sh").read_text(encoding="utf-8")
     members = "src config scripts systemd requirements.txt requirements-rpi.txt VERSION setup.sh"

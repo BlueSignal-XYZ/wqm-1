@@ -61,6 +61,7 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
+from utils.atomic import atomic_write_text
 from utils.clock import ClockDiscipline
 from utils.config import (
     ADC_CH_ORP,
@@ -1403,10 +1404,7 @@ class WQM1App:
         if not persist:
             return
         try:
-            WATER_PROFILE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            tmp = WATER_PROFILE_CACHE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(profile))
-            tmp.replace(WATER_PROFILE_CACHE)
+            atomic_write_text(WATER_PROFILE_CACHE, json.dumps(profile))
         except OSError as e:
             logger.warning("Could not cache water profile: %s", e)
 

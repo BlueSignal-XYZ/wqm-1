@@ -433,6 +433,46 @@ class TestAccessPoint:
         assert any(c[:3] == ["ip", "link", "set"] for c in nm.calls)
         assert ["iw", "dev", "wlan0", "set", "power_save", "off"] in nm.calls
 
+    def test_moved_card_does_not_join_the_old_site_wifi(self, nm, tmp_path, monkeypatch):
+        """A commissioned card in a new Pi must not stay on the old site network."""
+        from utils.cardmove import CardBinding, load, save
+        from utils.netctl import ensure_reachable
+
+        path = tmp_path / "card-binding"
+        save(
+            CardBinding(
+                commissioned_serial="00000000aabbccdd",
+                moved_from="00000000aabbccdd",
+                moved_to="1000000086544fd8",
+                wifi_reconfirm=True,
+            ),
+            path,
+        )
+        monkeypatch.setenv("WQM1_CARD_STATE", str(path))
+        nm.station = True
+        nm.saved = ["PondHouse"]
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        def sleep(s):
+            t[0] += s
+
+        r = ensure_reachable("WQM1-4FD8", "river-cedar-42", grace_s=45, sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert t[0] < 45
+        assert [
+            "nmcli",
+            "connection",
+            "modify",
+            "PondHouse",
+            "connection.autoconnect",
+            "no",
+        ] in nm.calls
+        assert ["nmcli", "device", "disconnect", "wlan0"] in nm.calls
+        assert load(path).wifi_reconfirm is True
+
     def test_hotspot_is_retried_when_the_interface_is_not_ready(self, nm):
         from utils.netctl import ensure_reachable
 
@@ -488,6 +528,32 @@ class TestJoin:
         assert any(c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls)
         assert nm.ap is False
         assert nm.managed == "yes"
+
+    def test_a_successful_join_confirms_the_moved_card(self, nm, tmp_path, monkeypatch):
+        from utils.cardmove import CardBinding, load, save
+        from utils.netctl import join_network
+
+        path = tmp_path / "card-binding"
+        save(
+            CardBinding(
+                commissioned_serial="00000000aabbccdd",
+                moved_from="00000000aabbccdd",
+                moved_to="1000000086544fd8",
+                wifi_reconfirm=True,
+            ),
+            path,
+        )
+        monkeypatch.setenv("WQM1_CARD_STATE", str(path))
+        monkeypatch.setattr("utils.cardmove.get_pi_serial", lambda: "1000000086544fd8")
+        nm.ap = True
+        r = join_network(
+            "PondHouse", "hunter22", ap_ssid="WQM1-4FD8", ap_passphrase="river-cedar-42"
+        )
+        assert r["ok"] is True
+        binding = load(path)
+        assert binding.commissioned_serial == "1000000086544fd8"
+        assert binding.wifi_reconfirm is False
+        assert binding.moved_from == ""
 
     def test_wrong_password_reraises_the_ap(self, nm):
         """The load-bearing case: an installer locked out by a typo is worse
