@@ -13,6 +13,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -581,8 +582,12 @@ class TestSetupOrder:
     def test_cloud_page_does_not_wait_on_register(self, tmp_path, mock_hardware, monkeypatch):
         """A slow or hanging Cloud must not stall the setup page."""
 
+        release = threading.Event()
+
         def hang(*_a, **_k):
-            time.sleep(30)
+            # Hang until the test is done, then fail — never outlive the
+            # test (a 30 s sleep wrote register state after teardown).
+            release.wait(30)
             raise URLError("hung")
 
         monkeypatch.setattr("urllib.request.urlopen", hang)
@@ -592,8 +597,13 @@ class TestSetupOrder:
                 sess["pin_verified"] = True
             started = time.monotonic()
             resp = c.get("/setup/cloud")
+        elapsed = time.monotonic() - started
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == "wqm1-register-kick":
+                thread.join(timeout=5)
         assert resp.status_code == 200
-        assert time.monotonic() - started < 2.0
+        assert elapsed < 2.0
 
 
 class TestInstalledImageLayout:

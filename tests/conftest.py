@@ -223,3 +223,25 @@ def _no_real_status_files(monkeypatch, tmp_path):
     )
     monkeypatch.delenv("WQM1_STATUS_FILE", raising=False)
     monkeypatch.setenv("WQM1_CARD_STATE", str(status_dir / "card-binding"))
+    # The writer falls back to `sudo -n wqm1-publish-status.sh` when no boot
+    # path is writable. Point it at a script that does not exist.
+    monkeypatch.setenv("WQM1_STATUS_PUBLISH", str(status_dir / "no-publish-helper"))
+
+
+@pytest.fixture(autouse=True)
+def _join_register_kicks(monkeypatch):
+    """Wait for background self-register attempts before the env is restored.
+
+    The setup wizard starts a ``wqm1-register-kick`` daemon thread after a
+    join. If it outlives its test, it runs after monkeypatch has put
+    BLUESIGNAL_STATE_DIR back, and writes ``device-register.json`` into the
+    real ``/var/lib/bluesignal`` (as root) — intermittently, depending on
+    timing. This fixture depends on ``monkeypatch`` so it tears down first.
+    """
+    import threading
+
+    before = set(threading.enumerate())
+    yield
+    for thread in threading.enumerate():
+        if thread.name == "wqm1-register-kick" and thread not in before:
+            thread.join(timeout=5)

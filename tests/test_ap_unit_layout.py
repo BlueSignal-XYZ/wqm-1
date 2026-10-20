@@ -377,7 +377,13 @@ os.environ["WQM1_STATUS_FILE"] = sys.argv[4]
 
 import utils.cardmove as cardmove
 import utils.netctl as netctl
+import diagnostics.boot_status as boot_status_mod
 from diagnostics.boot_status import write_boot_status
+
+# The conftest fixture cannot reach this subprocess. Keep the writer off the
+# unit's real /var/lib and /boot copies (a root runner would write them).
+boot_status_mod._STATE_PATH = Path(sys.argv[4]).with_name("state-wqm1-status.txt")
+boot_status_mod._BOOT_PATHS = (Path(sys.argv[4]).with_name("boot-wqm1-status.txt"),)
 
 loaded = Path(netctl.__file__).resolve()
 if not loaded.is_relative_to(release):
