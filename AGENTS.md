@@ -1,4 +1,30 @@
-Never merge, deploy, push to main, delete data, change pricing, or send email or messages. Open a PR and stop.
+# Engineering rules for agents (set by the Captain, Oct 19, 2026)
+
+## Before writing code
+1. **Read what the work touches before changing it.** That means the repo's rules file, the security doc for the area, and any test that pins the behavior. Most breakage came from a refactor that ignored a caller somewhere else.
+2. **Write down what must always be true before building a security or money flow.** For example: one owner per device, a claim token works once, nothing locks without a release path. Test those first, then build the handlers.
+3. **Read values by importing them, never by searching file text.** A script that regex-searches a source file breaks silently when the value moves.
+
+## Before opening a PR
+4. **Any new required setting must already exist before merge.** If a change makes the deploy refuse to run without a variable, confirm the variable is set first, or every deploy behind it is blocked.
+5. **Prove it the way CI will.** Run the same commands CI runs, every test group included, and say which ones ran. "Tests pass" with no command listed doesn't count.
+6. **One change per PR.** A fix, a refactor and new tests in one PR means a failure in one holds back the other two.
+7. **Bring the branch up to date with master before asking for review.**
+
+## After merge
+8. **Confirm it actually reached production.** A green check on the PR is not a deploy. Check that the deploy finished and the new code is live.
+9. **Never let the website ship ahead of its backend.** If the backend deploy fails, the website deploy stops too.
+10. **A failure that makes no noise is the worst kind.** Any check or job whose purpose is to warn must fail visibly when it can't run. A job that skips itself and shows green is not allowed.
+
+## Ownership
+11. **An agent finishes its own PRs or closes them.** Anything still a draft three days later gets folded into another PR or closed with a reason.
+12. **Red CI never merges, whoever authored the PR,** Dependabot included. Enforced by branch protection.
+13. **Agents never take hard-to-undo actions:** no merging, deploying, deleting data, changing prices or sending email. Only the Captain does those.
+14. **When an agent can't verify something, it says so.** A list of what it didn't check is worth more than a confident summary.
+
+## Enforcement
+- CI or branch protection enforces rules 4, 5, 9, 10 and 12.
+- Review enforces rules 1, 2, 6 and 14.
 
 # AGENTS.md — WQM-1 firmware
 

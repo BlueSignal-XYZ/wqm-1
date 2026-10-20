@@ -748,7 +748,7 @@ For more detail, see [docs/getting-started.md](docs/getting-started.md).
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Agent instructions: [AGENTS.md](AGENTS.md).
 
 ## License
 
