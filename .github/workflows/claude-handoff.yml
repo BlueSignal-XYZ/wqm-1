@@ -15,6 +15,11 @@ name: Claude handoff
 # workflow's token does not start another workflow, so the two jobs cannot
 # trigger each other in a loop.
 #
+# Who may trigger it: a label added by this workflow's own GITHUB_TOKEN
+# starts no workflow, so the Grok bots must label with a personal access
+# token or a GitHub App token. A bot or App login must be listed in
+# allowed_bots below or claude-code-action refuses the run.
+#
 # Auth: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, draws on the
 # Claude subscription) is used when set; ANTHROPIC_API_KEY otherwise.
 
@@ -44,6 +49,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
+          # gh reads GH_TOKEN; keep the token out of .git/config, which
+          # Claude can read.
+          persist-credentials: false
       - name: Write the plan
         uses: anthropics/claude-code-action@v1
         with:
@@ -85,12 +93,16 @@ jobs:
       issues: write
       id-token: write
       actions: read
+      # gh pr checks reads check runs; without this it gets
+      # "Resource not accessible by integration".
+      checks: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Review against the plan
         uses: anthropics/claude-code-action@v1
         with:
@@ -125,6 +137,6 @@ jobs:
             "Verdict: ready for the Captain" or "Verdict: changes needed".
 
             Never approve, merge, push or change files. When the comment is posted, run:
-            gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --add-label review-passed
+            gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --remove-label changes-requested --add-label review-passed
             or, if changes are needed:
-            gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --add-label changes-requested
+            gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --remove-label review-passed --add-label changes-requested

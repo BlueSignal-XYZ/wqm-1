@@ -19,9 +19,18 @@ SRC = FILE.read_text()
 DOC = yaml.safe_load(SRC)
 # PyYAML reads the bare key `on:` as the boolean True.
 ON = DOC.get("on", DOC.get(True))
-FORBIDDEN_TOOLS = (
-    r"\bWrite\b|\bEdit\b|git push|git commit|gh pr merge|gh pr review"
-    r"|gh api|Bash\(\*|Bash\(gh:\*"
+# The exact allow-lists. A blocklist missed `Bash(git checkout:*)` (review of
+# marketplace #1449); comparing the whole string makes any new tool a visible
+# edit to this file.
+PLAN_TOOLS = (
+    "Read,Grep,Glob,Bash(gh issue view:*),Bash(gh issue comment:*),"
+    "Bash(gh issue edit:*),Bash(git log:*),Bash(git show:*)"
+)
+REVIEW_TOOLS = (
+    "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),"
+    "Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh issue view:*),"
+    "Bash(gh run view:*),Bash(gh run list:*),Bash(git log:*),Bash(git show:*),"
+    "Bash(git diff:*)"
 )
 
 
@@ -40,9 +49,25 @@ def test_can_never_write_code():
     for job in DOC["jobs"].values():
         assert job["permissions"]["contents"] == "read"
     tools = re.findall(r'--allowedTools "([^"]+)"', SRC)
-    assert len(tools) == 2
-    for t in tools:
-        assert not re.search(FORBIDDEN_TOOLS, t), t
+    assert tools == [PLAN_TOOLS, REVIEW_TOOLS]
+
+
+def test_checkout_keeps_the_token_out_of_git_config():
+    for job in DOC["jobs"].values():
+        checkout = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout"))
+        assert checkout["with"]["persist-credentials"] is False
+
+
+def test_review_can_read_ci_and_verdicts_never_stack():
+    assert DOC["jobs"]["review"]["permissions"]["checks"] == "read"
+    assert (
+        "--remove-label needs-review --remove-label changes-requested --add-label review-passed"
+        in SRC
+    )
+    assert (
+        "--remove-label needs-review --remove-label review-passed --add-label changes-requested"
+        in SRC
+    )
 
 
 def test_prompts_forbid_approving_merging_and_pushing():
