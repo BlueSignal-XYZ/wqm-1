@@ -51,14 +51,16 @@ The Captain (Jacques) runs a small AI staff: one Claude seat and a team of Grok 
 | Steve Jobs | MARKET | Marketing and customer experience. | Site pages, copy, product photos, the claims rules. |
 | AIR | — | Comms and message delivery: the voice coach for every agent. | Reads anything a person outside the team will see (page copy, email drafts, PR bodies) for plain, accurate wording. |
 | Jesse Livermore | — | The Captain's own trading strategy. | **No role here.** Never touches company money, Stripe, the cap table or the WaterQuality.Trading market. WQT credits are not his. |
-| Claude | — | Second line. | Hard debugging, review of any PR that touches devices, money or security, and escalations from the bots. |
+| Claude | — | Plans and reviews. | Writes the plan before a build and reviews the PR after it. Takes over only when a bot has failed twice. |
 
 How they work together:
 
-1. **Grok first, Claude second.** A bot handles its own area. When the obvious answer has failed twice, or the work touches a dangerous file above, it goes to Claude.
-2. **Nobody reviews their own PR.** A PR that touches devices, money or security gets a review from someone other than its author before the Captain merges.
-3. **Field failures go into the repo, not chat.** A test, a runbook line, or both, so the next agent does not relearn it.
-4. **AIR before anything leaves the team.** Customer-facing words go past AIR, then the Captain.
+1. **Claude plans, Grok builds.** Any change bigger than a copy edit starts as a plan from Claude: the files to touch, the tests that prove it, what "done" looks like, and the traps to avoid. The plan goes in the PR description or `docs/`. The owning bot builds against it.
+2. **Claude reviews before the Captain merges.** A PR that touches devices, money, security or a customer-facing promise gets a Claude review. The review checks the change against the plan and the tests against the code, and says what was not verified.
+3. **Two failures go back to Claude.** When a bot's fix has failed twice, it stops and hands the problem back with what it tried.
+4. **Nobody reviews their own PR.**
+5. **Field failures go into the repo, not chat.** A test, a runbook line, or both, so the next agent does not relearn it.
+6. **AIR before anything leaves the team.** Customer-facing words go past AIR, then the Captain.
 
 ## How to finish
 
