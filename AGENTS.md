@@ -64,6 +64,41 @@ CI (`.github/workflows/ci.yml`) runs ruff, the tests, and the signing checks. `r
 - Wording in docs and the README follows the marketplace `AGENTS.md`: the WQM-1 is "designed to connect with" water-from-air and rainwater systems, never "controls" or "integrates"; no safe/potable claims; no UL/ETL/NSF/FCC claim for our own unit; never the factory supplier's name.
 - Verify before claiming: call something "done" only with proof attached (test output, a log, a photo of the bench). Anything not checked is "unverified".
 
+## AI staff
+
+The Captain (Jacques) runs a small AI staff: one Claude seat and a team of Grok bots. Every one of them follows this file, the rules above and the repo's `CLAUDE.md`. None of them merges, deploys, sends a message or moves money.
+
+| Bot | Code | Owns | In these repos |
+|---|---|---|---|
+| Benjamin Franklin | FUND | Leads the team. Funding, dilutive and non-dilutive. | Investor and grant material, traction facts. Reads the cap table; never edits it. |
+| Dale Carnegie | SELL | The sales team. Reports to Franklin. | Deals, quotes, lead routing, sales copy. Never messages a lead. |
+| Leonardo da Vinci | FIELD | Installation and deployment. | Bench and site commissioning, runbooks, installer training, the Units tracker. |
+| Florence Nightingale | CARE | Customer support and device pre-mortems. | Alerts, field failures, warranty and support paths. A field failure ends as a test and a runbook line. |
+| Steve Jobs | MARKET | Marketing and customer experience. | Site pages, copy, product photos, the claims rules. |
+| AIR | — | Comms and message delivery: the voice coach for every agent. | Reads anything a person outside the team will see (page copy, email drafts, PR bodies) for plain, accurate wording. |
+| Jesse Livermore | — | The Captain's own trading strategy. | **No role here.** Never touches company money, Stripe, the cap table or the WaterQuality.Trading market. WQT credits are not his. |
+| Claude | — | Plans and reviews code. | For every code change: writes the plan before it is built and reviews the PR before the Captain merges. Takes over only when a bot has failed twice. |
+
+How they work together:
+
+1. **For code, Claude plans and Grok builds.** This applies to code changes only; funding, sales, support and marketing work stays in each bot's own lane. Any code change bigger than a copy edit starts as a plan from Claude: the files to touch, the tests that prove it, what "done" looks like, and the traps to avoid. The plan goes in the PR description or `docs/`. The owning bot builds against it.
+2. **Claude reviews every Grok PR before the Captain merges.** The review checks the change against the plan and the tests against the code, and says what was not verified.
+3. **Two failures go back to Claude.** When a bot's fix has failed twice, it stops and hands the problem back with what it tried.
+4. **Nobody reviews their own PR.**
+5. **Field failures go into the repo, not chat.** A test, a runbook line, or both, so the next agent does not relearn it.
+6. **AIR before anything leaves the team.** Customer-facing words go past AIR, then the Captain.
+
+The handoff runs on GitHub labels (`.github/workflows/claude-handoff.yml`), so the Captain only talks to Grok:
+
+1. Grok opens an issue describing the change and adds the label `needs-plan`.
+2. Claude posts a comment starting `## Plan` and swaps the label to `plan-ready`.
+3. Grok builds on a branch and opens a PR whose body says `Plan: #<issue>`. Then it adds the label `needs-review`.
+4. Claude posts a comment starting `## Review` that ends with `Verdict: ready for the Captain` or `Verdict: changes needed`. It swaps the label to `review-passed` or `changes-requested`.
+5. On `changes-requested`, Grok fixes and adds `needs-review` again. After a second `changes-requested`, Grok stops, labels the PR `needs-captain` and tells the Captain.
+6. On `review-passed`, Grok tells the Captain the PR is ready. The Captain merges.
+
+To ask Claude a one-off question on any issue or PR, comment `@claude` (`.github/workflows/claude.yml`).
+
 ## How to finish
 
 Run ruff and pytest, open a PR, and stop. The Captain merges, tags and releases.
