@@ -417,7 +417,6 @@ def network() -> ResponseReturnValue:
             station_weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
             cards=cards,
             on_ap=on_ap_now,
-            ap_ssid=_ap_ssid() if on_ap_now else "",
             cell_note=cell_data_note(_ap_ssid()) if on_ap_now else "",
             networks=choices,
             blocked=blocked_networks(scanned),

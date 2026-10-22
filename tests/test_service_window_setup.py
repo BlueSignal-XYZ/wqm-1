@@ -470,7 +470,8 @@ class TestNetworkStepDeclaresTheVariant:
         assert b"This page goes away" in resp.data
         assert b">Join</button>" in resp.data
         assert b"PondHouse" in resp.data
-        assert b"Use Without Internet" in resp.data and b"http://192.168.4.1" in resp.data
+        # Straight to the Wi-Fi form: no other-browser detour (founder, 2026-10-22).
+        assert b"own-browser" not in resp.data and b"Use Without Internet" not in resp.data
         assert b"No network here" in resp.data
 
 

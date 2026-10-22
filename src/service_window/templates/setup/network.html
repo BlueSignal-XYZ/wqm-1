@@ -12,21 +12,6 @@
 </div>
 {% endif %}
 
-{% if on_ap %}
-<details class="setup-details" id="own-browser">
-    <summary>Rather use Brave, Chrome or Safari?</summary>
-    <p>This page opened in your phone&rsquo;s sign-in window. To use your own browser:</p>
-    <ol style="padding-left: 1.25em">
-        <li>iPhone: tap <b>Cancel</b> at the top right, then <b>Use Without Internet</b>.
-        Android: tap <b>&#8942;</b>, then <b>Use this network as is</b>.</li>
-        <li>Open your browser and go to this address:</li>
-    </ol>
-    <div class="id-row"><input id="own-browser-url" class="id-value" readonly value="http://192.168.4.1" aria-label="Setup address"></div>
-    <button type="button" class="btn btn-secondary" id="copy-url">Copy address</button>
-    <p class="skip-note">Stay on {{ ap_ssid or "the unit's Wi-Fi" }} while you do this. Type the
-    <b>http://</b> part: the unit has no https page.</p>
-</details>
-{% endif %}
 
 <form method="post" id="network-form">
     {% if station_ssid %}
@@ -132,17 +117,6 @@
 {% block scripts %}
 <script>
 (function () {
-  var copy = document.getElementById('copy-url');
-  var url = document.getElementById('own-browser-url');
-  if (copy && url) {
-    copy.addEventListener('click', function () {
-      // http pages get no navigator.clipboard; select and copy the old way.
-      url.focus(); url.select(); url.setSelectionRange(0, url.value.length);
-      var ok = false;
-      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
-      copy.textContent = ok ? 'Copied' : 'Press and hold the address to copy';
-    });
-  }
   var pw = document.getElementById('password');
   var show = document.getElementById('show-password');
   if (pw && show) show.addEventListener('change', function () { pw.type = show.checked ? 'text' : 'password'; });
