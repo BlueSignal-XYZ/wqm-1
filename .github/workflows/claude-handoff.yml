@@ -1,0 +1,130 @@
+name: Claude handoff
+
+# The Grok bots and Claude hand work to each other here, so the Captain only
+# talks to Grok. Labels say whose turn it is (AGENTS.md, "AI staff"):
+#
+#   issue labelled `needs-plan`  -> Claude writes the plan as one comment,
+#                                   then swaps the label to `plan-ready`.
+#   PR labelled `needs-review`   -> Claude reviews the PR against its plan,
+#                                   then swaps the label to `review-passed`
+#                                   or `changes-requested`.
+#
+# Claude here can read the repo and write comments and labels. It cannot
+# push, approve, merge or deploy: contents is read-only and the tool list
+# below names only gh comment/label/read commands. A label set by this
+# workflow's token does not start another workflow, so the two jobs cannot
+# trigger each other in a loop.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, draws on the
+# Claude subscription) is used when set; ANTHROPIC_API_KEY otherwise.
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+jobs:
+  plan:
+    if: github.event_name == 'issues' && github.event.label.name == 'needs-plan'
+    # Job-level, so a run for some other label (skipped job) never cancels
+    # a plan or review in flight.
+    concurrency:
+      group: claude-plan-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Write the plan
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          github_token: ${{ github.token }}
+          allowed_bots: 'cursor'
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(git log:*),Bash(git show:*)"
+          prompt: |
+            You are the planner on the BlueSignal AI staff. A Grok bot has asked
+            for a plan on issue #${{ github.event.issue.number }} in ${{ github.repository }}.
+            Read AGENTS.md and CLAUDE.md first, then the issue (gh issue view
+            ${{ github.event.issue.number }} --comments), then the code it touches.
+
+            Post ONE comment on the issue, starting with the line "## Plan", that a
+            builder can follow without asking anything:
+            1. Goal, in one sentence.
+            2. Files to change, each with what changes and why.
+            3. Tests that prove it, by file name, and what each asserts.
+            4. Done when: checks a reviewer can tick.
+            5. Traps: rules in AGENTS.md / CLAUDE.md this change could break.
+            6. Out of scope.
+            7. Questions for the Captain, only if something is genuinely his call.
+
+            Do not change any file. Do not open a PR. When the comment is posted,
+            run: gh issue edit ${{ github.event.issue.number }} --remove-label needs-plan --add-label plan-ready
+
+  review:
+    if: github.event_name == 'pull_request' && github.event.label.name == 'needs-review'
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Review against the plan
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          github_token: ${{ github.token }}
+          allowed_bots: 'cursor,dependabot,renovate'
+          additional_permissions: |
+            actions: read
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr comment:*),Bash(gh pr edit:*),Bash(gh issue view:*),Bash(gh run view:*),Bash(gh run list:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)"
+          prompt: |
+            You are the reviewer on the BlueSignal AI staff. Review PR
+            #${{ github.event.pull_request.number }} in ${{ github.repository }} before
+            the Captain merges it. Read AGENTS.md and CLAUDE.md first.
+
+            Find the plan: the PR body links an issue ("Plan: #N", "Closes #N" or
+            "Fixes #N"); read that issue's "## Plan" comment. No plan means say so
+            and review against the PR description.
+
+            Check, in this order:
+            1. Does the diff do what the plan says, and nothing it rules out?
+            2. Correctness: real bugs with a concrete failing input, not style.
+            3. Rules in AGENTS.md / CLAUDE.md the diff breaks.
+            4. Tests: does each new test fail without the change? Name any that
+               would pass with the fix reverted.
+            5. CI on the head commit (gh pr checks). Red is a finding.
+
+            Post ONE comment on the PR starting with "## Review", listing findings
+            most severe first, each with file:line and the fix. End with the line
+            "Not verified: ..." naming what you could not check, then exactly one of:
+            "Verdict: ready for the Captain" or "Verdict: changes needed".
+
+            Never approve, merge, push or change files. When the comment is posted, run:
+            gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --add-label review-passed
+            or, if changes are needed:
+            gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --add-label changes-requested

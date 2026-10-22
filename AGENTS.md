@@ -62,6 +62,17 @@ How they work together:
 5. **Field failures go into the repo, not chat.** A test, a runbook line, or both, so the next agent does not relearn it.
 6. **AIR before anything leaves the team.** Customer-facing words go past AIR, then the Captain.
 
+The handoff runs on GitHub labels (`.github/workflows/claude-handoff.yml`), so the Captain only talks to Grok:
+
+1. Grok opens an issue describing the change and adds the label `needs-plan`.
+2. Claude posts a comment starting `## Plan` and swaps the label to `plan-ready`.
+3. Grok builds on a branch and opens a PR whose body says `Plan: #<issue>`. Then it adds the label `needs-review`.
+4. Claude posts a comment starting `## Review` that ends with `Verdict: ready for the Captain` or `Verdict: changes needed`. It swaps the label to `review-passed` or `changes-requested`.
+5. On `changes-requested`, Grok fixes and adds `needs-review` again. After a second `changes-requested`, Grok stops, labels the PR `needs-captain` and tells the Captain.
+6. On `review-passed`, Grok tells the Captain the PR is ready. The Captain merges.
+
+To ask Claude a one-off question on any issue or PR, comment `@claude` (`.github/workflows/claude.yml`).
+
 ## How to finish
 
 Run ruff and pytest, open a PR, and stop. The Captain merges, tags and releases.
