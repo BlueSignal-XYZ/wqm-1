@@ -1,7 +1,7 @@
 {% extends "setup_base.html" %}
 {% block title %}Setup — Done{% endblock %}
 {% block content %}
-<h1 class="setup-h1">Joined {{ ssid }}. Setup is finished.</h1>
+<h1 class="setup-h1">Joined {{ ssid }}. You&rsquo;re done here.</h1>
 <p class="lead">{{ identity.device_id }} is restarting on the owner&rsquo;s network{% if ip %}
 at {{ ip }}{% endif %}. It registers itself with BlueSignal Cloud — no key paste.</p>
 {% if registration %}
@@ -13,9 +13,9 @@ at {{ ip }}{% endif %}. It registers itself with BlueSignal Cloud — no key pas
 <div class="flash error" role="alert">{{ weak_message }}{% if rssi is not none %} ({{ rssi }} dBm){% endif %}</div>
 {% endif %}
 <div class="next-step">
-    <div class="next-step-title">Next: scan the label on the box</div>
-    <p>Your phone camera opens BlueSignal Cloud, shows the unit checking in, and adds it
-    to the owner&rsquo;s account.</p>
+    <div class="next-step-title">Next: finish in BlueSignal Cloud</div>
+    <p>Scan the label on the box, or open the unit in Cloud. The owner, the probes
+    that are fitted, thresholds and alerts are all set there.</p>
 </div>
 {% if forgotten %}
 <p class="skip-note">The unit forgot {{ forgotten|join(', ') }} and will only look for

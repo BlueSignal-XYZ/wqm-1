@@ -2,7 +2,9 @@
 {% from "_health.html" import health_card %}
 {% block title %}Setup — Network{% endblock %}
 {% block content %}
-<h1 class="setup-h1">Last step: connect it</h1>
+<h1 class="setup-h1">Connect it to Wi-Fi</h1>
+{% if cell_note %}<p class="setup-alert" role="note">{{ cell_note }}</p>{% endif %}
+<p class="lead">That is the only thing to do here. Probes, alerts and the owner are set up in BlueSignal Cloud once the unit is online.</p>
 
 {% if last_join %}
 <div class="flash error" role="alert">
@@ -10,8 +12,23 @@
 </div>
 {% endif %}
 
+{% if on_ap %}
+<details class="setup-details" id="own-browser">
+    <summary>Rather use Brave, Chrome or Safari?</summary>
+    <p>This page opened in your phone&rsquo;s sign-in window. To use your own browser:</p>
+    <ol style="padding-left: 1.25em">
+        <li>iPhone: tap <b>Cancel</b> at the top right, then <b>Use Without Internet</b>.
+        Android: tap <b>&#8942;</b>, then <b>Use this network as is</b>.</li>
+        <li>Open your browser and go to this address:</li>
+    </ol>
+    <div class="id-row"><input id="own-browser-url" class="id-value" readonly value="http://192.168.4.1" aria-label="Setup address"></div>
+    <button type="button" class="btn btn-secondary" id="copy-url">Copy address</button>
+    <p class="skip-note">Stay on {{ ap_ssid or "the unit's Wi-Fi" }} while you do this. Type the
+    <b>http://</b> part: the unit has no https page.</p>
+</details>
+{% endif %}
+
 <form method="post" id="network-form">
-    {% include "setup/_probes.html" %}
     {% if station_ssid %}
     <p class="lead">This unit is on <b>{{ station_ssid }}</b>.</p>
     <div class="grid">
@@ -29,14 +46,13 @@
         <div class="id-row"><code class="id-value">{{ wifi.ip or '—' }}</code></div>
     </div>
     <div class="setup-actions">
-        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg btn-block">Keep {{ station_ssid }} and finish</button>
+        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg btn-block">Keep {{ station_ssid }}</button>
     </div>
     {% endif %}
 
     {% if on_ap or not station_ssid %}
     {% if not station_ssid %}
-    <p class="lead">Have the owner pick their Wi-Fi and type the password. Do this where
-    the unit will live, lid closed.</p>
+    <p class="skip-note">Do this standing where the unit lives, lid closed.</p>
     {% if not on_ap %}<p class="skip-note">Not connected to any network yet.</p>{% endif %}
     {% else %}
     <h2>Or join a different network</h2>
@@ -95,7 +111,7 @@
     the router, this page comes back within a minute and says which one happened.</p>
     {% endif %}
     <div class="setup-actions">
-        <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join and finish</button>
+        <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join</button>
     </div>
     {% if networks %}<p class="skip-note center"><button type="submit" class="link-button" form="rescan-form">Don&rsquo;t see it? Scan again</button></p>{% endif %}
     {% endif %}
@@ -110,19 +126,23 @@
         <button type="submit" name="action" value="declare" class="btn btn-secondary">Continue without Wi-Fi</button>
     </details>
 
-    <details class="setup-details">
-        <summary>Radios fitted <span class="summary-hint">{{ ['LoRa' if lora_enabled, 'GPS' if gps_enabled]|select|join(' + ') or 'none' }}</span></summary>
-        <label><input type="checkbox" name="lora_enabled" {{ 'checked' if lora_enabled }}> LoRa radio (long-range backup to a gateway)</label>
-        <label><input type="checkbox" name="gps_enabled" {{ 'checked' if gps_enabled }}> GPS receiver</label>
-        <p class="skip-note">Saved with whichever button you tap above. Monitoring and
-        fail-safe control run on the unit whatever the network does.</p>
-    </details>
 </form>
 <form method="post" id="rescan-form"><input type="hidden" name="action" value="rescan"></form>
 {% endblock %}
 {% block scripts %}
 <script>
 (function () {
+  var copy = document.getElementById('copy-url');
+  var url = document.getElementById('own-browser-url');
+  if (copy && url) {
+    copy.addEventListener('click', function () {
+      // http pages get no navigator.clipboard; select and copy the old way.
+      url.focus(); url.select(); url.setSelectionRange(0, url.value.length);
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      copy.textContent = ok ? 'Copied' : 'Press and hold the address to copy';
+    });
+  }
   var pw = document.getElementById('password');
   var show = document.getElementById('show-password');
   if (pw && show) show.addEventListener('change', function () { pw.type = show.checked ? 'text' : 'password'; });

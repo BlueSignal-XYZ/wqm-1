@@ -17,6 +17,7 @@
     </header>
 
     <main class="setup-shell">
+        {% if steps|length > 1 %}
         <ol class="steps-track" aria-label="Setup progress">
             {% set labels = {'welcome': 'Welcome', 'pin': 'PIN', 'identity': 'Identity',
                              'network': 'Network', 'cloud': 'Cloud', 'sensors': 'Sensors',
@@ -29,6 +30,7 @@
             </li>
             {% endfor %}
         </ol>
+        {% endif %}
 
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}

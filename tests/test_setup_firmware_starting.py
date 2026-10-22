@@ -36,13 +36,12 @@ class TestSetupWhenFirmwareIsAbsent:
         self, tmp_path, mock_hardware, monkeypatch
     ):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        assert client.get("/setup/").headers["Location"].endswith("/setup/network")
         for path in (
-            "/setup/",
             "/setup/pin",
             "/setup/identity",
             "/setup/cloud",
             "/setup/sensors",
-            "/setup/network",
             "/setup/done",
         ):
             resp = client.get(path)
@@ -50,6 +49,16 @@ class TestSetupWhenFirmwareIsAbsent:
             assert STARTING in resp.data
             assert b"firmware-starting" in resp.data
             assert b"5000" in resp.data
+
+    def test_the_wifi_page_does_not_wait_on_the_firmware(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        resp = client.get("/setup/network")
+        assert resp.status_code == 200
+        assert STARTING not in resp.data
+        assert b"steps-track" not in resp.data
+        assert b"window.location.reload()" not in resp.data
 
     def test_identity_shows_a_device_id_not_an_error(self, tmp_path, mock_hardware, monkeypatch):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
@@ -155,7 +164,7 @@ class TestStartingRefreshNeverEatsTyping:
 
     def test_pin_and_network_pages_guard_the_refresh(self, tmp_path, mock_hardware, monkeypatch):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
-        for path in ("/setup/pin", "/setup/network"):
+        for path in ("/setup/pin", "/setup/sensors"):
             page = client.get(path).data.decode()
             assert "window.location.reload()" in page, path
             assert "if (touched) { return; }" in page, path
@@ -173,21 +182,10 @@ class TestStartingRefreshNeverEatsTyping:
 
 class TestComingBackMidSetup:
     """An installer who leaves mid-setup (a call, a swipe) and comes back
-    must not be sent round the PIN step again."""
+    lands on the Wi-Fi page, whatever happened before."""
 
-    def test_welcome_starts_at_the_pin_on_a_factory_unit(
-        self, tmp_path, mock_hardware, monkeypatch
-    ):
+    def test_the_landing_page_is_the_wifi_page(self, tmp_path, mock_hardware, monkeypatch):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
-        page = client.get("/setup/").data.decode()
-        assert 'href="/setup/pin"' in page and "Start setup" in page
-
-    def test_welcome_continues_to_wifi_once_the_pin_is_set(
-        self, tmp_path, mock_hardware, monkeypatch
-    ):
-        client, app = _client(tmp_path, mock_hardware, monkeypatch)
+        assert client.get("/setup/").headers["Location"].endswith("/setup/network")
         client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
-        page = client.get("/setup/").data.decode()
-        assert 'href="/setup/network"' in page
-        assert "connect to Wi-Fi" in page
-        assert "Start setup" not in page
+        assert client.get("/setup/").headers["Location"].endswith("/setup/network")

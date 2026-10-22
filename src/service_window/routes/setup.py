@@ -89,7 +89,13 @@ logger = logging.getLogger("wqm1.setup")
 
 @setup_bp.context_processor
 def _firmware_starting_ctx() -> dict[str, bool]:
-    """Every setup template can show the starting banner and poll."""
+    """Every setup template can show the starting banner and poll.
+
+    Not the Wi-Fi page: it needs nothing from the monitoring process, and a
+    "checking sensors" line there points the installer at the wrong job.
+    """
+    if request.endpoint == "setup.network":
+        return {"firmware_starting": False}
     try:
         ready, _report = firmware_snapshot(current_app.config["CMD_SOCK"])
     except Exception:  # noqa: BLE001 — the page must still render
@@ -222,20 +228,15 @@ def _probe_block(form: dict | None = None) -> tuple[list[dict[str, str]], str | 
 
 @setup_bp.route("/")
 @login_required
-def welcome() -> str:
-    config = read_config(current_app.config["CONFIG_PATH"])
-    return render_template(
-        "setup/welcome.html",
-        steps=steps_for(config),
-        step="welcome",
-        carded=is_carded(config),
-        # Back after a call, a swipe, or a phone that reopened the sign-in
-        # sheet on this page: the PIN is already set, so do not send them
-        # round the PIN step again (WQM-10001, 2026-10-21). Getting online is
-        # the one step that matters, so that is where "continue" goes.
-        resume=current_app.config.get("PIN") != _FACTORY_PIN,
-        cell_note=cell_data_note(_ap_ssid()),
-    )
+def welcome() -> ResponseReturnValue:
+    """The hotspot's landing page is the Wi-Fi page.
+
+    Getting online is the only thing the unit asks for on site. Probes,
+    thresholds, alerts and the owner are set from BlueSignal Cloud once it
+    is online (founder, 2026-10-22, after WQM-10001). A PIN, a probe list
+    and a variant before the join were what made a 2-minute step an hour.
+    """
+    return redirect(url_for("setup.network"))
 
 
 @setup_bp.route("/pin", methods=["GET", "POST"])
@@ -329,14 +330,14 @@ def _join_notice(ssid: str, result: dict) -> dict:
 def _declare(form: dict, backhaul: str) -> None:
     """Record the variant — unticked means NOT fitted, the same rule the
     sensors step applies to probes."""
-    update_config(
-        current_app.config["CONFIG_PATH"],
-        {
-            "backhaul": backhaul,
-            "lora_enabled": form.get("lora_enabled") == "on",
-            "gps_enabled": form.get("gps_enabled") == "on",
-        },
-    )
+    values: dict[str, object] = {"backhaul": backhaul}
+    # The Wi-Fi page no longer asks about radios. Only a form that carries
+    # the radio block (the declare path on a bench) may change them; a
+    # missing box is not an untick.
+    if "radios_declared" in form:
+        values["lora_enabled"] = form.get("lora_enabled") == "on"
+        values["gps_enabled"] = form.get("gps_enabled") == "on"
+    update_config(current_app.config["CONFIG_PATH"], values)
 
 
 @setup_bp.route("/network", methods=["GET", "POST"])
@@ -408,13 +409,16 @@ def network() -> ResponseReturnValue:
             hidden_prefill = ""
         return render_template(
             "setup/network.html",
-            steps=_steps(),
+            # One step on site now; no progress track for a single page.
+            steps=["network"],
             step="network",
             wifi=wifi_now,
             station_ssid=station_ssid,
             station_weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
             cards=cards,
             on_ap=on_ap_now,
+            ap_ssid=_ap_ssid() if on_ap_now else "",
+            cell_note=cell_data_note(_ap_ssid()) if on_ap_now else "",
             networks=choices,
             blocked=blocked_networks(scanned),
             hidden_prefill=hidden_prefill,
@@ -435,11 +439,6 @@ def network() -> ResponseReturnValue:
 
     if request.method == "POST":
         action = request.form.get("action", "")
-        if action in ("join", "keep") and current_app.config.get("PIN") == _FACTORY_PIN:
-            # Checked BEFORE the radio is touched: after a successful join
-            # nobody on the hotspot can be sent back to the PIN step.
-            flash("Set your own PIN first — the factory PIN is not allowed.", "error")
-            return redirect(url_for("setup.pin"))
         if action == "join":
             hidden_name = request.form.get("hidden_ssid", "").strip()
             ssid = hidden_name or request.form.get("ssid", "").strip()
@@ -467,10 +466,6 @@ def network() -> ResponseReturnValue:
             problem = password_problem(password, secured=bool(match and match.get("secured")))
             if problem:
                 flash(problem, "error")
-                return redirect(url_for("setup.network"))
-            _rows, probe_error = _probe_block(request.form)
-            if probe_error:
-                flash(probe_error, "error")
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             ap_ssid, ap_pass = ap_credentials()
@@ -520,10 +515,6 @@ def network() -> ResponseReturnValue:
                     "This unit is not on a network with an address yet — pick one and join it.",
                     "error",
                 )
-                return redirect(url_for("setup.network"))
-            _rows, probe_error = _probe_block(request.form)
-            if probe_error:
-                flash(probe_error, "error")
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             _kick_register()
@@ -775,14 +766,6 @@ def done() -> ResponseReturnValue:
 
     rows, probe_error = _probe_block(request.form if request.method == "POST" else None)
     if request.method == "POST":
-        # The wizard cannot finish on the factory PIN. The PIN step refuses
-        # 1234 on its own page, but nothing stopped a unit reaching Finish
-        # with the shipped PIN still in place (test #2 of the commissioning
-        # plan) — and a finished unit with PIN 1234 is a unit anyone on the
-        # site network can drive.
-        if current_app.config.get("PIN") == _FACTORY_PIN:
-            flash("Set your own PIN before finishing — the factory PIN is not allowed.", "error")
-            return redirect(url_for("setup.pin"))
         if probe_error:
             flash(probe_error, "error")
             return redirect(url_for("setup.done"))
