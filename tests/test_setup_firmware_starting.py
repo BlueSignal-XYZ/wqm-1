@@ -146,3 +146,48 @@ class TestMissingProbeFromStatusFile:
         page = client.get("/setup/sensors").data.decode()
         assert "checking" in page
         assert "Finish without probe" not in page
+
+
+class TestStartingRefreshNeverEatsTyping:
+    """Field, 2026-10-21 (WQM-10001): the 5 s refresh wiped the PIN and the
+    Wi-Fi password while the installer was typing them. The refresh still
+    runs on an untouched page, and stops once a field is touched."""
+
+    def test_pin_and_network_pages_guard_the_refresh(self, tmp_path, mock_hardware, monkeypatch):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        for path in ("/setup/pin", "/setup/network"):
+            page = client.get(path).data.decode()
+            assert "window.location.reload()" in page, path
+            assert "if (touched) { return; }" in page, path
+            assert "'input', 'keydown', 'pointerdown'" in page, path
+            # Focus alone is not typing: the PIN field autofocuses, and a
+            # focus guard stopped the refresh on an untouched page.
+            assert "focusin" not in page, path
+
+    def test_no_unconditional_reload_is_left_in_the_setup_base(self):
+        base = (
+            Path(__file__).resolve().parent.parent / "src/service_window/templates/setup_base.html"
+        ).read_text()
+        assert "setTimeout(function () { window.location.reload(); }" not in base
+
+
+class TestComingBackMidSetup:
+    """An installer who leaves mid-setup (a call, a swipe) and comes back
+    must not be sent round the PIN step again."""
+
+    def test_welcome_starts_at_the_pin_on_a_factory_unit(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        page = client.get("/setup/").data.decode()
+        assert 'href="/setup/pin"' in page and "Start setup" in page
+
+    def test_welcome_continues_to_wifi_once_the_pin_is_set(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        client, app = _client(tmp_path, mock_hardware, monkeypatch)
+        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
+        page = client.get("/setup/").data.decode()
+        assert 'href="/setup/network"' in page
+        assert "connect to Wi-Fi" in page
+        assert "Start setup" not in page

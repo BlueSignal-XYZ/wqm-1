@@ -229,6 +229,11 @@ def welcome() -> str:
         steps=steps_for(config),
         step="welcome",
         carded=is_carded(config),
+        # Back after a call, a swipe, or a phone that reopened the sign-in
+        # sheet on this page: the PIN is already set, so do not send them
+        # round the PIN step again (WQM-10001, 2026-10-21). Getting online is
+        # the one step that matters, so that is where "continue" goes.
+        resume=current_app.config.get("PIN") != _FACTORY_PIN,
         cell_note=cell_data_note(_ap_ssid()),
     )
 

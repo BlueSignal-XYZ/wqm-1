@@ -510,6 +510,10 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# While the hotspot is up and idle, retry the saved site network every 5 min
+# (router slower than the Pi after a power cut). Never while a phone is on it.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.timer" /etc/systemd/system/
 # Not enabled. OnFailure= of bluesignal-ap-fallback.service starts it.
 sudo cp "$SCRIPT_DIR/systemd/wqm1-apfail.service" /etc/systemd/system/
 # Setup AP processes. Not enabled: netctl starts and stops them. The distro
@@ -549,6 +553,7 @@ sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-captive-portal.service
 sudo systemctl enable bluesignal-ota.service
 sudo systemctl enable bluesignal-ap-fallback.service
+sudo systemctl enable bluesignal-wifi-retry.timer
 sudo systemctl enable bluesignal-burnin.service
 sudo systemctl enable bluesignal-card.service
 

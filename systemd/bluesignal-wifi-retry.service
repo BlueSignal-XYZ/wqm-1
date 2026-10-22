@@ -1,0 +1,16 @@
+[Unit]
+Description=BlueSignal WQM-1 retry the saved site Wi-Fi while the setup hotspot is idle
+# Started by bluesignal-wifi-retry.timer. Does nothing unless the setup
+# hotspot is up, no phone is on it, and a site network is saved; on failure
+# the hotspot comes back unchanged. Covers the router that boots slower than
+# the Pi after a power cut, and a first join that missed.
+After=NetworkManager.service bluesignal-ap-fallback.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-ap-fallback.py --retry
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=150

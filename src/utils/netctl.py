@@ -99,7 +99,15 @@ from utils.wifi_setup import parse_iw_scan as _parse_iw_scan
 logger = logging.getLogger("wqm1.netctl")
 
 AP_CONNECTION_NAME = "wqm1-setup-ap"
-AP_GRACE_S = 45
+# How long boot keeps actively trying a SAVED network before it raises the
+# setup hotspot. 45 s of passive waiting was not enough on a Pi Zero W
+# (WQM-10001, 2026-10-21); the grace now rescans and brings the profile up
+# itself, and it is long enough for two full attempts.
+AP_GRACE_S = 90
+# A saved-profile listing that FAILS (NetworkManager not answering yet at
+# boot) is retried this many times before it is read as "nothing saved".
+SAVED_LIST_RETRIES = 6
+SAVED_LIST_RETRY_S = 3.0
 # The setup AP is hostapd on wlan0, not an NM shared connection. NM 1.52.1
 # cannot be told to offer WPA-PSK without WPA-PSK-SHA256, and that AKM
 # fails the 4-way handshake on BCM43430/1 firmware 7.45.98 when PMF is off.
@@ -129,6 +137,14 @@ JOIN_TIMEOUT_S = 40
 # nmcli's own activation timeout is JOIN_TIMEOUT_S and sits inside this budget.
 ADDRESS_WAIT_S = 55.0
 ADDRESS_POLL_S = 2.0
+# After the setup AP lets go of wlan0, NetworkManager's scan list is EMPTY:
+# it could not scan while hostapd held the radio. `nmcli device wifi connect`
+# against an empty list answers "No network with SSID ... found" at once, so
+# a join that did not wait for a scan failed every time (field, 2026-10-21:
+# WQM-10001 could not join a router in the same room). The join rescans and
+# waits up to SCAN_WAIT_S for the SSID before connecting.
+SCAN_WAIT_S = 20.0
+SCAN_POLL_S = 2.0
 PROBE_TIMEOUT_S = 0.8
 _SSID_RE = re.compile(r"^[^\x00-\x1f]{1,32}$")
 _INET_RE = re.compile(r"\binet\s+(\d+\.\d+\.\d+\.\d+)")
@@ -915,6 +931,80 @@ def _restore_ap(
     return restored
 
 
+def _visible_ssids(iface: str) -> set[str]:
+    """SSIDs in NetworkManager's scan list right now (no rescan here)."""
+    rc, out, _ = _nmcli(
+        "-t",
+        "-f",
+        "SSID,SIGNAL,SECURITY,FREQ",
+        "device",
+        "wifi",
+        "list",
+        "ifname",
+        iface,
+    )
+    if rc != 0:
+        return set()
+    return {str(n.get("ssid") or "") for n in parse_nmcli_wifi(out) if n.get("ssid")}
+
+
+def wait_for_ssid(
+    ssid: str,
+    iface: str = DEFAULT_WIFI_IFACE,
+    sleep: Any = time.sleep,
+    clock: Any = time.monotonic,
+    wait_s: float = SCAN_WAIT_S,
+) -> bool:
+    """Rescan until ``ssid`` is in NetworkManager's list, or ``wait_s`` passes.
+
+    True when it was seen. False is not a verdict on its own: a hidden
+    network never appears in a scan, so the caller still tries the join.
+    """
+    deadline = clock() + wait_s
+    while True:
+        _nmcli("device", "wifi", "rescan", "ifname", iface, timeout=20)
+        if ssid in _visible_ssids(iface):
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(SCAN_POLL_S)
+
+
+def _connect(
+    ssid: str,
+    password: str | None,
+    iface: str,
+    sleep: Any,
+    clock: Any,
+) -> tuple[int, str, str]:
+    """Scan, connect, and retry the one failure a slow scan causes.
+
+    1. Wait for the SSID to appear in a fresh scan (a just-released radio
+       has an empty list).
+    2. If NetworkManager still answers "not found", rescan once more and
+       retry.
+    3. Then try it as a hidden network (an active probe for this SSID),
+       which does not need the network to be in the list at all.
+
+    Returns (rc, nmcli text with the password redacted, last stage).
+    """
+    seen = wait_for_ssid(ssid, iface, sleep=sleep, clock=clock)
+    if not seen:
+        logger.warning("%s not seen in a scan yet; trying the join anyway", ssid)
+    base = wifi_connect_argv(ssid, password, iface)
+    attempts = [("scan", base), ("rescan", base), ("hidden", [*base, "hidden", "yes"])]
+    rc, nm_text, stage = 0, "", "scan"
+    for i, (stage, argv) in enumerate(attempts):
+        if i == 1:
+            wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=SCAN_WAIT_S / 2)
+        rc, out, err = _nmcli(*argv, timeout=float(JOIN_TIMEOUT_S))
+        nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
+        if rc == 0 or _classify_connect_error(nm_text) != "not_found":
+            return rc, nm_text, stage
+        logger.warning("Join %s: %s (attempt %d/%d)", ssid, nm_text, i + 1, len(attempts))
+    return rc, nm_text, stage
+
+
 def join_network(
     ssid: str,
     password: str | None,
@@ -975,7 +1065,6 @@ def join_network(
                 portal="up (80)" if result.get("ap_restored") else "down: hotspot down",
             )
         return result
-    deadline = clock() + address_wait_s
     had_ap = ap_active(iface)
     if had_ap:
         stop_ap(iface)
@@ -985,10 +1074,10 @@ def join_network(
         _disarm_portal("joining")
     # One argv element for the password, so a space or a quote is the
     # password and not a shell metacharacter. Nothing here logs that element.
-    argv = wifi_connect_argv(ssid, password, iface)
-    remaining = max(1.0, deadline - clock())
-    rc, out, err = _nmcli(*argv, timeout=min(float(JOIN_TIMEOUT_S), remaining))
-    nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
+    rc, nm_text, _stage = _connect(ssid, password, iface, sleep, clock)
+    # The address budget starts once NetworkManager has the network, so a
+    # slow scan does not eat the DHCP wait.
+    deadline = clock() + address_wait_s
     fast = _classify_connect_error(nm_text) if rc != 0 else None
     if fast in ("wrong_password", "not_found"):
         snap = read_iface_net(iface)
@@ -1240,14 +1329,49 @@ def ensure_reachable(
     # profiles (nmcli missing or not up yet) also returns an empty list;
     # trying the AP is the point of this service, and the attempts below
     # still back off.
-    grace = 0.0 if reconfirm else (grace_s if saved_wifi(iface) else 0.0)
+    # Ask for the saved profiles until NetworkManager answers. A failed
+    # listing used to read as "nothing saved", so a slow NetworkManager at
+    # boot skipped the grace entirely and the unit sat on its hotspot with
+    # the site network saved and never tried.
+    profiles: list[dict[str, str]] = []
+    if not reconfirm:
+        for i in range(SAVED_LIST_RETRIES):
+            listed = _list_saved_wifi(iface)
+            if listed is not None:
+                profiles = listed
+                break
+            if i + 1 < SAVED_LIST_RETRIES:
+                sleep(SAVED_LIST_RETRY_S)
+    grace = grace_s if profiles else 0.0
     started = clock()
+    last_error = ""
     while clock() - started < grace:
         taken = _take_station()
         if taken:
             return taken
         _note_unusable()
-        sleep(3)
+        if not station_connected(iface):
+            # Drive it: a fresh scan, then bring each saved profile up. Waiting
+            # for NetworkManager's own autoconnect was the passive half of the
+            # field failure.
+            for prof in profiles:
+                wait_for_ssid(prof["ssid"], iface, sleep=sleep, clock=clock, wait_s=6.0)
+                rc, out, err = _nmcli(
+                    "connection", "up", prof["name"], "ifname", iface, timeout=float(JOIN_TIMEOUT_S)
+                )
+                if rc == 0:
+                    last_error = ""
+                    break
+                last_error = (err or out or f"nmcli rc {rc}").strip()
+                logger.warning("Saved network %s did not come up: %s", prof["ssid"], last_error)
+        # Give DHCP a moment before the next attempt.
+        for _ in range(5):
+            taken = _take_station()
+            if taken:
+                return taken
+            if clock() - started >= grace:
+                break
+            sleep(3)
     # A station that associated and never got a lease still owns wlan0.
     # Release it so the hotspot command is not refused.
     if station_connected(iface) and _station_ready(iface) is None:
@@ -1280,7 +1404,98 @@ def ensure_reachable(
     result: dict[str, Any] = {"ok": ok, "mode": "ap", "ap": ok, "detail": last}
     if unusable_station:
         result["station_failure"] = "no address"
+    elif last_error:
+        # Written to wqm1-status.txt, which is how a pulled card is read.
+        kind = _classify_connect_error(last_error) or "no_association"
+        result["station_failure"] = _STATION_FAIL.get(kind, "could not join")
     return result
+
+
+# While the setup hotspot is up and nobody is on it, a saved site network is
+# tried again on this cadence (bluesignal-wifi-retry.timer). Power comes back
+# after an outage and the Pi boots faster than the router; without a retry the
+# unit sat on its hotspot until someone power-cycled it.
+RETRY_STATION_WAIT_S = 40.0
+
+
+def ap_clients(iface: str = DEFAULT_WIFI_IFACE) -> int | None:
+    """Phones associated to the setup hotspot right now, or None if unknown."""
+    rc, out, _ = _run(["iw", "dev", iface, "station", "dump"], timeout=5)
+    if rc != 0:
+        return None
+    return sum(1 for line in out.splitlines() if line.startswith("Station "))
+
+
+def retry_saved_station(
+    ap_ssid: str,
+    ap_passphrase: str,
+    iface: str = DEFAULT_WIFI_IFACE,
+    sleep: Any = time.sleep,
+    clock: Any = time.monotonic,
+    wait_s: float = RETRY_STATION_WAIT_S,
+) -> dict[str, Any]:
+    """Try the saved site network again from the hotspot. Never strands anyone.
+
+    Does nothing unless the hotspot is up, NO phone is associated to it (an
+    installer mid-setup is never cut off), and a site network is saved. On
+    failure the hotspot comes back with the same name and password.
+    """
+    if netsim.is_virtual():
+        return {"skipped": "virtual radio"}
+    if not ap_active(iface):
+        return {"skipped": "hotspot not up"}
+    clients = ap_clients(iface)
+    if clients is None:
+        return {"skipped": "could not read hotspot clients"}
+    if clients > 0:
+        return {"skipped": "a phone is on the hotspot"}
+    profiles = _list_saved_wifi(iface) or []
+    if not profiles:
+        return {"skipped": "no saved network"}
+    stop_ap(iface)
+    _disarm_portal("joining")
+    last_error = ""
+    for prof in profiles:
+        wait_for_ssid(prof["ssid"], iface, sleep=sleep, clock=clock, wait_s=8.0)
+        rc, out, err = _nmcli(
+            "connection", "up", prof["name"], "ifname", iface, timeout=float(JOIN_TIMEOUT_S)
+        )
+        if rc != 0:
+            last_error = (err or out or f"nmcli rc {rc}").strip()
+            continue
+        deadline = clock() + wait_s
+        while True:
+            snap = _station_ready(iface)
+            if snap:
+                ip = str(snap["usable"][0])
+                _disarm_portal("station")
+                _publish_station(
+                    station=f"ok {ip}",
+                    hotspot="station",
+                    portal="down: station",
+                    station_rssi=format_station_rssi(read_station_rssi(iface)),
+                )
+                logger.info("Saved network %s joined on retry at %s", prof["ssid"], ip)
+                return {"ok": True, "mode": "station", "ip": ip}
+            if clock() >= deadline:
+                last_error = "no address"
+                break
+            sleep(ADDRESS_POLL_S)
+    if station_connected(iface):
+        _nmcli("device", "disconnect", iface)
+    restored = _restore_ap(True, ap_ssid, ap_passphrase, iface, sleep)
+    kind = (
+        "no_dhcp"
+        if last_error == "no address"
+        else (_classify_connect_error(last_error) or "no_association")
+    )
+    failure = _STATION_FAIL.get(kind, "could not join")
+    _publish_station(
+        station=f"fail: {failure}",
+        hotspot="up" if restored else "down",
+        portal="up (80)" if restored else "down: hotspot down",
+    )
+    return {"ok": restored, "mode": "ap", "ap": restored, "station_failure": failure}
 
 
 def saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]]:
@@ -1289,11 +1504,18 @@ def saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]]:
     wifi connect`` names the profile after the SSID) but need not — a profile
     written into the golden image by hand can be called anything — so both
     are read."""
+    listed = _list_saved_wifi(iface)
+    return listed if listed is not None else []
+
+
+def _list_saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]] | None:
+    """``saved_wifi``, but None when NetworkManager did not answer — which
+    is not the same as "nothing saved"."""
     if netsim.is_virtual():
         return [{"name": s, "ssid": s} for s in netsim.saved_wifi()]
     rc, out, _ = _nmcli("-t", "-f", "NAME,TYPE", "connection", "show")
     if rc != 0:
-        return []
+        return None
     found: list[dict[str, str]] = []
     for line in out.splitlines():
         # nmcli -t escapes a ':' inside a field as '\:'; split on the last one.

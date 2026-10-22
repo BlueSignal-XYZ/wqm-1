@@ -24,6 +24,11 @@ account.</p>
 </ol>
 {% endif %}
 <div class="setup-actions">
+    {% if resume %}
+    <a class="btn btn-primary btn-lg btn-block" href="{{ url_for('setup.network') }}">Continue &mdash; connect to Wi-Fi</a>
+    <p class="skip-note">Your PIN is set. The other steps are in the bar above.</p>
+    {% else %}
     <a class="btn btn-primary btn-lg btn-block" href="{{ url_for('setup.pin') }}">Start setup</a>
+    {% endif %}
 </div>
 {% endblock %}
