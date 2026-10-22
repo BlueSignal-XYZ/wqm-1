@@ -30,9 +30,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from utils.cardmove import status_values
 from utils.device_keys import registration_status
 
 logger = logging.getLogger("wqm1.boot_status")
+
+# Spoken on COMMISSION and in the burn-in result when the throttled
+# register shows undervoltage now or since this boot.
+WEAK_POWER_REASON = "weak power supply or cable"
 
 _KEYS = (
     "commission",
@@ -58,6 +63,9 @@ _KEYS = (
     "fatal",
     "uptime",
     "updated",
+    "boot",
+    "card",
+    "reconfirm",
 )
 
 # The publisher installed by setup.sh. The firmware user may sudo -n it;
@@ -263,8 +271,9 @@ def read_wifi_firmware() -> str:
     return _wifi_cache
 
 
-# Bits of `vcgencmd get_throttled`. Current conditions fail commissioning;
-# the since-boot bits are reported and do not, on their own.
+# Bits of `vcgencmd get_throttled`. Current conditions fail commissioning.
+# Since-boot undervoltage fails too (a weak supply during this boot). Other
+# since-boot bits are reported and do not, on their own.
 _THROTTLE_NOW = (
     (0x1, "undervoltage"),
     (0x2, "freq-capped"),
@@ -279,9 +288,25 @@ _THROTTLE_PAST = (
 )
 
 
+_THROTTLED_RE = re.compile(r"throttled=(0x[0-9a-fA-F]+)", re.IGNORECASE)
+_UNDERVOLTAGE_BITS = 0x1 | 0x10000
+_SEEN_RE = re.compile(r"undervoltage seen \((\d+)\)")
+
+
+def throttled_value(text: str) -> int | None:
+    """Integer from ``throttled=0x…`` or a bare ``0x…``. None when absent."""
+    match = _THROTTLED_RE.search(text or "")
+    if match:
+        return int(match.group(1), 16)
+    bare = re.search(r"\b(0x[0-9a-fA-F]+)\b", text or "")
+    if not bare:
+        return None
+    return int(bare.group(1), 16)
+
+
 def parse_throttled(text: str) -> str:
     """Decode ``throttled=0x…``. ``unknown`` when vcgencmd did not say."""
-    match = re.search(r"throttled=(0x[0-9a-fA-F]+)", text or "")
+    match = _THROTTLED_RE.search(text or "")
     if not match:
         return "unknown"
     value = int(match.group(1), 16)
@@ -298,12 +323,87 @@ def parse_throttled(text: str) -> str:
     return " ".join(parts)
 
 
-def read_power() -> str:
-    """Undervoltage / throttle. ``unknown`` when ``vcgencmd`` is not installed."""
-    rc, text = _run_text(["vcgencmd", "get_throttled"])
-    if rc != 0 and "throttled=" not in text:
+def text_has_undervoltage(power: str) -> bool:
+    """True when the line reports undervoltage now or since this boot."""
+    text = (power or "").strip().lower()
+    if text.startswith("undervoltage seen"):
+        return True
+    if "undervoltage" not in text:
+        return False
+    return text.startswith("now ") or "since-boot" in text
+
+
+def undervoltage_seen_count(power: str) -> int:
+    """How many times the line says undervoltage was seen. 1 for a bit set
+    with no explicit count. 0 when the line is not an undervoltage."""
+    match = _SEEN_RE.search(power or "")
+    if match:
+        return int(match.group(1))
+    if text_has_undervoltage(power):
+        return 1
+    return 0
+
+
+def format_power_line(text: str, count: int | None = None) -> str:
+    """Status ``power`` value. Undervoltage becomes ``undervoltage seen (N)``."""
+    value = throttled_value(text)
+    if value is None:
         return "unknown"
-    return parse_throttled(text)
+    if value & _UNDERVOLTAGE_BITS:
+        seen = 1 if count is None else max(1, count)
+        return f"undervoltage seen ({seen})"
+    if "throttled=" in (text or ""):
+        return parse_throttled(text)
+    return parse_throttled(f"throttled={value:#x}")
+
+
+def read_sysfs_throttled(root: Path | None = None) -> str:
+    """``throttled=0x…`` from the firmware sysfs node or a hwmon alarm.
+
+    ``root`` is the filesystem root (tests pass a tmp tree). ``""`` when
+    neither source is present.
+    """
+    base = root if root is not None else Path("/")
+    firmware = base / "sys/devices/platform/soc/soc:firmware/get_throttled"
+    try:
+        raw = firmware.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        raw = ""
+    if raw:
+        if raw.startswith("throttled=") or raw.startswith("0x"):
+            return raw if raw.startswith("throttled=") else f"throttled={raw}"
+        if raw.isdigit():
+            return f"throttled=0x{int(raw):x}"
+    hwmon = base / "sys/class/hwmon"
+    if hwmon.is_dir():
+        for alarm in sorted(hwmon.glob("hwmon*/in0_lcrit_alarm")):
+            try:
+                if alarm.read_text(encoding="utf-8").strip() == "1":
+                    return "throttled=0x1"
+            except OSError:
+                continue
+    return ""
+
+
+def read_power() -> str:
+    """Undervoltage / throttle. ``unknown`` when nothing reported it.
+
+    ``WQM1_THROTTLED_FILE`` is a test (or bench) stand-in for vcgencmd.
+    The sysfs node is the fallback when ``vcgencmd`` is not installed.
+    """
+    env = os.environ.get("WQM1_THROTTLED_FILE")
+    if env:
+        try:
+            return format_power_line(Path(env).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return "unknown"
+    _rc, text = _run_text(["vcgencmd", "get_throttled"])
+    if "throttled=" in text:
+        return format_power_line(text)
+    sysfs = read_sysfs_throttled()
+    if sysfs:
+        return format_power_line(sysfs)
+    return "unknown"
 
 
 def read_onewire_state() -> str:
@@ -370,9 +470,10 @@ def commission_verdict(fields: dict[str, str]) -> str:
 
     READY means an installer can reach the unit and the board is not in a
     state that will drop the hotspot or hide the sensors: the AP is up, or
-    a station link is up, and there is no current undervoltage and no known
-    ADC fault. A missing GPS fix or an unfitted 1-Wire probe does not fail
-    commissioning — both are optional on the bench.
+    a station link is up, and there is no undervoltage (now or since this
+    boot) and no known ADC fault. Undervoltage fails as
+    ``weak power supply or cable``. A missing GPS fix or an unfitted
+    1-Wire probe does not fail commissioning — both are optional on the bench.
     """
     reasons: list[str] = []
     hotspot = (fields.get("hotspot") or "").strip()
@@ -409,7 +510,9 @@ def commission_verdict(fields: dict[str, str]) -> str:
         if not portal.startswith("up"):
             reasons.append(f"portal {portal}" if portal else "portal down")
     power = (fields.get("power") or "").strip()
-    if power.startswith("now "):
+    if text_has_undervoltage(power):
+        reasons.append(WEAK_POWER_REASON)
+    elif power.startswith("now "):
         reasons.append(power)
     if (fields.get("adc") or "").strip() == "faulted":
         reasons.append("adc faulted")
@@ -431,9 +534,9 @@ def render_status(fields: dict[str, str]) -> str:
     verdict_line = f"COMMISSION: {verdict}"
     if _SECRET.search(verdict_line):
         verdict_line = "COMMISSION: [redacted]"
-    lines = [verdict_line, "WQM-1 boot status"]
+    lines = [verdict_line, _format_boot(fields.get("boot", "")), "WQM-1 boot status"]
     for key in _KEYS:
-        if key == "commission":
+        if key in ("commission", "boot"):
             continue
         value = fields.get(key, "")
         line = f"{key}: {value}"
@@ -441,6 +544,16 @@ def render_status(fields: dict[str, str]) -> str:
             line = f"{key}: [redacted]"
         lines.append(line)
     return "\n".join(lines) + "\n"
+
+
+def _format_boot(value: str) -> str:
+    """``BOOT: stage=<x>``. The early boot script writes the same line."""
+    text = (value or "").strip()
+    if text.startswith("stage="):
+        return f"BOOT: {text}"
+    if text:
+        return f"BOOT: stage={text}"
+    return "BOOT: stage=unknown"
 
 
 def _read_ssid() -> str:
@@ -655,7 +768,17 @@ def write_boot_status(
         "fatal": fatal if fatal is not None else prev.get("fatal", "none"),
         "uptime": uptime if uptime is not None else read_uptime(),
         "updated": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "boot": prev.get("boot") or "stage=status",
     }
+    try:
+        card_line, reconfirm_line = status_values()
+    except Exception as e:  # noqa: BLE001 — the status file is still written
+        logger.debug("card binding unreadable: %s", e)
+        card_line, reconfirm_line = prev.get("card", ""), prev.get("reconfirm", "")
+    if not card_line and not reconfirm_line:
+        card_line, reconfirm_line = prev.get("card", ""), prev.get("reconfirm", "")
+    fields["card"] = card_line
+    fields["reconfirm"] = reconfirm_line
     fields["commission"] = commission_verdict(fields)
     text = render_status(fields)
     wrote_state = False

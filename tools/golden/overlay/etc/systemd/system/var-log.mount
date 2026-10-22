@@ -1,0 +1,15 @@
+[Unit]
+Description=tmpfs for chatty logs (the journal bind-mount stays on the card)
+DefaultDependencies=no
+After=local-fs-pre.target
+Before=local-fs.target systemd-journald.service
+Conflicts=umount.target
+
+[Mount]
+What=tmpfs
+Where=/var/log
+Type=tmpfs
+Options=mode=0755,nosuid,nodev,noatime,size=32M
+
+[Install]
+WantedBy=local-fs.target

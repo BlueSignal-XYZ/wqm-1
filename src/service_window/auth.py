@@ -41,7 +41,11 @@ def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(f)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if not session.get("pin_verified") and not _first_setup_on_hotspot():
+        if (
+            not session.get("pin_verified")
+            and not _first_setup_on_hotspot()
+            and not _wifi_setup_on_hotspot()
+        ):
             return redirect(url_for("auth.login", next=request.path))
         return f(*args, **kwargs)
 
@@ -64,6 +68,46 @@ def _first_setup_on_hotspot() -> bool:
         from service_window.routes.setup import needs_setup
 
         return bool(needs_setup(current_app.config)) and from_hotspot()
+    except Exception:
+        return False
+
+
+_HOTSPOT_OPEN = frozenset({"setup.welcome", "setup.network", "setup.card_status"})
+
+
+def _wifi_setup_on_hotspot() -> bool:
+    """The setup pages, on this unit's own hotspot, never ask for a PIN.
+
+    The hotspot only comes up while the unit is offline, and joining it takes
+    the WPA2 passphrase on the card in the unit's box. That is the proof of
+    presence; a PIN on top of it is what sent an installer round in circles
+    on 2026-10-21 (set a PIN, get dropped, rejoin, get asked for it). Only
+    the Wi-Fi page (and the landing redirect to it) is open this way. The
+    PIN page is not: changing a PIN still needs the PIN once setup is done.
+    """
+    try:
+        from service_window.captive import from_hotspot
+
+        return request.endpoint in _HOTSPOT_OPEN and from_hotspot()
+    except Exception:
+        return False
+
+
+def factory_pin_refused() -> bool:
+    """The factory PIN never logs in from the owner's network.
+
+    Setup no longer asks for a PIN, so a unit online on a site network
+    still carries 1234, which is printed in every manual. It works on the
+    unit's own hotspot (passphrase-gated) and before setup has finished (the
+    bench); anywhere else it is refused.
+    """
+    try:
+        from service_window.captive import from_hotspot
+        from service_window.routes.setup import _FACTORY_PIN, needs_setup
+
+        if str(current_app.config.get("PIN")) != _FACTORY_PIN:
+            return False
+        return not needs_setup(current_app.config) and not from_hotspot()
     except Exception:
         return False
 
@@ -138,6 +182,12 @@ def login() -> ResponseReturnValue:
         else:
             _record_attempt(ip)
             pin = request.form.get("pin", "")
+            if factory_pin_refused():
+                error = (
+                    "This unit still has the factory PIN, which only works on its own "
+                    "setup hotspot. Set up this unit from BlueSignal Cloud."
+                )
+                return render_template("login.html", error=error)
             if hmac.compare_digest(pin.encode(), str(current_app.config["PIN"]).encode()):
                 _clear_failures(ip)
                 session["pin_verified"] = True

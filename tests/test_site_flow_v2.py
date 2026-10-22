@@ -163,9 +163,9 @@ class TestHotspotSkipsTheFactoryPin:
     ):
         app = self._app(tmp_path, mock_hardware, monkeypatch, True)
         with app.test_client() as c:
-            r = c.get("/setup/")
+            r = c.get("/setup/", follow_redirects=True)
         assert r.status_code == 200
-        assert b"set this unit up" in r.data
+        assert b"Connect it to Wi-Fi" in r.data
 
     def test_off_the_hotspot_the_pin_is_still_asked(self, tmp_path, mock_hardware, monkeypatch):
         app = self._app(tmp_path, mock_hardware, monkeypatch, False)
@@ -174,11 +174,35 @@ class TestHotspotSkipsTheFactoryPin:
         assert r.status_code == 302
         assert "/login" in r.headers["Location"]
 
-    def test_exemption_ends_once_the_factory_pin_is_gone(
+    def test_the_wifi_page_stays_open_on_the_hotspot_after_setup(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        """2026-10-21: an installer set the PIN, got dropped, rejoined the
+        hotspot and was asked for a PIN to reach the Wi-Fi page. Being on the
+        hotspot (its passphrase is on the card in the box) is enough."""
+        app = self._app(
+            tmp_path, mock_hardware, monkeypatch, True, pin="8642", setup_completed=True
+        )
+        with app.test_client() as c:
+            assert c.get("/setup/network").status_code == 200
+
+    def test_only_the_wifi_page_is_open_on_the_hotspot_after_setup(
         self, tmp_path, mock_hardware, monkeypatch
     ):
         app = self._app(
             tmp_path, mock_hardware, monkeypatch, True, pin="8642", setup_completed=True
+        )
+        with app.test_client() as c:
+            for path in ("/setup/pin", "/setup/sensors", "/settings/"):
+                r = c.get(path)
+                assert r.status_code == 302, path
+                assert "/login" in r.headers["Location"], path
+
+    def test_the_wifi_page_needs_the_pin_off_the_hotspot(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        app = self._app(
+            tmp_path, mock_hardware, monkeypatch, False, pin="8642", setup_completed=True
         )
         with app.test_client() as c:
             r = c.get("/setup/network")
@@ -213,8 +237,6 @@ class TestCardedUnit:
             assert r.headers["Location"].endswith("/setup/sensors")
             assert c.get("/setup/identity").headers["Location"].endswith("/setup/sensors")
             assert c.get("/setup/cloud").headers["Location"].endswith("/setup/done")
-            page = c.get("/setup/").data
-        assert b"already knows who it" in page
 
     def test_card_without_a_cloud_key_still_asks_for_it(self, tmp_path, mock_hardware, monkeypatch):
         _carded_identity(tmp_path, monkeypatch)
@@ -257,7 +279,7 @@ class TestJoinFinishesSetup:
                 "password": netsim.DEMO_HOME_PASSWORD,
             },
         )
-        assert b"Setup is finished" in r.data
+        assert b"You&rsquo;re done here" in r.data
         state = json.loads(virtual_net.read_text())
         assert state["station"] == netsim.DEMO_HOME_SSID
         assert state["saved"] == [netsim.DEMO_HOME_SSID]  # BlueSignal-Shop forgotten
@@ -501,7 +523,7 @@ class TestSiteScenarios:
         page = c.get("/setup/network").data.decode()
         assert "O&#39;Brien &#34;Home&#34;: 2.4G" in page  # escaped, not broken HTML
         r = c.post("/setup/network", data={"action": "join", "ssid": ssid, "password": password})
-        assert b"Setup is finished" in r.data
+        assert b"You&rsquo;re done here" in r.data
         assert json.loads(virtual_net.read_text())["station"] == ssid
 
     def test_longest_wpa2_password(self, tmp_path, mock_hardware, virtual_net):
@@ -617,21 +639,22 @@ class TestSiteScenarios:
             },
         )
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "cedar-river-42"))
-        monkeypatch.setattr(
-            netctl,
-            "forget_saved_wifi",
-            lambda keep, iface="wlan0": {
+
+        def _forget(keep, iface="wlan0"):
+            return {
                 "ok": False,
                 "forgotten": [],
                 "failed": ["BlueSignal-Shop"],
                 "kept": keep,
-            },
-        )
+            }
+
+        monkeypatch.setattr(netctl, "forget_saved_wifi", _forget)
+        monkeypatch.setattr("service_window.routes.setup.forget_saved_wifi", _forget)
         c, app = self._client(tmp_path, mock_hardware)
         r = c.post(
             "/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "x" * 9}
         )
-        assert b"Setup is finished" in r.data
+        assert b"You&rsquo;re done here" in r.data
         assert b"The unit forgot" not in r.data  # never claims a forget that failed
         assert self._done(app)
 
@@ -662,6 +685,10 @@ class TestSiteScenarios:
         app = make_app(tmp_path, mock_hardware)
         with app.test_client() as c:
             r = c.get("/setup/", headers={"Host": "demo-unit.trycloudflare.com"})
+            assert r.status_code == 302
+            assert "192.168.4.1" not in r.headers["Location"]
+            assert r.headers["Location"].endswith("/setup/network")
+            r = c.get("/setup/network", headers={"Host": "demo-unit.trycloudflare.com"})
         assert r.status_code == 200
 
 

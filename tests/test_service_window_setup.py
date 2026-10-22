@@ -68,7 +68,9 @@ class TestForcedSetup:
 
     def test_setup_and_login_are_reachable_on_factory_unit(self, factory_client):
         client, _ = factory_client
-        assert client.get("/setup/").status_code == 200
+        r = client.get("/setup/")
+        assert r.status_code == 302 and r.headers["Location"].endswith("/setup/network")
+        assert client.get("/setup/network").status_code == 200
         assert client.get("/login").status_code == 200
 
     def test_commissioned_unit_is_not_redirected(self, commissioned_client):
@@ -281,6 +283,38 @@ class TestLoRaCredentials:
         assert b"16 hex characters" in resp.data
 
 
+class TestCardStatus:
+    def test_card_status_is_a_json_flag_the_page_can_read_later(
+        self, factory_client, tmp_path, monkeypatch
+    ):
+        from utils.cardmove import CardBinding, save
+
+        path = tmp_path / "card-binding"
+        save(
+            CardBinding(
+                commissioned_serial="00000000aabbccdd",
+                moved_from="00000000aabbccdd",
+                moved_to="1000000086544fd8",
+                wifi_reconfirm=True,
+            ),
+            path,
+        )
+        monkeypatch.setenv("WQM1_CARD_STATE", str(path))
+        client, _app = factory_client
+        resp = client.get("/setup/card-status")
+        assert resp.status_code == 200
+        assert resp.content_type.startswith("application/json")
+        body = resp.get_json()
+        assert body == {
+            "card_moved": True,
+            "wifi_reconfirm": True,
+            "from": "00000000aabbccdd",
+            "to": "1000000086544fd8",
+            "commissioned_serial": "00000000aabbccdd",
+        }
+        assert b"<html" not in resp.data.lower()
+
+
 class TestDoneStep:
     def test_finish_marks_setup_completed(self, factory_client):
         client, app = factory_client
@@ -293,17 +327,15 @@ class TestDoneStep:
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["service_window"]["setup_completed"] is True
 
-    def test_cannot_finish_on_the_factory_pin(self, factory_client):
-        """Commissioning plan test #2: the PIN step refused 1234 on its own
-        page, but nothing stopped Finish with the shipped PIN still in
-        place. A finished unit on PIN 1234 is one anyone on the site network
-        can drive."""
+    def test_finish_does_not_ask_for_a_pin(self, factory_client):
+        """Getting online is the only on-site step (2026-10-22). The factory
+        PIN is refused from the owner's network instead (TestFactoryPinOnLan)."""
         client, app = factory_client
         resp = client.post("/setup/done", data={}, follow_redirects=False)
         assert resp.status_code == 302
-        assert resp.headers["Location"].endswith("/setup/pin")
+        assert not resp.headers["Location"].endswith("/setup/pin")
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
-        assert not (saved.get("service_window") or {}).get("setup_completed")
+        assert saved["service_window"]["setup_completed"] is True
 
     def test_go_no_go_page_renders_checklist(self, factory_client):
         client, _ = factory_client
@@ -321,7 +353,12 @@ class TestNetworkStepDeclaresTheVariant:
         client, app = factory_client
         resp = client.post(
             "/setup/network",
-            data={"action": "declare", "backhaul": "none", "gps_enabled": "on"},
+            data={
+                "action": "declare",
+                "backhaul": "none",
+                "radios_declared": "1",
+                "gps_enabled": "on",
+            },
             follow_redirects=False,
         )
         assert resp.status_code == 302
@@ -330,8 +367,16 @@ class TestNetworkStepDeclaresTheVariant:
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["backhaul"] == "none"
         assert saved["gps_enabled"] is True
-        # Unticked is a real declaration of "not fitted".
+        # Unticked is a real declaration of "not fitted" — when the form
+        # actually carried the radio block.
         assert saved["lora_enabled"] is False
+
+    def test_a_form_without_the_radio_block_leaves_the_radios_alone(self, factory_client):
+        client, app = factory_client
+        client.post("/setup/network", data={"action": "declare", "backhaul": "lte"})
+        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
+        assert saved["backhaul"] == "lte"
+        assert "gps_enabled" not in saved and "lora_enabled" not in saved
 
     def test_declare_rejects_an_unknown_backhaul(self, factory_client):
         client, app = factory_client
@@ -423,20 +468,20 @@ class TestNetworkStepDeclaresTheVariant:
         resp = client.get("/setup/network")
         assert resp.status_code == 200
         assert b"This page goes away" in resp.data
-        assert b"Join and finish" in resp.data
+        assert b">Join</button>" in resp.data
         assert b"PondHouse" in resp.data
+        # Straight to the Wi-Fi form: no other-browser detour (founder, 2026-10-22).
+        assert b"own-browser" not in resp.data and b"Use Without Internet" not in resp.data
         assert b"No network here" in resp.data
 
 
 class TestWizardWalkedInOrder:
-    """Commissioning plan test #1, re-cut for site flow v2: a factory-fresh,
-    uncarded unit walks welcome→pin→identity→sensors→network IN ORDER,
-    and the network join is what finishes it — every config key written,
-    setup_completed true, the bench network forgotten."""
+    """Founder, 2026-10-22: the unit's only job on site is getting online.
+    A factory-fresh unit on its hotspot goes straight to the Wi-Fi page, and
+    a join with the factory PIN still in place finishes setup. Probes and
+    radios are left as shipped; Cloud sets them."""
 
-    def test_factory_unit_walks_to_the_join_with_every_key_written(
-        self, factory_client, monkeypatch
-    ):
+    def test_factory_unit_joins_straight_from_the_hotspot(self, factory_client, monkeypatch):
         import utils.netinfo as netinfo
         from utils import netctl
 
@@ -468,49 +513,98 @@ class TestWizardWalkedInOrder:
             return {"ok": True, "forgotten": ["BlueSignal-Shop"], "failed": [], "kept": keep}
 
         monkeypatch.setattr(netctl, "forget_saved_wifi", fake_forget)
+        monkeypatch.setattr("service_window.routes.setup.forget_saved_wifi", fake_forget)
         client, app = factory_client
         cfg = lambda: yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())  # noqa: E731
 
-        assert client.get("/setup/").status_code == 200
-        # The wizard cannot be finished from here: still the factory PIN —
-        # neither by Finish nor by a join.
-        r = client.post("/setup/done", data={}, follow_redirects=False)
-        assert r.headers["Location"].endswith("/setup/pin")
-        r = client.post("/setup/network", data={"action": "join", "ssid": "PondHouse"})
-        assert r.headers["Location"].endswith("/setup/pin")
-        assert "keep" not in forgot
-
-        r = client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
-        assert r.headers["Location"].endswith("/setup/identity")
-        assert client.get("/setup/identity").status_code == 200
-
-        r = client.post("/setup/sensors", data={"ph_enabled": "on", "temperature_enabled": "on"})
-        assert r.status_code == 302
-
-        assert client.get("/setup/network").status_code == 200
+        r = client.get("/setup/")
+        assert r.headers["Location"].endswith("/setup/network")
         r = client.post(
             "/setup/network",
-            data={
-                "action": "join",
-                "ssid": "PondHouse",
-                "password": "hunter22",
-                "gps_enabled": "on",
-            },
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
         )
         assert r.status_code == 200
-        assert b"Joined PondHouse. Setup is finished." in r.data
+        assert b"Joined PondHouse. You&rsquo;re done here." in r.data
+        assert b"finish in BlueSignal Cloud" in r.data
         assert b"BlueSignal-Shop" in r.data
         assert forgot["keep"] == "PondHouse"
 
         saved = cfg()
-        assert saved["service_window"]["pin"] == "8642"
         assert saved["service_window"]["setup_completed"] is True
+        assert "pin" not in saved["service_window"]
         assert saved["backhaul"] == "wifi"
-        assert saved["gps_enabled"] is True
-        assert saved["lora_enabled"] is False
-        assert saved["ph_enabled"] is True and saved["temperature_enabled"] is True
-        # Unticked probes are written false, not left absent.
-        assert saved["tds_enabled"] is False and saved["turbidity_enabled"] is False
+        for key in (
+            "gps_enabled",
+            "lora_enabled",
+            "ph_enabled",
+            "tds_enabled",
+            "turbidity_enabled",
+            "temperature_enabled",
+        ):
+            assert key not in saved, key
+
+
+class TestFactoryPinOnLan:
+    """Setup no longer replaces the factory PIN, so a unit online on the
+    owner's network still carries 1234. It must not log in from there."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_rate_limit(self):
+        # Login attempts are counted per IP for the process; every test here
+        # posts from the same test client address.
+        from service_window import auth
+
+        auth._attempts.clear()
+        auth._lockouts.clear()
+        yield
+        auth._attempts.clear()
+        auth._lockouts.clear()
+
+    def _finish(self, app):
+        from service_window.routes.setup import update_config_section
+
+        update_config_section(
+            app.config["CONFIG_PATH"], "service_window", {"setup_completed": True}
+        )
+
+    def test_factory_pin_is_refused_from_the_lan_after_setup(self, factory_client, monkeypatch):
+        from service_window import captive
+
+        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
+        client, app = factory_client
+        self._finish(app)
+        with client.session_transaction() as sess:
+            sess.clear()
+        r = client.post("/login", data={"pin": "1234"})
+        assert r.status_code == 200
+        assert b"factory PIN" in r.data
+        with client.session_transaction() as sess:
+            assert not sess.get("pin_verified")
+
+    def test_factory_pin_still_works_on_the_hotspot(self, factory_client, monkeypatch):
+        from service_window import captive
+
+        monkeypatch.setattr(captive, "from_hotspot", lambda: True)
+        client, app = factory_client
+        self._finish(app)
+        r = client.post("/login", data={"pin": "1234"})
+        assert r.status_code == 302
+
+    def test_factory_pin_still_works_on_the_bench_before_setup(self, factory_client, monkeypatch):
+        from service_window import captive
+
+        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
+        client, _app = factory_client
+        r = client.post("/login", data={"pin": "1234"})
+        assert r.status_code == 302
+
+    def test_a_chosen_pin_works_from_the_lan(self, commissioned_client, monkeypatch):
+        from service_window import captive
+
+        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
+        client, app = commissioned_client
+        r = client.post("/login", data={"pin": str(app.config["PIN"])})
+        assert r.status_code == 302
 
 
 class TestStatusHealthPage:

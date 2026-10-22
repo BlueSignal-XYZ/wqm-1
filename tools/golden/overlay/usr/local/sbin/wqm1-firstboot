@@ -1,84 +1,203 @@
 #!/bin/bash
-# WQM-1 golden image: per-boot radio setup + once-per-card identity.
+# WQM-1 golden image: per-boot radio setup, hostname, and card/Pi binding.
 # Installed by the offline golden build (build-golden.sh); not part of setup.sh.
-#  - every boot: Wi-Fi radio unblocked, regulatory domain US (before the
-#    setup hotspot service decides whether to raise WQM1-XXXX)
-#  - every boot: hostname wqm1-xxxx, the same last four the firmware uses
-#    for the hotspot SSID (utils.identity.ap_name). A card moved to another
-#    Pi used to keep the first Pi's hostname (the mark file lived on the
-#    card) while the SSID followed the new serial.
+#
+# Every boot is idempotent. Step markers in $WQM1_FIRSTBOOT_STATE (default
+# /var/lib/wqm1-firstboot/state on a Pi) record started/done. A power pull
+# leaves the in-progress step as started; the next boot logs that it is
+# resuming and runs the step again. Completed steps are still run, because
+# the radio unblock and the hostname have to follow the Pi the card is in.
+#
+# BOOT: stage=<step> is written to the FAT wqm1-status.txt at the start of
+# each step, before the setup hotspot. wqm1-boot-stage writes stage=boot
+# even earlier.
 set -u
+_lib="$(cd "$(dirname "$0")/../lib" && pwd)/wqm1-boot.sh"
+# shellcheck disable=SC1091
+. "$_lib"
+
 log() { echo "[wqm1-firstboot] $*"; }
 
-# The image does not name a board. The model string is the kernel's, read
-# again by the firmware (platform_support/board.py) when the service starts.
-model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
-if [ -n "$model" ]; then
-  log "board: $model"
-else
-  log "board: device tree model missing"
-fi
-
-# Wrong card. The arm64 image ships no ARMv6 kernel, so a Zero W usually
-# never gets this far; if a 64-bit userspace is somehow up on that board,
-# say so. The mirror is a 32-bit userspace on a Pi 5.
-mach="$(uname -m 2>/dev/null || true)"
-bits="$(getconf LONG_BIT 2>/dev/null || true)"
-if [ -n "$mach" ]; then
-  if [ -n "$bits" ]; then
-    log "userspace: $mach (${bits}-bit)"
-  else
-    log "userspace: $mach"
-  fi
-fi
-if printf '%s' "$model" | grep -Eq 'Zero W'; then
-  if [ "$mach" = "aarch64" ] || [ "$mach" = "arm64" ] || [ "$bits" = "64" ]; then
-    log "ERROR: 64-bit card on a Pi Zero W or Zero WH. That board is 32-bit only. Use the armhf card."
-  fi
-fi
-if printf '%s' "$model" | grep -Eq 'Pi 5'; then
-  if [ "$bits" = "32" ] || [ "$mach" = "armv6l" ] || [ "$mach" = "armv7l" ]; then
-    log "ERROR: 32-bit card on a Pi 5. Use the arm64 card."
-  fi
-fi
-
-rfkill unblock wlan 2>/dev/null || true
-iw reg set US 2>/dev/null || true
-nmcli radio wifi on 2>/dev/null || true
-
-# Recomputed every boot from the board this card is in. WQM1_FIRMWARE_SRC,
-# WQM1_CPUINFO, WQM1_HOSTS_FILE and WQM1_HOSTNAME_FILE exist so a test can
-# run this script without touching the machine it is running on.
+# WQM1_FIRMWARE_SRC, WQM1_CPUINFO, WQM1_HOSTS_FILE and WQM1_HOSTNAME_FILE
+# exist so a test can run this script without touching the machine it is
+# running on.
 SRC="${WQM1_FIRMWARE_SRC:-/opt/bluesignal/current/src}"
-CPUINFO="${WQM1_CPUINFO:-/proc/cpuinfo}"
 HOSTS_FILE="${WQM1_HOSTS_FILE:-/etc/hosts}"
 HOSTNAME_FILE="${WQM1_HOSTNAME_FILE:-/etc/hostname}"
 
-name="$(cd "$SRC" 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import ap_name; print(ap_name().lower())' 2>/dev/null || true)"
-if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
-  ser="$(awk -F': *' '/^Serial/ {gsub(/[^0-9a-f]/, "", $2); s=tolower($2)} END { if (length(s) >= 4) print substr(s, length(s)-3, 4) }' "$CPUINFO" 2>/dev/null || true)"
-  name="wqm1-${ser:-0000}"
-  log "firmware id unavailable, hostname from cpuinfo serial"
-fi
-if printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+begin_step() {
+  local step="$1"
+  set_boot_stage "$step"
+  if step_was_interrupted "$step"; then
+    log "resuming ${step} after power loss"
+  fi
+  mark_step "$step" started
+}
+
+finish_step() {
+  mark_step "$1" done
+}
+
+step_board() {
+  # The image does not name a board. The model string is the kernel's, read
+  # again by the firmware (platform_support/board.py) when the service starts.
+  local model mach bits
+  model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)"
+  if [ -n "$model" ]; then
+    log "board: $model"
+  else
+    log "board: device tree model missing"
+  fi
+  # Wrong card. The arm64 image ships no ARMv6 kernel, so a Zero W usually
+  # never gets this far; if a 64-bit userspace is somehow up on that board,
+  # say so. The mirror is a 32-bit userspace on a Pi 5.
+  mach="$(uname -m 2>/dev/null || true)"
+  bits="$(getconf LONG_BIT 2>/dev/null || true)"
+  if [ -n "$mach" ]; then
+    if [ -n "$bits" ]; then
+      log "userspace: $mach (${bits}-bit)"
+    else
+      log "userspace: $mach"
+    fi
+  fi
+  if printf '%s' "$model" | grep -Eq 'Zero W'; then
+    if [ "$mach" = "aarch64" ] || [ "$mach" = "arm64" ] || [ "$bits" = "64" ]; then
+      log "ERROR: 64-bit card on a Pi Zero W or Zero WH. That board is 32-bit only. Use the armhf card."
+    fi
+  fi
+  if printf '%s' "$model" | grep -Eq 'Pi 5'; then
+    if [ "$bits" = "32" ] || [ "$mach" = "armv6l" ] || [ "$mach" = "armv7l" ]; then
+      log "ERROR: 32-bit card on a Pi 5. Use the arm64 card."
+    fi
+  fi
+}
+
+step_radio() {
+  rfkill unblock wlan 2>/dev/null || true
+  iw reg set US 2>/dev/null || true
+  nmcli radio wifi on 2>/dev/null || true
+}
+
+hold_site_wifi() {
+  local nm_out="$1" line name typ
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    name="${line%:*}"
+    typ="${line##*:}"
+    if [ "$typ" = "802-11-wireless" ] && [ "$name" != "wqm1-setup-ap" ]; then
+      nmcli connection modify "$name" connection.autoconnect no 2>/dev/null || true
+    fi
+  done <<EOF
+$nm_out
+EOF
+  nmcli device disconnect wlan0 2>/dev/null || true
+}
+
+step_card() {
+  local serial site nm_rc nm_out line name typ from to recon comm
+  serial="$(read_pi_serial)"
+  if [ -z "$serial" ] || [ "$serial" = "0000000000000000" ]; then
+    log "pi serial unavailable; card binding skipped"
+    return 0
+  fi
+  nm_rc=0
+  nm_out="$(nmcli -t -f NAME,TYPE connection show 2>/dev/null)" || nm_rc=$?
+  if [ "$nm_rc" -ne 0 ]; then
+    site="u"
+  else
+    site="0"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      name="${line%:*}"
+      typ="${line##*:}"
+      if [ "$typ" = "802-11-wireless" ] && [ "$name" != "wqm1-setup-ap" ]; then
+        site="1"
+        break
+      fi
+    done <<EOF
+$nm_out
+EOF
+  fi
+  observe_card "$serial" "$site"
+  from="$(binding_read moved_from)"
+  to="$(binding_read moved_to)"
+  recon="$(binding_read wifi_reconfirm)"
+  comm="$(binding_read commissioned_serial)"
+  if [ -n "$from" ] && [ "$from" != "$to" ]; then
+    log "card moved from $from to $to"
+    upsert_line card "moved from ${from} to ${to}"
+  elif [ -n "$comm" ]; then
+    upsert_line card "ok ${comm}"
+  fi
+  if [ "$recon" = "1" ]; then
+    upsert_line reconfirm required
+    log "site wifi held for reconfirm"
+    if [ "$site" != "u" ]; then
+      hold_site_wifi "$nm_out"
+    else
+      nmcli device disconnect wlan0 2>/dev/null || true
+    fi
+  else
+    upsert_line reconfirm ok
+  fi
+}
+
+write_hosts_line() {
+  local name="$1" tmp
+  tmp="${HOSTS_FILE}.tmp"
+  if [ -f "$HOSTS_FILE" ] && grep -q '^127\.0\.1\.1' "$HOSTS_FILE"; then
+    sed "s/^127\\.0\\.1\\.1.*/127.0.1.1\t$name/" "$HOSTS_FILE" > "$tmp"
+  elif [ -f "$HOSTS_FILE" ]; then
+    cat "$HOSTS_FILE" > "$tmp"
+    printf '127.0.1.1\t%s\n' "$name" >> "$tmp"
+  else
+    printf '127.0.1.1\t%s\n' "$name" > "$tmp"
+  fi
+  sync -f "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$HOSTS_FILE"
+}
+
+step_hostname() {
+  # Recomputed every boot from the board this card is in.
+  local name ser current
+  name="$(cd "$SRC" 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import ap_name; print(ap_name().lower())' 2>/dev/null || true)"
+  if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+    ser="$(read_pi_serial)"
+    ser="${ser: -4}"
+    name="wqm1-${ser:-0000}"
+    log "firmware id unavailable, hostname from cpuinfo serial"
+  fi
+  if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
+    log "could not derive a hostname; will retry next boot"
+    return 0
+  fi
   current="$(hostname 2>/dev/null || true)"
   current="$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-  if [ "$current" != "$name" ]; then
-    if ! hostnamectl set-hostname "$name" 2>/dev/null; then
-      printf '%s\n' "$name" > "$HOSTNAME_FILE"
-      hostname "$name" 2>/dev/null || true
-    fi
-    if [ -f "$HOSTS_FILE" ] && grep -q '^127\.0\.1\.1' "$HOSTS_FILE"; then
-      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$name/" "$HOSTS_FILE"
-    else
-      printf '127.0.1.1\t%s\n' "$name" >> "$HOSTS_FILE"
-    fi
-    systemctl try-restart avahi-daemon.service 2>/dev/null || true
-    log "hostname set to $name (was ${current:-unset})"
-  else
+  if [ "$current" = "$name" ]; then
     log "hostname already $name"
+    return 0
   fi
-else
-  log "could not derive a hostname; will retry next boot"
-fi
+  if ! hostnamectl set-hostname "$name" 2>/dev/null; then
+    printf '%s\n' "$name" | atomic_file "$HOSTNAME_FILE" || printf '%s\n' "$name" > "$HOSTNAME_FILE"
+    hostname "$name" 2>/dev/null || true
+  fi
+  write_hosts_line "$name"
+  systemctl try-restart avahi-daemon.service 2>/dev/null || true
+  log "hostname set to $name (was ${current:-unset})"
+}
+
+run_step() {
+  local step="$1"
+  begin_step "$step"
+  "step_${step}"
+  finish_step "$step"
+}
+
+set_boot_stage firstboot
+run_step board
+run_step radio
+run_step card
+run_step hostname
+set_boot_stage done
+mark_step done done
 exit 0
