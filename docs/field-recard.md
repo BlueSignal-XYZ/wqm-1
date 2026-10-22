@@ -105,9 +105,9 @@ two minutes the unit joins the saved network by itself. Check, in order:
 
 1. ops → Units, or Cloud: the unit's last check-in moves.
 2. If not: the hotspot comes up as the label's name (`WQM1-0001`, not
-   `WQM1-xxxx`). Join it from a phone. The setup page opens on
-   "Continue — connect to Wi-Fi" once the PIN is set, and a join there
-   now scans before connecting.
+   `WQM1-xxxx`). Join it from a phone. The page that opens is the Wi-Fi
+   page, with no PIN. Pick the network and tap Join; the join now scans
+   before connecting.
 3. If you need to leave: the unit retries the saved network every five
    minutes while no phone is on its hotspot. A router that comes back
    later is picked up without a visit.
