@@ -26,7 +26,13 @@ name: Claude handoff
 on:
   issues:
     types: [labeled]
-  pull_request:
+  # pull_request_target, not pull_request: the workflow file (and with it
+  # the tool list and permissions) comes from the base branch, never from
+  # the PR under review. Under `pull_request` a PR could widen its own
+  # reviewer's tools and approve itself (second review of marketplace
+  # #1449). Safe here only because the PR's code is checked out to be READ:
+  # nothing from it is installed, built or run.
+  pull_request_target:
     types: [labeled]
 
 jobs:
@@ -80,8 +86,14 @@ jobs:
             Do not change any file. Do not open a PR. When the comment is posted,
             run: gh issue edit ${{ github.event.issue.number }} --remove-label needs-plan --add-label plan-ready
 
+      - name: Tell the bots the plan run failed
+        if: failure() || cancelled()
+        run: |
+          gh issue comment ${{ github.event.issue.number }} --body "Claude's plan run did not finish: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Waiting on the Captain."
+          gh issue edit ${{ github.event.issue.number }} --remove-label needs-plan --add-label needs-captain
+
   review:
-    if: github.event_name == 'pull_request' && github.event.label.name == 'needs-review'
+    if: github.event_name == 'pull_request_target' && github.event.label.name == 'needs-review'
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -101,6 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Review against the plan
@@ -140,3 +153,9 @@ jobs:
             gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --remove-label changes-requested --add-label review-passed
             or, if changes are needed:
             gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --remove-label review-passed --add-label changes-requested
+
+      - name: Tell the bots the review run failed
+        if: failure() || cancelled()
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "Claude's review run did not finish: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Waiting on the Captain."
+          gh pr edit ${{ github.event.pull_request.number }} --remove-label needs-review --add-label needs-captain

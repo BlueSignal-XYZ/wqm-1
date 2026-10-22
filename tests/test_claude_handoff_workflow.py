@@ -35,9 +35,26 @@ REVIEW_TOOLS = (
 
 
 def test_starts_only_on_a_label():
-    assert set(ON) == {"issues", "pull_request"}
+    assert set(ON) == {"issues", "pull_request_target"}
     assert ON["issues"] == {"types": ["labeled"]}
-    assert ON["pull_request"] == {"types": ["labeled"]}
+    assert ON["pull_request_target"] == {"types": ["labeled"]}
+
+
+def test_review_uses_the_base_branch_workflow_and_only_reads_the_pr():
+    # Under `pull_request` a PR could widen its own reviewer's tools and
+    # approve itself (second review of marketplace #1449).
+    review = DOC["jobs"]["review"]
+    assert "pull_request_target" in review["if"]
+    checkout = review["steps"][0]
+    assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
+    assert not re.search(r"npm (ci|install|run|test)|pip install|node |python ", SRC)
+
+
+def test_a_failed_run_hands_back_to_the_captain():
+    for job, waiting in (("plan", "needs-plan"), ("review", "needs-review")):
+        last = DOC["jobs"][job]["steps"][-1]
+        assert last["if"] == "failure() || cancelled()"
+        assert f"--remove-label {waiting} --add-label needs-captain" in last["run"]
 
 
 def test_each_job_runs_only_for_its_own_label():
