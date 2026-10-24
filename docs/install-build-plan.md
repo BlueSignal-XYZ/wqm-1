@@ -8,7 +8,10 @@ handoff. Revised the same day after the review on PR #155 to match the
 Captain's ruling: setup is Wi-Fi only with the LEDs as the guide; there is
 no PIN anywhere (not on the hotspot, not later); owners use BlueSignal
 Cloud only; the unit's local page stays off; the old wizard, PIN, sensors,
-QR and claim-token steps are obsolete. Nothing here is built yet.
+QR and claim-token steps are obsolete. Revised again the same day after
+the Captain answered Decisions 2 and 3: the Service Window stays running
+but binds loopback only; no mutating route answers from the home
+network, so §11 is skipped. Nothing here is built yet.
 
 **What it builds:** the firmware half of the install spec,
 `marketplace/docs/operations/wqm1-install-spec.md` (marketplace PR #1457).
@@ -41,8 +44,9 @@ to do. The unit does not serve a local page on the home network.
   `systemd/`). Say so in the PR body; the Captain reviews those lines.
   `SETTINGS_SCHEMA` is not named by any section below. If a later decision
   (see the end of this plan) requires it, that PR says so. §10 may touch
-  `setup.sh` or `systemd/` if Decision 2 removes the Service Window from a
-  field install.
+  `src/service_window/__main__.py` and
+  `systemd/bluesignal-service-window.service` for the loopback bind
+  (Decision 2, 24 Oct 2026), and `setup.sh` for the printed LAN URLs.
 - **Prove it the way CI does:** `ruff check . && ruff format --check . &&
   pytest tests/ -q`. Paste the command and the summary line in the PR.
 - **Say what you did not verify.** Most of this needs a Pi and a phone; the
@@ -356,8 +360,8 @@ Wi-Fi page plus the lights, then Cloud. Do not add a bypass, a proxy, or a
 
 **Tests:**
 - A request to the Service Window from 192.168.4.23 returns 404; from
-  10.0.0.5 it does not (until §10 turns the local page off on the home
-  network too).
+  10.0.0.5 it does not (until §10 binds loopback, when a client using
+  the unit's LAN address gets connection refused).
 - The 404 body is the sentence above.
 
 **Done:** `http://192.168.4.1:8080` does not answer the wizard, or any
@@ -632,12 +636,13 @@ claim-token steps are obsolete. Same day: with the local page off, pH
 calibration and RS485 sensor setup move into BlueSignal Cloud, as Cloud
 commands with no unit page.
 
-**Order: §9 merges after §10, and after §11 when Decision 3 keeps any
-mutating route answering.** Today the 8080 login is the only thing between
-a phone on the home network and the relays, calibration, RS485 and
-settings routes on `0.0.0.0:8080`. Deleting the PIN before those routes
-stop answering leaves them open with no login. Until §10 (and §11 if
-needed) has merged, §9 may be built and reviewed but not merged.
+**Order: §9 merges after §10.** Decision 3 is answered (24 Oct 2026): no
+mutating route answers from the home network, so §11 is skipped. Today
+the 8080 login is the only thing between a phone on the home network and
+the relays, calibration, RS485 and settings routes on `0.0.0.0:8080`.
+Deleting the PIN before §10 binds loopback leaves them open with no
+login. Until §10 has merged, §9 may be built and reviewed but not
+merged.
 
 One PR. Deleting the wizard, deleting the PIN and login, and moving the
 bench key paste to `scripts/provision.py` are one change: removing the old
@@ -689,8 +694,10 @@ the deleted routes.
 
 **Held:** Decision 1 is answered and does not hold this PR. The unit side
 needs a Cloud command path for pH calibration and RS485 sensor setup
-(§13) before the local page can go off, so this PR still waits on that
-Cloud work and on Decision 2. Decision 3 does not hold this PR.
+(§13; fields in marketplace #1457,
+`marketplace/docs/operations/wqm1-install-build-plan.md` §5) before the
+local page can go off, so this PR still waits on that Cloud work.
+Decisions 2 and 3 are answered (24 Oct 2026) and do not hold this PR.
 
 One PR. With the local page off, **no GET page is readable from the home
 network.** This is not "read-only without a PIN." It is off. Consulted:
@@ -700,71 +707,128 @@ exposure), `docs/site-flow-v2.md` (the flow this plan replaces).
 **No `local_unlock` and no `local-unlock.json`.** With the page off there
 is nothing to unlock. Do not add `unlock_required`.
 
-How "off" is implemented is Decision 2. Do not start this PR until that
-answer exists. Write the test for the option the Captain picks:
+**Decision 2, answered 24 Oct 2026:** the Service Window (port 8080)
+stays running but binds loopback (`127.0.0.1`) only, so no client using
+the unit's LAN address gets a page (connection refused). Bench access
+is by SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<unit>`).
 
-| Decision 2 | Test |
-|---|---|
-| 404 on `0.0.0.0:8080` | Walk the Flask `url_map` (AGENTS rule 3): every GET returns 404 when `request.remote_addr` is a home-network address. |
-| loopback bind | The Service Window listens on loopback only. A client using the unit's LAN address does not get a GET page (connection refused or no route). |
-| process not running | The Service Window unit is not installed or not enabled on a field image. A client using the unit's LAN address on port 8080 does not get a GET page. |
+**Test (loopback only):**
+- The Service Window listens on loopback only. A client using the unit's
+  LAN address does not get a GET page (connection refused).
 
-Do not keep a hand-written list of routes when the 404 option is picked;
-read the map.
+Not chosen: 404 on `0.0.0.0:8080` — "off" would be a route filter that
+can miss a new route, not a property of the socket. Not chosen: process
+not running — that drops the bench path on the unit that loopback
+keeps (calibration through the SSH tunnel above).
 
-**Files:** `src/service_window/app.py` and/or the systemd unit that starts
-it, `setup.sh` if the service is removed from a field install, tests for
-the chosen option.
+**Files:** `src/service_window/__main__.py` (today `--host` defaults to
+`0.0.0.0`), the systemd unit if it must pass `--host 127.0.0.1`,
+`setup.sh` for the printed LAN URLs, tests for the loopback bind.
 
-**Done:** no GET page is readable from a home-network address, by the
-option the Captain named.
+**Done:** a client using the unit's LAN address on port 8080 gets
+connection refused; the process still answers on `127.0.0.1`.
+
+**Callers of :8080 to fix or confirm before §10**
+
+Grep 2026-10-24 for `8080`, `:8080`, and LAN Service Window URLs
+(`$(hostname).local`, `<unit-ip>`, `<pi-ip>`, `wqmbench.local`). Lines
+below were read. None of these files are changed in this plan PR.
+
+Will break under loopback-only (LAN address or another machine):
+
+- `scripts/diagnostics.sh:122` — prints
+  `http://$(hostname).local:8080`. Connection refused.
+- `scripts/first-boot-check.sh:34` — prints
+  `http://$(hostname).local:8080/provision`. Connection refused.
+- `setup.sh:619` and `:624` — prints
+  `http://$(hostname).local:8080` and `/provision`. Connection refused.
+- `README.md:266` — phone path `http://<hostname>.local:8080`.
+  Connection refused. `:557–570` — "from another machine" via
+  `http://<pi-ip>:8080/…`. Connection refused.
+- `docs/getting-started.md:355–357` —
+  `http://192.168.4.1:8080/setup/` and `http://<unit-ip>:8080`.
+  Connection refused.
+- `docs/install-day-runbook.md:106` — `http://wqmbench.local:8080`.
+  `:215` — "SSH dead but :8080 alive" recovery. `:340–343` —
+  `http://192.168.4.1:8080/setup/` and `http://<unit-ip>:8080`.
+  All three break.
+- `docs/sensor-calibration.md:12` — `http://<unit-ip>:8080`.
+  Connection refused. Bench then uses the SSH tunnel.
+- `docs/smart-breaker-installer-guide.md:47` —
+  `http://<pi-ip>:8080/settings/`. Connection refused.
+- `docs/raspberry-pi.md:106–107` — "that port still answers on the
+  site LAN after the join." The claim becomes false.
+- `docs/ota-runbook.md:194` — field note that `:8080` kept serving
+  when sshd was dead. That LAN recovery path breaks. The reboot
+  action itself is the command socket (`src/main.py:1074–1076`), not
+  an HTTP call to `:8080`.
+- Docs that send a person to the Service Window from the LAN without
+  a `:8080` in the line, still wrong as written:
+  `docs/apple-home.md:52` ("LAN only"),
+  `docs/home-assistant.md:95`,
+  `docs/platforms.md:203` and `:258`.
+
+Checked; do not call `:8080` on the unit's LAN address:
+
+- `scripts/provision.py` — CLI only. No `:8080` and no Service Window
+  HTTP.
+- `scripts/burn-in.sh`, `src/diagnostics/burnin.py:27`,
+  `docs/burn-in.md:40` — no `:8080`. Burn-in watches
+  `bluesignal-service-window.service`; it does not HTTP to the port.
+- `.github/workflows` — no `:8080`. `ci.yml:128` only counts
+  `service_window` `.pyc` files in the OTA bundle.
+- `src/ota/agent.py:182` and `:568` — comments that compile must not
+  block `:8080`. No HTTP to the port.
+- `scripts/demo-unit.py:6`, `:8`, `:63–64` — `localhost` / default
+  `--host 127.0.0.1`. Unaffected.
+- `docs/site-flow-v2.md:75–76` — same localhost demo. Unaffected.
+- `scripts/simulate-fleet.py:359–364` starts
+  `python -m service_window` without `--host` (inherits today's
+  `0.0.0.0` default); `:377` talks to `http://127.0.0.1:{port}`.
+  After the default host becomes loopback the client still works.
+- Tests (`tests/test_captive_portal.py`,
+  `tests/test_site_flow_v2.py:84`,
+  `tests/test_service_window_reboot.py:4`,
+  `tests/test_setup_firmware_starting.py:3`) — Flask test client or
+  string checks. None open a unit LAN socket.
+- No `curl …:8080` in scripts, tests, or CI.
+
+`src/service_window/__main__.py:23` defaults `--host` to `0.0.0.0`.
+That is the bind §10 changes, not a caller.
 
 **Traps:**
 - Do not start this PR until §13 can accept the calibration and RS485
-  Cloud commands (fields in marketplace `wqm1-install-build-plan.md` §5).
+  Cloud commands (fields in marketplace `wqm1-install-build-plan.md` §5,
+  marketplace #1457). Do not invent Cloud fields or endpoints here.
   Until those ship, BlueSignal staff calibrate on the bench from the
-  Service Window (`docs/sensor-calibration.md`). With loopback, they still
-  can, through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<unit>`), so
-  loopback does not put bench calibration on hold.
+  Service Window (`docs/sensor-calibration.md`). With loopback, they
+  still can, through the SSH tunnel above, so loopback does not put
+  bench calibration on hold.
 - Checked 2026-10-24 for the loopback option: the current captive portal
   already reaches the Service Window over `127.0.0.1`
   (`utils/captive_portal.py`, the `HTTPConnection("127.0.0.1", …)` proxy),
   so loopback does not break it, and §4 removes that proxy anyway. The
   `iptables` line in `systemd/bluesignal-captive-portal.service` that
-  mentions 8080 deletes a legacy redirect; it adds none. Three scripts
-  print `http://$(hostname).local:8080` as an instruction and must change in
-  this PR: `scripts/diagnostics.sh`, `scripts/first-boot-check.sh` and the
-  closing lines of `setup.sh`. `scripts/demo-unit.py` uses `localhost` and
-  is unaffected. `scripts/burn-in.sh` does not call 8080.
+  mentions 8080 deletes a legacy redirect; it adds none. The printed
+  LAN URLs and the other callers are in the list above; change them
+  in this PR or a follow-up that lands with it, not before.
 
 ---
 
-## §11. CSRF, only if any mutating route still answers
+## §11. CSRF — skipped
 
-One PR, and only if Decision 3 says a mutating Service Window route still
-answers from the home network. If those routes stay off with the GET
-pages, skip this PR.
+**Skipped.** Decision 3, answered 24 Oct 2026: no mutating route answers
+from the home network, so this PR is not opened. Loopback (Decision 2)
+takes POST, PUT, PATCH and DELETE off the LAN the same way it takes
+GET pages off: connection refused. Relays, calibration, RS485 and
+settings move to Cloud commands (§13); nothing on the home network
+needs them.
 
-Relays, calibration, RS485, settings and the rest are not a substitute
-local UI. If a route whose methods include POST, PUT, PATCH or DELETE
-still answers, it requires an `Origin` or `Referer` whose host is the
-unit's own address or hostname. **If both `Origin` and `Referer` are
-missing, reject with 403** (curl, some webviews). A foreign host in either
-header is also 403.
-
-**Files:** `src/service_window/` (the CSRF check), tests that walk
-`url_map`.
-
-**Tests** (held until Decision 3; skip the PR if no mutating route
-answers):
-- Walk the Flask `url_map`: every remaining rule whose methods include
-  POST, PUT, PATCH or DELETE returns 403 when both `Origin` and `Referer`
-  are missing.
-- A POST with a foreign `Origin` returns 403. A POST with a foreign
-  `Referer` and no `Origin` returns 403.
-
-**Done:** every mutating route that still answers rejects the missing-
-header case with 403.
+The CSRF rule that would have applied (403 if both `Origin` and
+`Referer` are missing; 403 if either header is a foreign host) is
+kept here only so a later change that puts a mutating route back on
+the LAN knows what to build. Do not implement it while those routes
+stay off.
 
 ---
 
@@ -775,7 +839,8 @@ One PR. Remove auto-refresh from leftover Service Window templates
 They must not reload themselves, navigate on a timer, or replace a form
 (I5). The port-80 setup page is already I5 under §4.
 
-If §10 deletes those templates, this PR has nothing to do — skip it.
+Decision 2 is loopback, so §10 does not delete those templates; this
+PR still opens. If a later change deletes them, skip this PR.
 
 **Files:** the leftover templates and `static/app.js`, plus a render test.
 
@@ -877,23 +942,24 @@ the lights on a bench Pi within 10 s of the tap.
 
 ## Order and dependencies
 
-§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §13 → (§10 held) → §11 if
-needed → §9 → §12 if needed.
+§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §13 → §10 (held on §13
+Cloud commands) → §9 → §12. §11 is skipped.
 
-**§9 never merges before §10** (and §11 when Decision 3 keeps a mutating
-route answering). §9 deletes the PIN, and the PIN is the only gate on the
-mutating 8080 routes until §10 takes them off the home network.
+**§9 never merges before §10.** §9 deletes the PIN, and the PIN is the
+only gate on the mutating 8080 routes until §10 binds loopback.
 
 §4 needs §2 (a join to call) and §3 (the open network). §5 can merge as
 soon as the Service Window still exists; after it merges, the old wizard is
 intentionally unreachable from the setup network. §8 can start once §4 is
 merged (run the precondition first). Decision 1 is answered (24 Oct 2026)
-and no longer holds §9 or §10. §9 (wizard and PIN only) can be built
+and no longer holds §9 or §10. Decisions 2 and 3 are answered (24 Oct
+2026) and no longer hold §10. §9 (wizard and PIN only) can be built
 now but merges only after §10 (see above). **The unit side needs a Cloud
-command path for calibration and RS485 (§13) before the local page can go
-off, so the §10 PR still waits on that Cloud work and on Decision 2.** §11 opens only if Decision
-3 says a mutating route still answers. §12 opens only if leftover
-templates remain after §10. `identify` / `wifi_window` / heartbeat in
+command path for calibration and RS485 (§13; marketplace #1457) before
+the local page can go off, so the §10 PR still waits on that Cloud
+work.** §11 is skipped: Decision 3 answered no mutating route from the
+home network. §12 still opens: loopback does not delete leftover
+templates. `identify` / `wifi_window` / heartbeat in
 §13 can start after §7. The calibration and RS485 command handlers in
 §13 must land before §10. The Cloud half's §2 (Add unit) needs this
 plan's §13.
@@ -907,28 +973,23 @@ plan's §13.
   generated).
 - The repro numbers in §1 came from this session's scratch test, not CI.
 
-## Decisions needed from the Captain
+## Decisions from the Captain
 
 1. **Answered, 24 Oct 2026.** With the local page off, pH calibration and
    RS485 sensor setup move into BlueSignal Cloud, as Cloud commands with
    no unit page. The unit-side path is §13; the Cloud side, with field
    names and results, is marketplace `wqm1-install-build-plan.md` §5.
-2. **How the local page stays off on a field unit.** Open. Does the
-   Service Window still bind `0.0.0.0:8080` and 404 every GET from the
-   home network, bind loopback only, or not run? §10 waits on this.
-   **Recommended: loopback only.** The setup page is the port-80 process
-   (§4), which no longer proxies to 8080, so nothing outside the unit needs
-   8080. Loopback keeps the Service Window for bench scripts on the unit and
-   makes "off" a property of the socket, not of a route list that can miss
-   a new route. Grok reached the same recommendation independently
-   (24 Oct 2026).
-3. **Mutating Service Window routes from the home network.** Open. §11 is
-   CSRF (403 if `Origin` and `Referer` are both missing) for any mutating
-   route that still answers, and is skipped if none do. Should those
-   routes answer from the home network at all, or stay off the same way
-   GET pages do? **Recommended: off, the same way.** Relays, calibration,
-   RS485 and settings all move to Cloud commands (§13), so nothing on the
-   home network needs them, and §11 is skipped. With loopback (Decision 2)
+2. **Answered, 24 Oct 2026.** The Service Window (port 8080) stays
+   running but binds loopback (`127.0.0.1`) only, so no client using
+   the unit's LAN address gets a page (connection refused). Bench
+   access is by SSH tunnel. §10 builds that bind; it still waits on
+   §13 Cloud commands (marketplace #1457), not on this decision.
+   Not chosen: 404 on `0.0.0.0:8080` (a route filter can miss a new
+   route). Not chosen: process not running (drops the bench path
+   loopback keeps).
+3. **Answered, 24 Oct 2026.** No mutating route answers from the home
+   network, so §11 (CSRF) is skipped. Relays, calibration, RS485 and
+   settings move to Cloud commands (§13). With loopback (Decision 2)
    this answer comes for free.
 
 ## Marketplace Cloud work (defined in marketplace #1457)
