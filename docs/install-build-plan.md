@@ -1,7 +1,14 @@
 # Install v3: firmware build plan
 
+**Stack:** this stacks on #155 (base `claude/loving-lamport-hq4t3a`). The
+Captain merges #155 first or retargets. Not checked against master.
+
 **Status:** plan, 2026-10-24. Written by Claude for Grok under the `AGENTS.md`
-handoff. Nothing here is built yet.
+handoff. Revised the same day after the review on PR #155 to match the
+Captain's ruling: setup is Wi-Fi only with the LEDs as the guide; there is
+no PIN anywhere (not on the hotspot, not later); owners use BlueSignal
+Cloud only; the unit's local page stays off; the old wizard, PIN, sensors,
+QR and claim-token steps are obsolete. Nothing here is built yet.
 
 **What it builds:** the firmware half of the install spec,
 `marketplace/docs/operations/wqm1-install-spec.md` (marketplace PR #1457).
@@ -10,7 +17,8 @@ to it. The Cloud half is `marketplace/docs/operations/wqm1-install-build-plan.md
 
 **The install, in one line:** plug in, join the open network "BlueSignal
 Setup", type the home Wi-Fi password, then finish in Cloud. The unit's
-setup network does Wi-Fi and nothing else.
+setup network does Wi-Fi and nothing else. Lights tell the installer what
+to do. The unit does not serve a local page on the home network.
 
 **Each section below is one PR**, in the order given. Open each PR with
 `Plan: docs/install-build-plan.md §<n>` in its body and the label
@@ -28,8 +36,13 @@ setup network does Wi-Fi and nothing else.
   bench units get this firmware on their cards through the golden image
   (`tools/golden/`), after the bench pass in the spec's section 5.
 - **CODEOWNERS files** (`setup.sh`, `systemd/`, `src/utils/config.py`
-  `SETTINGS_SCHEMA`) are touched by §2, §4, §5 and §7. Say so in the PR body;
-  the Captain reviews those lines.
+  `SETTINGS_SCHEMA`) are touched by §2 (the existing clock sudoers line in
+  `setup.sh`, only if that PR has to change it), §6 and §7 (`setup.sh` and
+  `systemd/`). Say so in the PR body; the Captain reviews those lines.
+  `SETTINGS_SCHEMA` is not named by any section below. If a later decision
+  (see the end of this plan) requires it, that PR says so. §10 may touch
+  `setup.sh` or `systemd/` if Decision 2 removes the Service Window from a
+  field install.
 - **Prove it the way CI does:** `ruff check . && ruff format --check . &&
   pytest tests/ -q`. Paste the command and the summary line in the PR.
 - **Say what you did not verify.** Most of this needs a Pi and a phone; the
@@ -41,13 +54,13 @@ Every PR keeps all of these, and the tests named below pin them.
 
 | # | Invariant | Pinned by |
 |---|---|---|
-| I1 | A client on the setup network (192.168.4.0/24) can reach one thing: the Wi-Fi page. Nothing that changes the unit, other than its Wi-Fi, answers there. | §3 tests; §7 tests |
-| I2 | The home Wi-Fi password is written only into the NetworkManager profile (root-only). Never into a log, a state file, the boot partition, a heartbeat or Cloud. | §2, §3 tests (capture logs and files, search for the password) |
-| I3 | A network that has reached BlueSignal is never deleted by the unit until another network has reached BlueSignal. | §2, §4 tests |
+| I1 | A client on the setup network (192.168.4.0/24) can reach one thing: the Wi-Fi page. Nothing that changes the unit, other than its Wi-Fi, answers there. | §4 tests; §5 tests; §10 tests |
+| I2 | The home Wi-Fi password is written only into the NetworkManager profile (root-only). Never into a log, a state file, the boot partition, a heartbeat or Cloud. | §2, §4 tests (capture logs and files, search for the password) |
+| I3 | A network that has reached BlueSignal is never deleted by the unit until another network has reached BlueSignal. | §2, §6 tests |
 | I4 | At most one join runs at a time. | §2 test |
-| I5 | No page the unit serves reloads itself, navigates on a timer, or replaces a form. A status change edits text in place. | §3 and §7 tests |
-| I6 | Every failure ends with the setup network up and the lights at "ready", unless a proven network exists and is being retried. | §2, §4 tests |
-| I7 | The setup network and its page work without the firmware (`bluesignal-wqm`), the Service Window or Cloud running. | §3 test (portal answers with both stopped) |
+| I5 | No page the unit serves reloads itself, navigates on a timer, or replaces a form. A status change edits text in place. | §4 tests (the port-80 page); §12 tests (any leftover Service Window template) |
+| I6 | Every failure ends with the setup network up and the lights at "ready", unless a proven network exists and is being retried. | §2, §6 tests |
+| I7 | The setup network and its page work without the firmware (`bluesignal-wqm`), the Service Window or Cloud running. | §4 test (portal answers with both stopped) |
 
 ---
 
@@ -86,8 +99,14 @@ third process lock a different inode.
 
 ## §2. The join: one at a time, proven by reaching BlueSignal (W3, W7)
 
-Build this before the page (§3), so the page has a join to call and the
-current wizard keeps working in the meantime.
+Build this before the page (§4), so the page has a join to call.
+
+The old wizard's network step can call the new join until §9 deletes the
+wizard. That is not the same as the wizard remaining usable from the setup
+network. From the 8080 block (§5) onward the old wizard is intentionally
+unreachable from `192.168.4.0/24`. Do not read this section as "the current
+wizard keeps working in the meantime" on BlueSignal Setup: it does not,
+once §5 has merged.
 
 **New module `src/utils/join.py`**, pure orchestration over `netctl`:
 
@@ -162,14 +181,16 @@ current wizard keeps working in the meantime.
   state and boot directories, and no `read_state()` field (I2).
 - Older saved networks are deleted only after `reach_bluesignal()` succeeds.
 
-**Done:** all of the above pass; the current wizard's network step still
-joins through the new path.
+**Done:** all of the above pass. Until §9 deletes it, the old wizard's
+network step still joins through the new path when a test client (or a
+browser not on the setup network) reaches it. After §5, a phone on
+BlueSignal Setup cannot open that wizard; that is intended.
 
 **Bench check:** wrong password, then right; a router with client approval
 (or a firewall rule blocking the API host for 2 minutes).
 
 **Traps:**
-- The worker thread must not die with the HTTP server. In §3 the port-80
+- The worker thread must not die with the HTTP server. In §4 the port-80
   listener closes the moment the setup network goes down; the worker runs
   in the same process and must keep running after the socket closes.
 - `nmcli connection modify <id> connection.id <ssid>` renames; do not
@@ -178,17 +199,10 @@ joins through the new path.
 
 ---
 
-## §3. The Wi-Fi page on port 80 (W1 name, W2)
+## §3. Open "BlueSignal Setup" plus identity and firstboot (W1 name)
 
-**Decision: the port-80 listener renders the page itself.** Today
-`utils/captive_portal.py` proxies every request to the Service Window
-(Flask, port 8080), which takes minutes to start on a Pi Zero; that is why a
-"starting up" page with a 3-second refresh exists, and why the wizard page
-reloaded every 5 s (`setup_base.html:55`). The proxy also hides the phone's
-address (the Service Window sees 127.0.0.1), which broke the hotspot checks.
-Serving the page from the listener removes all three and gives I7.
-
-### 3a. The name: "BlueSignal Setup", open
+One PR. Do not fold the port-80 page or the 8080 block into this change
+(AGENTS rule 6).
 
 - `utils/identity.py`: `SETUP_SSID = "BlueSignal Setup"`. `ap_name()`
   returns it, for every unit and every argument. Add `host_name(device_id=None)`
@@ -205,7 +219,8 @@ Serving the page from the listener removes all three and gives I7.
   open network). `start_ap()` accepts `passphrase=None`; it still refuses a
   non-empty passphrase under 8 characters. Rewrite the docstrings that say
   "an open AP into a PIN-gated page is still an open AP": the premise is
-  gone because the page sets only Wi-Fi (spec decision 1).
+  gone because the page sets only Wi-Fi (spec decision 1) and there is no
+  PIN anywhere.
 - `ap_credentials()` returns `(SETUP_SSID, None)`. Remove the passphrase
   from `join_network`'s `ap_passphrase`, `_restore_ap`,
   `scripts/wqm1-ap-fallback.py`, `diagnostics/ap_fail.py` (keep its
@@ -217,7 +232,41 @@ Serving the page from the listener removes all three and gives I7.
 - OWE (Enhanced Open) is **not** in this PR. Whether the BCM43430 offers it
   in AP mode is a bench question; add it later as a separate PR if it does.
 
-### 3b. The page
+**Files:** `src/utils/identity.py`, `src/utils/netctl.py`,
+`tools/golden/overlay/usr/local/sbin/wqm1-firstboot`,
+the scripts and diagnostics named above, `tests/test_netctl.py`,
+`tests/test_ap_unit_layout.py`, `tests/test_simulate.py`,
+`tests/test_netinfo.py`, `tests/test_unit_label.py`.
+
+**Tests:**
+- `ap_name()` is "BlueSignal Setup" for a label, a derived id and a
+  simulated id; `host_name()` is `wqm1-0001` for `WQM-10001`.
+- `hostapd_config(ssid, None)` contains no `wpa` line; with an 8-character
+  passphrase it is unchanged from today.
+- The firstboot script test named above.
+
+**Done:** a simulated unit advertises "BlueSignal Setup" as an open
+network; `host_name()` is what firstboot writes.
+
+**Bench check:** the phone's Wi-Fi list shows an open network named
+"BlueSignal Setup". Opening the page is §4.
+
+**Trap:** firstboot must call `host_name()`, not `ap_name()`. See the
+silent serial fallback above.
+
+---
+
+## §4. The Wi-Fi page on port 80, without the proxy (W2)
+
+One PR. Depends on §2 (a join to call) and §3 (the open setup network).
+
+**Decision: the port-80 listener renders the page itself.** Today
+`utils/captive_portal.py` proxies every request to the Service Window
+(Flask, port 8080), which takes minutes to start on a Pi Zero; that is why a
+"starting up" page with a 3-second refresh exists, and why the wizard page
+reloaded every 5 s (`setup_base.html:55`). The proxy also hides the phone's
+address (the Service Window sees 127.0.0.1), which broke the hotspot checks.
+Serving the page from the listener removes all three and gives I7.
 
 - `utils/captive_portal.py` serves, while the setup network is up:
   - `GET /` and `GET /setup/`: the page (one HTML document, inline CSS and
@@ -231,7 +280,7 @@ Serving the page from the listener removes all three and gives I7.
     existing `wifi_setup` helpers (`normalize_password`, `password_problem`,
     `block_reason`), then `join.start_join`. Returns `joining` or `busy`.
   - `GET /api/state`: `join.read_state()` plus, when the unit lost a proven
-    network (§4), `{lost: ssid, reason}`.
+    network (§6), `{lost: ssid, reason}`.
   - Captive probes keep their current redirect to `/setup/`.
   - Everything else: 404 with a one-line page linking `/setup/`. **No proxy
     to 8080.** Delete `_proxy`, `rewrite_location`, `unavailable_html` and
@@ -249,39 +298,19 @@ Serving the page from the listener removes all three and gives I7.
   customer-facing words go past AIR).
 - The page does not name the unit. Cloud finds the unit (spec section 2).
 
-### 3c. Close 8080 to the setup network (I1)
-
-The Service Window binds `0.0.0.0:8080`, so a phone on the setup network can
-open `http://192.168.4.1:8080` directly. Add a `before_request` in
-`service_window/app.py`: if `request.remote_addr` is in `AP_NETWORK`,
-return 404 with "This page isn't available on the setup network." Direct
-connections carry the phone's real address, so `captive.from_hotspot()`
-works for this. Keep it independent of the PIN code that §7 deletes.
-
-**Files:** `src/utils/identity.py`, `src/utils/netctl.py`,
-`src/utils/captive_portal.py`, `src/utils/setup_copy.py` (new),
-`src/service_window/app.py`, `tools/golden/overlay/usr/local/sbin/wqm1-firstboot`,
-the scripts and diagnostics named above, `tests/test_captive_portal.py`,
-`tests/test_ap_unit_layout.py`, `tests/test_service_window_setup.py`,
-`tests/test_simulate.py`, `tests/test_netinfo.py`, `tests/test_unit_label.py`, a new
-`tests/test_setup_page.py`.
+**Files:** `src/utils/captive_portal.py`, `src/utils/setup_copy.py` (new),
+`tests/test_captive_portal.py`, a new `tests/test_setup_page.py`.
 
 **Tests:**
-- `ap_name()` is "BlueSignal Setup" for a label, a derived id and a
-  simulated id; `host_name()` is `wqm1-0001` for `WQM-10001`.
-- `hostapd_config(ssid, None)` contains no `wpa` line; with an 8-character
-  passphrase it is unchanged from today.
 - With the Service Window and the firmware not running, `GET /setup/`
   returns the page and `POST /api/join` starts a join (I7).
 - `GET /settings`, `GET /relays`, `POST /relays/1` and any 8080 path on the
-  listener return 404 (I1). A request to the Service Window from
-  192.168.4.23 returns 404; from 10.0.0.5 it does not.
+  listener return 404 (I1).
 - The page source (the rendered HTML and its inline JS) contains none of
   `location.reload`, `http-equiv="refresh"`, `location.href =`,
   `location.replace(` (I5). Parse the rendered page; do not grep source
   files.
 - `setup_copy.en` and `setup_copy.es` have the same keys.
-- The firstboot script test named in 3a.
 
 **Done:** a simulated unit (`scripts/demo-unit.py`) shows the page at
 `http://127.0.0.1:<port>/setup/`, lists networks, and a join through the
@@ -289,7 +318,7 @@ page reaches `joined` against the virtual radio.
 
 **Bench check (spec section 5):** iPhone, Pixel and Samsung each open the
 page by themselves (B3, B4, B6); phone call and app switch mid-typing keep
-the form (C1); `http://192.168.4.1:8080` does not answer from the phone.
+the form (C1).
 
 **Traps:**
 - **Scanning while the setup network is up.** The spec lists this as
@@ -302,11 +331,47 @@ the form (C1); `http://192.168.4.1:8080` does not answer from the phone.
 - The listener is single-threaded (`run_loop` handles one request at a
   time). Keep handlers short; the join runs in §2's worker thread.
 - `captive.py` and the PIN-on-hotspot checks in `auth.py` become dead for
-  port 80; leave their removal to §7 so this PR stays reviewable.
+  port 80; leave their removal to §9 so this PR stays reviewable.
 
 ---
 
-## §4. Retry forever, and the setup network comes back for reconnection (W4)
+## §5. Close 8080 to the setup network (I1)
+
+One PR. The Service Window binds `0.0.0.0:8080`, so a phone on the setup
+network can open `http://192.168.4.1:8080` directly. Add a `before_request`
+in `service_window/app.py`: if `request.remote_addr` is in `AP_NETWORK`,
+return 404 with "This page isn't available on the setup network." Direct
+connections carry the phone's real address, so `captive.from_hotspot()`
+works for this.
+
+**The old wizard is intentionally unreachable from the setup network from
+this PR onward.** Identity, sensors, PIN, QR and cloud steps still exist in
+the tree until §9 deletes them, and a test client (or a browser on the home
+network) can still hit them until then. A phone on BlueSignal Setup cannot.
+That is the intended gap, not a bug. Setup from this point is the port-80
+Wi-Fi page plus the lights, then Cloud. Do not add a bypass, a proxy, or a
+"keep the wizard on 8080 for the setup network" exception.
+
+**Files:** `src/service_window/app.py`, `tests/test_service_window_setup.py`.
+
+**Tests:**
+- A request to the Service Window from 192.168.4.23 returns 404; from
+  10.0.0.5 it does not (until §10 turns the local page off on the home
+  network too).
+- The 404 body is the sentence above.
+
+**Done:** `http://192.168.4.1:8080` does not answer the wizard, or any
+other Service Window page, from a client whose address is in
+`192.168.4.0/24`.
+
+**Bench check:** `http://192.168.4.1:8080` does not answer from the phone
+on BlueSignal Setup.
+
+**Trap:** do not delete the wizard or the PIN in this PR. That is §9.
+
+---
+
+## §6. Retry forever, and the setup network comes back for reconnection (W4)
 
 **Today:** `ensure_reachable()` runs once at boot from
 `bluesignal-ap-fallback.service` (a oneshot). A unit that boots before its
@@ -335,12 +400,12 @@ clock and netctl so it is testable):
   gets 3 minutes at boot, then is deleted and the unit goes to `first` or
   `lost`.
 - **Planned Wi-Fi change (G3).** A request file
-  `/run/bluesignal/wifi-window.json {until}` (written by §8's cloud
+  `/run/bluesignal/wifi-window.json {until}` (written by §13's cloud
   command) raises the setup network until `until` (at most 15 min) even
   though the station is up. The chip cannot run both, so the unit is offline
   for that window; Cloud's copy says so.
-- State is published to `/run/bluesignal/netwatch.json` for the lights (§5)
-  and the page (§3 `/api/state`).
+- State is published to `/run/bluesignal/netwatch.json` for the lights (§7)
+  and the page (§4 `/api/state`).
 
 **Files:** `src/utils/netwatch.py` (new), `scripts/wqm1-ap-fallback.py`
 (becomes the entry point of the daemon, or is replaced by
@@ -379,7 +444,7 @@ an hour.
 
 ---
 
-## §5. Lights that say what to do (W5)
+## §7. Lights that say what to do (W5)
 
 **Today:** `control/led.py` is driven by the firmware only, so nothing
 lights until the firmware is up, and there is no "ready" or "joining"
@@ -391,7 +456,7 @@ pattern.
   together), online (LED 1 slow), couldn't join (chase plus LED 4 double),
   on Wi-Fi but BlueSignal unreachable (LED 1 slow plus LED 4 slow),
   undervoltage (LED 4 double, A4), and "is this the one?" (LEDs 1+4 then
-  2+3, back and forth, §8). Patterns are timings, never colours (H4).
+  2+3, back and forth, §13). Patterns are timings, never colours (H4).
 - `bluesignal-lights.service`, started early (before the network), reads
   `/run/bluesignal/netwatch.json`, `join-state.json` and the portal mode
   file once a second and drives the LEDs through `platform_support.gpio`
@@ -423,7 +488,91 @@ stop writing.
 
 ---
 
-## §6. Sealed password (W1b)
+## Precondition (run before §8)
+
+Not a PR. A short check that the pinned crypto library can do what §8
+needs, recorded here so the sealed-password PR does not discover a missing
+primitive after the page is already in review.
+
+**X25519 key agreement in `pycryptodome==3.24.0`:** this VM did not have
+the package until `python3 -m pip install --user pycryptodome==3.24.0`.
+Then:
+
+```
+python3 --version
+python3 -c 'import Crypto; print("pycryptodome", Crypto.__version__)'
+python3 -c '
+from Crypto.Protocol.DH import key_agreement
+from Crypto.PublicKey import ECC
+from Crypto.Protocol.KDF import HKDF
+from Crypto.Hash import SHA256
+from Crypto.Cipher import ChaCha20_Poly1305
+import Crypto
+
+def kdf(x):
+    return HKDF(x, 32, b"", SHA256, 1)
+
+print("pycryptodome", Crypto.__version__)
+a = ECC.generate(curve="curve25519")
+b = ECC.generate(curve="curve25519")
+ab = key_agreement(static_priv=a, static_pub=b.public_key(), kdf=kdf)
+ba = key_agreement(static_priv=b, static_pub=a.public_key(), kdf=kdf)
+print("shared_len_ab", len(ab))
+print("shared_len_ba", len(ba))
+print("both_directions_equal", ab == ba)
+nonce = b"\x00" * 24
+plain = b"wqm1-precondition"
+enc = ChaCha20_Poly1305.new(key=ab, nonce=nonce)
+ct, tag = enc.encrypt_and_digest(plain)
+dec = ChaCha20_Poly1305.new(key=ba, nonce=nonce)
+out = dec.decrypt_and_verify(ct, tag)
+print("roundtrip_ok", out == plain)
+print("ct_len", len(ct), "tag_len", len(tag))
+'
+```
+
+Real output (Python 3.12.3 on this VM, 2026-10-24, rerun after the #156
+review):
+
+```
+Python 3.12.3
+pycryptodome 3.24.0
+pycryptodome 3.24.0
+shared_len_ab 32
+shared_len_ba 32
+both_directions_equal True
+roundtrip_ok True
+ct_len 17 tag_len 16
+```
+
+Both directions of `key_agreement` on `curve25519` returned the same 32
+bytes. One XChaCha20-Poly1305 encrypt/decrypt with a 24-byte nonce
+round-tripped the plaintext. Not verified: the same check on CI's Python
+3.11 image; this check was not run under `pytest`.
+
+**How HKDF-SHA256 + XChaCha20-Poly1305 will be checked across JS and
+Python** (do this in the §8 PR; it is unverified today — there is no
+vendored `@noble` tree in this repo and this VM did not run Node against
+one):
+
+1. Vendor `@noble/curves` (x25519) and `@noble/ciphers` (xchacha20poly1305)
+   under `src/utils/setup_static/`, with licences and versions recorded.
+2. Pin the shared parameters in one place both sides import or copy:
+   HKDF hash SHA-256, output length 32, salt and info strings, 24-byte
+   nonce, and any AAD.
+3. Under Node, using those exact vendored files, emit one committed
+   fixture: X25519 shared secret → HKDF-SHA256 → XChaCha20-Poly1305
+   ciphertext of a known `{password, nonce}` payload.
+4. A Python test decrypts that fixture with pycryptodome 3.24.0 and asserts
+   the plaintext.
+5. A second committed fixture, produced by Python, is decrypted under Node
+   with the same vendored files.
+6. Do not claim interop until both fixtures pass. If they fail, stop and
+   say so; do not add a second crypto library to paper over a mismatch.
+
+---
+
+## §8. Sealed password (W1b)
 
 **Why:** on an open network, anyone in range can capture the password as it
 is typed (spec risk 1). WebCrypto is not available on a plain-HTTP page, so
@@ -437,8 +586,10 @@ the page needs its own crypto library.
 - JS: vendor `@noble/curves` (x25519) and `@noble/ciphers`
   (xchacha20poly1305) minified under `src/utils/setup_static/`, with their
   licences and versions recorded. No CDN.
-- Python: `pycryptodome` (already in `requirements.txt`): X25519 key
-  agreement, HKDF, `ChaCha20_Poly1305` with a 24-byte nonce.
+- Python: `pycryptodome` 3.24.0 (already in `requirements.txt`): X25519 key
+  agreement (`Crypto.Protocol.DH.key_agreement` on `curve25519`), HKDF,
+  `ChaCha20_Poly1305` with a 24-byte nonce. The precondition above already
+  agreed in both directions and round-tripped one ciphertext on this VM.
 - The server rejects a plaintext password field, a wrong or reused page
   nonce, and a decryption failure (with "Reload the page and try again").
 
@@ -446,23 +597,44 @@ the page needs its own crypto library.
 `src/utils/setup_static/` (new), `tests/test_setup_seal.py`.
 
 **Tests:** a JS-produced ciphertext (fixture generated once with the vendored
-library under Node and committed) decrypts in Python; a replayed nonce is
-refused; a captured `/api/join` request body does not contain the password;
-the key changes across a simulated restart.
+library under Node and committed) decrypts in Python; a Python-produced
+ciphertext decrypts under Node with the same vendored files; a replayed
+nonce is refused; a captured `/api/join` request body does not contain the
+password; the key changes across a simulated restart.
 
 **Done:** spec bench step 10d: a second phone capturing traffic during a
-join does not see the password.
+join does not see the password. The two fixtures in the precondition pass.
 
 **Traps:**
-- Confirm `pycryptodome==3.24.0` has X25519 key agreement
-  (`Crypto.Protocol.DH.key_agreement`); if it does not, raise it in the PR
-  rather than adding a second crypto library.
+- The precondition already showed both-direction `key_agreement` on
+  `curve25519` and one XChaCha20-Poly1305 round-trip in 3.24.0. If CI's
+  3.11 image disagrees, raise it in the PR rather than adding a second
+  crypto library.
 - This does not stop a fake "BlueSignal Setup" (spec risk 3). Do not claim
   it does in comments or docs.
 
 ---
 
-## §7. Delete the wizard; the unit's page goes read-only (W6)
+## §9. Delete the wizard and the PIN (W6)
+
+Decision 1 is answered (24 Oct 2026) and does not hold this PR. This PR
+deletes the setup wizard and the PIN only. It does not turn the local
+page off and it does not remove pH calibration or RS485 setup; that is
+§10, which still waits (see that header).
+
+Captain's ruling, 2026-10-24: setup is Wi-Fi only with the LEDs as the
+guide. There is no PIN anywhere. Owners use BlueSignal Cloud only. The
+unit's local page stays off. The old wizard, PIN, sensors, QR and
+claim-token steps are obsolete. Same day: with the local page off, pH
+calibration and RS485 sensor setup move into BlueSignal Cloud, as Cloud
+commands with no unit page.
+
+One PR. Do not fold local-page-off, CSRF, or template cleanup into this
+change (AGENTS rule 6).
+
+This section used to say the Service Window would drop its login and become
+a read-only local page, unlocked from Cloud for 30 minutes (`local_unlock`).
+That LAN-read decision is withdrawn.
 
 **Change:**
 - Delete the setup wizard: `routes/setup.py` pages `welcome`, `pin`,
@@ -471,39 +643,22 @@ join does not see the password.
   in `app.py`, the factory-PIN prompt, `_probe_block` (the probe check that
   blocked Connect), `captive.py`'s hotspot-session logic and the hotspot
   branch of `auth.py`.
-- **No login on the Service Window.** All GET pages work without a PIN:
-  status, readings, Wi-Fi, firmware.
-- **Every route that changes the unit is locked** (relays, calibration,
-  RS485, settings, AWG, LoRa, provision, Apple Home and Home Assistant
-  settings) behind one decorator, `unlock_required`, which checks
-  `/var/lib/bluesignal/local-unlock.json {until}`. That file is written only
-  by the `local_unlock` cloud command (§8), for at most 30 minutes. Locked
-  pages say "Changes are locked. Unlock the unit's page in BlueSignal Cloud."
-- **CSRF.** With no login, any page on the home network could POST to the
-  unit while it is unlocked. Mutating routes require an `Origin` (or
-  `Referer`) whose host is the unit's own address or hostname.
-- **No auto-refresh on any page** (I5): `sensors.html` (15 s), `status.html`
-  (30 s) and `static/app.js` (30 s on `/`) change to `fetch` and update text
-  in place.
+- **No PIN anywhere.** Delete the login route and every PIN check. There is
+  no factory PIN on the hotspot and no PIN later.
 - The bench key paste from the old cloud step moves to `scripts/provision.py`
   only.
 
-**Files:** `src/service_window/` (app, auth, captive, routes, templates,
-static), `scripts/provision.py`, `docs/site-flow-v2.md`,
-`docs/install-day-runbook.md`, `docs/getting-started.md` (PIN 1234 and
-`WQM1-xxxx` mentions), tests for each route.
+**Files:** `src/service_window/` (app, auth, captive, routes/setup,
+templates/setup, setup_base.html), `scripts/provision.py`,
+`docs/site-flow-v2.md`, `docs/install-day-runbook.md`,
+`docs/getting-started.md` (PIN 1234 and `WQM1-xxxx` mentions), tests for
+the deleted routes.
 
 **Tests:**
-- Walk the Flask `url_map`: every rule whose methods include POST, PUT,
-  PATCH or DELETE returns 403 when locked, and works when unlocked within
-  `until`, and returns 403 after `until`. Do not keep a hand-written list of
-  routes; read the map (AGENTS rule 3).
-- A POST with a foreign `Origin` returns 403 even when unlocked.
-- Every template renders without the strings named in I5.
 - No route answers `/setup/...` any more.
+- No PIN prompt, PIN field or factory PIN remains.
 
-**Done:** the Service Window has no PIN anywhere; pH calibration and the
-RS485 wizard work end to end while unlocked (existing tests, unlocked).
+**Done:** the Service Window has no wizard and no PIN anywhere.
 
 **Traps:**
 - `scripts/provision.py`, `scripts/diagnostics.sh` and the burn-in may log
@@ -511,22 +666,121 @@ RS485 wizard work end to end while unlocked (existing tests, unlocked).
   deleting it.
 - Docs in the marketplace repo that mention PIN 1234 or `WQM1-xxxx` are
   updated through a marketplace PR (the Cloud plan's §6), not here.
+- Do not invent Cloud UI or command fields here. Decision 1 is answered;
+  the unit-side path is §13 and the marketplace list at the end of this
+  plan.
 
 ---
 
-## §8. Cloud commands and heartbeat fields (W9, and the hooks for M2, M5, W6)
+## §10. The unit's local page stays off
+
+**Held:** Decision 1 is answered and does not hold this PR. The unit side
+needs a Cloud command path for pH calibration and RS485 sensor setup
+(§13) before the local page can go off, so this PR still waits on that
+Cloud work and on Decision 2. Decision 3 does not hold this PR.
+
+One PR. With the local page off, **no GET page is readable from the home
+network.** This is not "read-only without a PIN." It is off. Consulted:
+this plan, `SECURITY.md` (reporting policy only; it does not define LAN
+exposure), `docs/site-flow-v2.md` (the flow this plan replaces).
+
+**No `local_unlock` and no `local-unlock.json`.** With the page off there
+is nothing to unlock. Do not add `unlock_required`.
+
+How "off" is implemented is Decision 2. Do not start this PR until that
+answer exists. Write the test for the option the Captain picks:
+
+| Decision 2 | Test |
+|---|---|
+| 404 on `0.0.0.0:8080` | Walk the Flask `url_map` (AGENTS rule 3): every GET returns 404 when `request.remote_addr` is a home-network address. |
+| loopback bind | The Service Window listens on loopback only. A client using the unit's LAN address does not get a GET page (connection refused or no route). |
+| process not running | The Service Window unit is not installed or not enabled on a field image. A client using the unit's LAN address on port 8080 does not get a GET page. |
+
+Do not keep a hand-written list of routes when the 404 option is picked;
+read the map.
+
+**Files:** `src/service_window/app.py` and/or the systemd unit that starts
+it, `setup.sh` if the service is removed from a field install, tests for
+the chosen option.
+
+**Done:** no GET page is readable from a home-network address, by the
+option the Captain named.
+
+**Trap:** do not start this PR until §13 can accept the calibration and
+RS485 Cloud commands (types and fields still to be defined in
+marketplace #1457). Bench calibration stays on hold until those ship
+(`docs/sensor-calibration.md`).
+
+---
+
+## §11. CSRF, only if any mutating route still answers
+
+One PR, and only if Decision 3 says a mutating Service Window route still
+answers from the home network. If those routes stay off with the GET
+pages, skip this PR.
+
+Relays, calibration, RS485, settings and the rest are not a substitute
+local UI. If a route whose methods include POST, PUT, PATCH or DELETE
+still answers, it requires an `Origin` or `Referer` whose host is the
+unit's own address or hostname. **If both `Origin` and `Referer` are
+missing, reject with 403** (curl, some webviews). A foreign host in either
+header is also 403.
+
+**Files:** `src/service_window/` (the CSRF check), tests that walk
+`url_map`.
+
+**Tests** (held until Decision 3; skip the PR if no mutating route
+answers):
+- Walk the Flask `url_map`: every remaining rule whose methods include
+  POST, PUT, PATCH or DELETE returns 403 when both `Origin` and `Referer`
+  are missing.
+- A POST with a foreign `Origin` returns 403. A POST with a foreign
+  `Referer` and no `Origin` returns 403.
+
+**Done:** every mutating route that still answers rejects the missing-
+header case with 403.
+
+---
+
+## §12. I5 template cleanup
+
+One PR. Remove auto-refresh from leftover Service Window templates
+(`sensors.html` 15 s, `status.html` 30 s, `static/app.js` 30 s on `/`).
+They must not reload themselves, navigate on a timer, or replace a form
+(I5). The port-80 setup page is already I5 under §4.
+
+If §10 deletes those templates, this PR has nothing to do — skip it.
+
+**Files:** the leftover templates and `static/app.js`, plus a render test.
+
+**Tests:** every remaining template renders without the strings named in
+I5. Parse the rendered page; do not grep source files.
+
+**Done:** no leftover Service Window page reloads itself.
+
+---
+
+## §13. Cloud commands and heartbeat fields (W9, and the hooks for M2, M5)
 
 **Today:** the firmware polls `deviceCommands` every `command_poll_s` (5 s
 by default) and handles `relay`, `awg`, `restart`, `config_reload`,
 `ota_check`, `diagnostics` in `main.py` `_apply_cloud_command`.
 
-**Add three command types:**
+**Add these command types:**
 
 | Type | Does | Bounds |
 |---|---|---|
-| `identify` | the "is this the one?" pattern (§5) for `seconds` | 10–120 s, default 60 |
-| `wifi_window` | writes `/run/bluesignal/wifi-window.json` (§4) | at most 900 s |
-| `local_unlock` | writes `/var/lib/bluesignal/local-unlock.json` (§7) | at most 1800 s |
+| `identify` | the "is this the one?" pattern (§7) for `seconds` | 10–120 s, default 60 |
+| `wifi_window` | writes `/run/bluesignal/wifi-window.json` (§6) | at most 900 s |
+| pH calibration | apply a pH calibration sent from Cloud; no unit page | to be defined in marketplace #1457 |
+| RS485 sensor setup | set up an RS485 probe from Cloud; no unit page | to be defined in marketplace #1457 |
+
+Do not invent field names or endpoints in this PR. The two calibration
+rows are requirements from Decision 1 (24 Oct 2026). They must exist on
+the unit before §10 turns the local page off.
+
+There is no `local_unlock`. The unit's local page stays off; Cloud does not
+turn it on.
 
 Each acks `done` or `error` through the existing `ack_command`. Unknown
 fields are ignored; out-of-range values are clamped, not trusted.
@@ -542,7 +796,8 @@ early heartbeat), `docs/cloud-payload.md`, tests.
 
 **Tests:** each command's dispatch, clamp and ack; `wifiSsid` present on a
 station and absent on LTE and on the setup network; the early heartbeat
-fires once after a join and not on every reconnect.
+fires once after a join and not on every reconnect; an incoming
+`local_unlock` is ignored (unknown type) and does not write a file.
 
 **Done:** with the Cloud half's endpoint (Cloud plan §2), `identify` rocks
 the lights on a bench Pi within 10 s of the tap.
@@ -567,13 +822,58 @@ the lights on a bench Pi within 10 s of the tap.
 
 ## Order and dependencies
 
-§1 → §2 → §3 → §4 → §5 → §8 → §7 → §6. §7 comes after §8 because the lock
-needs the unlock command. §6 can move earlier once §3 is merged. The Cloud
-half's §2 (Add unit) needs this plan's §8.
+§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §9 → (§10 held) → §11 if
+needed → §12 if needed → §13.
+
+§4 needs §2 (a join to call) and §3 (the open network). §5 can merge as
+soon as the Service Window still exists; after it merges, the old wizard is
+intentionally unreachable from the setup network. §8 can start once §4 is
+merged (run the precondition first). Decision 1 is answered (24 Oct 2026)
+and no longer holds §9 or §10. §9 (wizard and PIN only) does not wait on
+Decision 1. **The unit side needs a Cloud command path for calibration
+and RS485 (§13) before the local page can go off, so the §10 PR still
+waits on that Cloud work and on Decision 2.** §11 opens only if Decision
+3 says a mutating route still answers. §12 opens only if leftover
+templates remain after §10. `identify` / `wifi_window` / heartbeat in
+§13 can start after §7. The calibration and RS485 command handlers in
+§13 must land before §10. The Cloud half's §2 (Add unit) needs this
+plan's §13.
 
 ## Not verified by this plan
 
 - Every bench item named above; the spec's section 7 list.
 - That `iw dev wlan0 scan ap-force` works on the BCM43430 in AP mode.
-- That `pycryptodome==3.24.0` exposes X25519 key agreement.
+- HKDF-SHA256 + XChaCha20-Poly1305 interop between the vendored JS libraries
+  and pycryptodome (the method is in the precondition; no fixture has been
+  generated).
+- That the X25519 check above also passes on CI's Python 3.11 image.
 - The repro numbers in §1 came from this session's scratch test, not CI.
+- That this stacked branch is current with master (not checked).
+
+## Decisions needed from the Captain
+
+1. **Answered, 24 Oct 2026.** With the local page off, pH calibration and
+   RS485 sensor setup move into BlueSignal Cloud, as Cloud commands with
+   no unit page. The unit-side path is §13. Marketplace requirements are
+   below. Field names and endpoints are to be defined in #1457.
+2. **How the local page stays off on a field unit.** Open. Does the
+   Service Window still bind `0.0.0.0:8080` and 404 every GET from the
+   home network, bind loopback only, or not run? §10 waits on this.
+3. **Mutating Service Window routes from the home network.** Open. §11 is
+   CSRF (403 if `Origin` and `Referer` are both missing) for any mutating
+   route that still answers, and is skipped if none do. Should those
+   routes answer from the home network at all, or stay off the same way
+   GET pages do?
+
+## Marketplace Cloud work needed (for #1457's plan)
+
+Requirements only. Do not invent field names, endpoints, or Cloud UI
+steps. Each item is to be defined in marketplace #1457.
+
+- A pH calibration command: Cloud sends a pH calibration to the unit.
+  No unit page. To be defined in #1457.
+- An RS485 sensor setup command: Cloud sends RS485 probe setup to the
+  unit. No unit page. To be defined in #1457.
+- How results come back: Cloud must learn whether each command succeeded
+  or failed, and enough to show the operator what the unit did. To be
+  defined in #1457.
