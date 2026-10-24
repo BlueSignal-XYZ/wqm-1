@@ -279,9 +279,9 @@ def commission_over_http(base: str, api_key: str, pin: str = SIM_PIN) -> list[st
     """Walk the setup wizard the way an installer's phone does (site flow v2).
 
     A full-tier unit is carded (identity file + cloud key in its config), so
-    the walk is welcome → pin → sensors → network, and the JOIN finishes
-    setup. Returns the step list completed, in order. ``api_key`` is kept for
-    the uncarded case: if the wizard asks for a key, it is given.
+    the walk is welcome → sensors → network, and the JOIN finishes setup.
+    There is no PIN. Returns the step list completed, in order. ``api_key``
+    is kept for the uncarded case: if the wizard asks for a key, it is given.
     """
     import urllib.parse  # noqa: F401 — used by _Http.post
 
@@ -289,15 +289,11 @@ def commission_over_http(base: str, api_key: str, pin: str = SIM_PIN) -> list[st
 
     c = _Http(base)
     done: list[str] = []
-    # On a virtual unit the browser counts as "on the hotspot", so first setup
-    # needs no PIN; logging in with the factory PIN still works and is what a
-    # LAN visit does.
-    c.post("/login", {"pin": FACTORY_PIN})
+    # Virtual unit: the browser counts as on the hotspot. Setup is Wi-Fi
+    # only; /login and /setup/pin are closed (Captain, 2026-10-24).
     _, welcome = c.get("/setup/")
     done.append("welcome")
     carded = "already knows who it" in welcome
-    c.post("/setup/pin", {"pin": pin, "pin_confirm": pin})
-    done.append("pin")
     if not carded:
         c.get("/setup/identity")
         done.append("identity")

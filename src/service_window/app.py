@@ -153,9 +153,9 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
         vendor = read_config(app.config["CONFIG_PATH"]).get("smart_breaker_vendor")
         return {"awg_bound": bool(vendor) and vendor != "none"}
 
-    # Until the factory PIN is replaced and the setup wizard finished, every
-    # page funnels into /setup — a unit can't be left half-commissioned by
-    # accident, and the shipped PIN can't quietly stay in service.
+    # Until the setup wizard finished, every page funnels into /setup — a
+    # unit can't be left half-commissioned by accident. There is no PIN to
+    # replace; unfinished setup is the only gate.
     @app.before_request
     def _force_setup():  # type: ignore[reportUnusedFunction]
         from flask import redirect, request

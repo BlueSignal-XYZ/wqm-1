@@ -89,11 +89,10 @@ class TestServiceWindowSurfacesTheReason:
                 "CMD_SOCK": str(tmp_path / "cmd.sock"),
                 "PIN": "1234",
                 "SECRET_KEY": "test-secret",
+                "TEST_OPEN_WINDOW": True,
             }
         )
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             yield c
 
     def test_save_redirects_instead_of_500(self, client):

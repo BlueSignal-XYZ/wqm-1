@@ -1,0 +1,64 @@
+{% extends "setup_base.html" %}
+{% block title %}Setup — Joining{% endblock %}
+{% block content %}
+<h1 class="setup-h1">Joining {{ ssid }}…</h1>
+<p class="lead">The setup network turns off when the join starts, so your phone
+usually drops. If the password is wrong, the router gives no address, or the
+unit cannot reach the router, this page comes back and says which one happened.
+A join can take a couple of minutes.</p>
+<p class="skip-note">This page does not hold one request open. It asks
+<code>/setup/join-status</code> until the unit has an answer.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var tries = 0;
+  var maxTries = 90;
+  var reconnect = "Reconnect to this unit's Wi-Fi, or check BlueSignal Cloud.";
+  function showReconnect() {
+    var lead = document.querySelector('.lead');
+    if (lead) lead.textContent = reconnect;
+  }
+  function droppedHotspot(r) {
+    if (!r || r.status === 403) return true;
+    var type = (r.headers && r.headers.get('Content-Type')) || '';
+    return type.indexOf('json') === -1;
+  }
+  function tick() {
+    fetch('/setup/join-status', {headers: {Accept: 'application/json'}})
+      .then(function (r) {
+        if (droppedHotspot(r)) {
+          showReconnect();
+          return null;
+        }
+        return r.json().then(function (j) { return j; }, function () {
+          showReconnect();
+          return null;
+        });
+      })
+      .then(function (j) {
+        if (!j) {
+          if (++tries < maxTries) setTimeout(tick, 2000);
+          else showReconnect();
+          return;
+        }
+        if (j.state === 'ok') {
+          document.querySelector('.setup-h1').textContent = 'Joined ' + (j.ssid || '') + '. You\u2019re done here.';
+          return;
+        }
+        if (j.state === 'fail') {
+          window.location = '/setup/network';
+          return;
+        }
+        if (++tries < maxTries) setTimeout(tick, 2000);
+        else showReconnect();
+      })
+      .catch(function () {
+        if (++tries < maxTries) setTimeout(tick, 2000);
+        else showReconnect();
+      });
+  }
+  setTimeout(tick, 400);
+})();
+</script>
+{% endblock %}

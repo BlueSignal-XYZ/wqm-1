@@ -66,20 +66,20 @@ def make_client(tmp_path):
     def _build(temp_c: float | None = 25.0):
         db_path = str(tmp_path / f"t{temp_c}.db")
         _make_db(db_path, temp_c)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("service_window:\n  setup_completed: true\n")
         app = create_app(
             {
                 "db_path": db_path,
                 "pin": "9999",
-                "config_path": str(tmp_path / "config.yaml"),
+                "config_path": str(config_path),
                 "cal_path": str(tmp_path / "calibration.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }
         )
         app.config["TESTING"] = True
-        client = app.test_client()
-        with client.session_transaction() as sess:
-            sess["pin_verified"] = True
-        return app, client
+        app.config["TEST_OPEN_WINDOW"] = True
+        return app, app.test_client()
 
     return _build
 
@@ -219,8 +219,9 @@ class TestLiveVoltageEndpoint:
     def test_it_is_behind_the_pin(self, make_client, tmp_path):
         """The readout drives the bus. It is not a public page."""
         app, _ = make_client()
+        app.config["TEST_OPEN_WINDOW"] = False
         anon = app.test_client()
-        assert anon.get("/calibrate/live.json").status_code == 302
+        assert anon.get("/calibrate/live.json").status_code == 403
 
 
 # ---------------------------------------------------------------------------
