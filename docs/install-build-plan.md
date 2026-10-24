@@ -547,8 +547,11 @@ ct_len 17 tag_len 16
 
 Both directions of `key_agreement` on `curve25519` returned the same 32
 bytes. One XChaCha20-Poly1305 encrypt/decrypt with a 24-byte nonce
-round-tripped the plaintext. Not verified: the same check on CI's Python
-3.11 image; this check was not run under `pytest`.
+round-tripped the plaintext. Rerun independently on 2026-10-24 under
+Python 3.11.17 (CI's version) and 3.13.17, each in a fresh venv with
+`pycryptodome==3.24.0`: both directions equal (32 bytes), round-trip ok,
+and a ciphertext with one flipped bit is rejected (`ValueError`). Not
+verified: this check is not under `pytest`; the §8 PR adds it as a test.
 
 **How HKDF-SHA256 + XChaCha20-Poly1305 will be checked across JS and
 Python** (do this in the §8 PR; it is unverified today — there is no
@@ -606,10 +609,10 @@ password; the key changes across a simulated restart.
 join does not see the password. The two fixtures in the precondition pass.
 
 **Traps:**
-- The precondition already showed both-direction `key_agreement` on
-  `curve25519` and one XChaCha20-Poly1305 round-trip in 3.24.0. If CI's
-  3.11 image disagrees, raise it in the PR rather than adding a second
-  crypto library.
+- The precondition showed both-direction `key_agreement` on `curve25519`,
+  one XChaCha20-Poly1305 round-trip and a rejected tampered ciphertext in
+  3.24.0, on Python 3.11 and 3.12/3.13. If CI disagrees, raise it in the
+  PR rather than adding a second crypto library.
 - This does not stop a fake "BlueSignal Setup" (spec risk 3). Do not claim
   it does in comments or docs.
 
@@ -629,8 +632,18 @@ claim-token steps are obsolete. Same day: with the local page off, pH
 calibration and RS485 sensor setup move into BlueSignal Cloud, as Cloud
 commands with no unit page.
 
-One PR. Do not fold local-page-off, CSRF, or template cleanup into this
-change (AGENTS rule 6).
+**Order: §9 merges after §10, and after §11 when Decision 3 keeps any
+mutating route answering.** Today the 8080 login is the only thing between
+a phone on the home network and the relays, calibration, RS485 and
+settings routes on `0.0.0.0:8080`. Deleting the PIN before those routes
+stop answering leaves them open with no login. Until §10 (and §11 if
+needed) has merged, §9 may be built and reviewed but not merged.
+
+One PR. Deleting the wizard, deleting the PIN and login, and moving the
+bench key paste to `scripts/provision.py` are one change: removing the old
+setup path. They land together; splitting them leaves a half-removed path
+in the tree (AGENTS rule 6 is about unrelated changes). Do not fold
+local-page-off, CSRF, or template cleanup into this change.
 
 This section used to say the Service Window would drop its login and become
 a read-only local page, unlocked from Cloud for 30 minutes (`local_unlock`).
@@ -708,8 +721,9 @@ option the Captain named.
 
 **Trap:** do not start this PR until §13 can accept the calibration and
 RS485 Cloud commands (types and fields still to be defined in
-marketplace #1457). Bench calibration stays on hold until those ship
-(`docs/sensor-calibration.md`).
+marketplace #1457). Until those ship, BlueSignal staff calibrate on the
+bench from the Service Window (`docs/sensor-calibration.md`); this PR is
+what ends that, so it rewrites that page.
 
 ---
 
@@ -822,17 +836,21 @@ the lights on a bench Pi within 10 s of the tap.
 
 ## Order and dependencies
 
-§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §9 → (§10 held) → §11 if
-needed → §12 if needed → §13.
+§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §13 → (§10 held) → §11 if
+needed → §9 → §12 if needed.
+
+**§9 never merges before §10** (and §11 when Decision 3 keeps a mutating
+route answering). §9 deletes the PIN, and the PIN is the only gate on the
+mutating 8080 routes until §10 takes them off the home network.
 
 §4 needs §2 (a join to call) and §3 (the open network). §5 can merge as
 soon as the Service Window still exists; after it merges, the old wizard is
 intentionally unreachable from the setup network. §8 can start once §4 is
 merged (run the precondition first). Decision 1 is answered (24 Oct 2026)
-and no longer holds §9 or §10. §9 (wizard and PIN only) does not wait on
-Decision 1. **The unit side needs a Cloud command path for calibration
-and RS485 (§13) before the local page can go off, so the §10 PR still
-waits on that Cloud work and on Decision 2.** §11 opens only if Decision
+and no longer holds §9 or §10. §9 (wizard and PIN only) can be built
+now but merges only after §10 (see above). **The unit side needs a Cloud
+command path for calibration and RS485 (§13) before the local page can go
+off, so the §10 PR still waits on that Cloud work and on Decision 2.** §11 opens only if Decision
 3 says a mutating route still answers. §12 opens only if leftover
 templates remain after §10. `identify` / `wifi_window` / heartbeat in
 §13 can start after §7. The calibration and RS485 command handlers in
@@ -846,9 +864,7 @@ plan's §13.
 - HKDF-SHA256 + XChaCha20-Poly1305 interop between the vendored JS libraries
   and pycryptodome (the method is in the precondition; no fixture has been
   generated).
-- That the X25519 check above also passes on CI's Python 3.11 image.
 - The repro numbers in §1 came from this session's scratch test, not CI.
-- That this stacked branch is current with master (not checked).
 
 ## Decisions needed from the Captain
 
@@ -859,11 +875,19 @@ plan's §13.
 2. **How the local page stays off on a field unit.** Open. Does the
    Service Window still bind `0.0.0.0:8080` and 404 every GET from the
    home network, bind loopback only, or not run? §10 waits on this.
+   **Recommended: loopback only.** The setup page is the port-80 process
+   (§4), which no longer proxies to 8080, so nothing outside the unit needs
+   8080. Loopback keeps the Service Window for bench scripts on the unit and
+   makes "off" a property of the socket, not of a route list that can miss
+   a new route.
 3. **Mutating Service Window routes from the home network.** Open. §11 is
    CSRF (403 if `Origin` and `Referer` are both missing) for any mutating
    route that still answers, and is skipped if none do. Should those
    routes answer from the home network at all, or stay off the same way
-   GET pages do?
+   GET pages do? **Recommended: off, the same way.** Relays, calibration,
+   RS485 and settings all move to Cloud commands (§13), so nothing on the
+   home network needs them, and §11 is skipped. With loopback (Decision 2)
+   this answer comes for free.
 
 ## Marketplace Cloud work needed (for #1457's plan)
 
