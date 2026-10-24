@@ -480,7 +480,8 @@ def sw_client(tmp_path, monkeypatch):
     )
     app.config["TESTING"] = True
     client = app.test_client()
-    client.post("/login", data={"pin": "9999"})
+    with client.session_transaction() as sess:
+        sess["pin_verified"] = True
     sent: list[tuple[str, dict]] = []
     answer: dict[str, Any] = {"ok": True, **publisher().status()}
 
@@ -556,4 +557,4 @@ class TestServiceWindow:
     def test_page_requires_login(self, sw_client):
         client, _, _, _ = sw_client
         client.get("/logout")
-        assert client.get("/home-assistant/").status_code in (302, 401)
+        assert client.get("/home-assistant/").status_code in (302, 401, 403)

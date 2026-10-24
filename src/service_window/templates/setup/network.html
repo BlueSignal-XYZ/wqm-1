@@ -93,7 +93,8 @@
     <p class="skip-note">This page goes away when you tap Join: the unit turns off its
     setup network and your phone drops back to its usual connection. If the password
     is wrong, the router does not give the unit an address, or the unit cannot reach
-    the router, this page comes back within a minute and says which one happened.</p>
+    the router, this page comes back and says which one happened. A join can take a
+    couple of minutes; the unit keeps working after this request ends.</p>
     {% endif %}
     <div class="setup-actions">
         <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join</button>
@@ -125,8 +126,9 @@
   if (form && join) {
     form.addEventListener('submit', function (e) {
       if (e.submitter !== join) return;
-      // The join takes up to about a minute and usually takes this page with it.
-      // Say so, and stop a second tap from starting a second join.
+      // The join can take a couple of minutes and usually takes this page with it.
+      // The POST returns a status page that polls /setup/join-status.
+      // Stop a second tap from starting a second join.
       setTimeout(function () {
         join.disabled = true;
         join.textContent = 'Joining… your phone will reconnect by itself';

@@ -163,7 +163,7 @@ class TestIndexAndScan:
     def test_requires_login(self, app):
         client = app.test_client()
         resp = client.get("/rs485/")
-        assert resp.status_code == 302
+        assert resp.status_code == 403
 
 
 class TestAssign:

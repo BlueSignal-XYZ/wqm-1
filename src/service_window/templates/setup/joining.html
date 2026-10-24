@@ -1,0 +1,37 @@
+{% extends "setup_base.html" %}
+{% block title %}Setup — Joining{% endblock %}
+{% block content %}
+<h1 class="setup-h1">Joining {{ ssid }}…</h1>
+<p class="lead">The setup network turns off when the join starts, so your phone
+usually drops. If the password is wrong, the router gives no address, or the
+unit cannot reach the router, this page comes back and says which one happened.
+A join can take a couple of minutes.</p>
+<p class="skip-note">This page does not hold one request open. It asks
+<code>/setup/join-status</code> until the unit has an answer.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var tries = 0;
+  function tick() {
+    fetch('/setup/join-status', {headers: {Accept: 'application/json'}})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.state === 'ok') {
+          document.querySelector('.setup-h1').textContent = 'Joined ' + (j.ssid || '') + '. You\u2019re done here.';
+          return;
+        }
+        if (j.state === 'fail') {
+          window.location = '/setup/network';
+          return;
+        }
+        if (++tries < 90) setTimeout(tick, 2000);
+      })
+      .catch(function () {
+        if (++tries < 90) setTimeout(tick, 2000);
+      });
+  }
+  setTimeout(tick, 400);
+})();
+</script>
+{% endblock %}

@@ -171,8 +171,9 @@ class TestHotspotSkipsTheFactoryPin:
         app = self._app(tmp_path, mock_hardware, monkeypatch, False)
         with app.test_client() as c:
             r = c.get("/setup/")
-        assert r.status_code == 302
-        assert "/login" in r.headers["Location"]
+        assert r.status_code == 403
+        assert b'name="pin"' not in r.data
+        assert "/login" not in (r.headers.get("Location") or "")
 
     def test_the_wifi_page_stays_open_on_the_hotspot_after_setup(
         self, tmp_path, mock_hardware, monkeypatch
@@ -193,10 +194,13 @@ class TestHotspotSkipsTheFactoryPin:
             tmp_path, mock_hardware, monkeypatch, True, pin="8642", setup_completed=True
         )
         with app.test_client() as c:
-            for path in ("/setup/pin", "/setup/sensors", "/settings/"):
+            # Setup pages (not /setup/pin) stay open on the hotspot. Owner
+            # pages and the PIN page do not — there is no PIN to set.
+            assert c.get("/setup/sensors").status_code == 200
+            for path in ("/setup/pin", "/settings/"):
                 r = c.get(path)
-                assert r.status_code == 302, path
-                assert "/login" in r.headers["Location"], path
+                assert r.status_code == 403, path
+                assert b'name="pin"' not in r.data
 
     def test_the_wifi_page_needs_the_pin_off_the_hotspot(
         self, tmp_path, mock_hardware, monkeypatch
@@ -206,8 +210,8 @@ class TestHotspotSkipsTheFactoryPin:
         )
         with app.test_client() as c:
             r = c.get("/setup/network")
-        assert r.status_code == 302
-        assert "/login" in r.headers["Location"]
+        assert r.status_code == 403
+        assert b'name="pin"' not in r.data
 
     def test_setting_the_pin_keeps_the_installer_signed_in(
         self, tmp_path, mock_hardware, monkeypatch
@@ -215,9 +219,8 @@ class TestHotspotSkipsTheFactoryPin:
         app = self._app(tmp_path, mock_hardware, monkeypatch, True)
         with app.test_client() as c:
             r = c.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
-            assert r.status_code == 302
-            # The factory PIN is gone, so the hotspot exemption no longer
-            # applies — the session carries them on.
+            # /setup/pin is not a hotspot-open route: there is no PIN to set.
+            assert r.status_code == 403
             assert c.get("/setup/sensors").status_code == 200
 
 

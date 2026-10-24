@@ -190,8 +190,8 @@ class TestNavigation:
         app.config["TESTING"] = True
         anon = app.test_client()
         resp = anon.get("/awg/")
-        assert resp.status_code == 302
-        assert "/login" in resp.headers["Location"]
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
 
 
 # --------------------------------------------------------------------------

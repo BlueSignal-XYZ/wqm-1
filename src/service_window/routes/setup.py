@@ -340,6 +340,96 @@ def _declare(form: dict, backhaul: str) -> None:
     update_config(current_app.config["CONFIG_PATH"], values)
 
 
+_JOIN_LOCK = threading.Lock()
+# Instant joins (tests, the virtual radio) finish in this window so existing
+# callers still get the joined page on the same POST. A real join of up to
+# ~150 s returns the polling page instead of holding the HTTP request.
+_JOIN_HTTP_WAIT_S = 0.2
+
+
+def _join_job() -> dict:
+    job = current_app.config.get("JOIN_JOB")
+    if not isinstance(job, dict):
+        job = {"state": "idle", "ssid": None, "view": None}
+        current_app.config["JOIN_JOB"] = job
+    return job
+
+
+def _begin_join(
+    ssid: str,
+    password: str | None,
+    ap_ssid: str | None,
+    ap_pass: str | None,
+    scanned: list,
+) -> ResponseReturnValue | None:
+    """Run ``join_network`` off the request thread.
+
+    Returns the joined page or a redirect when the join finishes inside
+    ``_JOIN_HTTP_WAIT_S``. Returns None when the join is still running so
+    the caller can serve the status-polling page.
+    """
+    from utils.netctl import join_network, usable_ipv4
+
+    # LocalProxy: the real app object is what the worker thread must hold.
+    app = current_app._get_current_object()  # type: ignore[attr-defined]
+    with _JOIN_LOCK:
+        job = _join_job()
+        if job.get("state") == "joining":
+            return None
+        job.update(state="joining", ssid=ssid, view=None)
+
+    def _run() -> None:
+        with app.app_context():
+
+            def _remember(pending: dict) -> None:
+                app.config["LAST_JOIN"] = _notice_for(ssid, pending, scanned)
+
+            result = join_network(
+                ssid,
+                password or None,
+                ap_ssid=ap_ssid,
+                ap_passphrase=ap_pass,
+                on_failure=_remember,
+            )
+            live = _join_job()
+            joined_ip = str(result.get("ip") or "")
+            if result.get("connected") and usable_ipv4(joined_ip):
+                app.config.pop("LAST_JOIN", None)
+                _kick_register()
+                finished = _finish_setup(ssid)
+                rssi = result.get("rssi")
+                live["state"] = "ok"
+                live["view"] = {
+                    "ssid": ssid,
+                    "ip": joined_ip,
+                    "forgotten": finished["forgotten"],
+                    "weak": is_weak_rssi(rssi if isinstance(rssi, int) else None),
+                    "rssi": rssi,
+                }
+            else:
+                app.config["LAST_JOIN"] = _notice_for(ssid, result, scanned)
+                live["state"] = "fail"
+
+    thread = threading.Thread(target=_run, name="wqm1-wifi-join", daemon=True)
+    thread.start()
+    thread.join(timeout=_JOIN_HTTP_WAIT_S)
+    done = _join_job()
+    if done.get("state") == "ok":
+        view = done.get("view") or {}
+        return render_template(
+            "setup/joined.html",
+            steps=_steps(),
+            step="done",
+            identity=_identity(),
+            registration=registration_view(),
+            weak_message=WEAK_SIGNAL_MESSAGE,
+            **view,
+        )
+    if done.get("state") == "fail":
+        return redirect(url_for("setup.network"))
+    return None
+
+
 @setup_bp.route("/network", methods=["GET", "POST"])
 @login_required
 def network() -> ResponseReturnValue:
@@ -351,9 +441,10 @@ def network() -> ResponseReturnValue:
       usable IPv4 address (not a link-local 169.254 address), and can reach
       the gateway or DNS.** The page is usually served over the unit's own
       setup hotspot, which goes DOWN the moment the join starts, so the phone
-      may never see this response: the PIN is checked first, and on success
-      the unit finishes on its own (other saved Wi-Fi forgotten, setup recorded,
-      firmware restarted). On failure ``netctl`` stores the installer-readable
+      may never see this response: the join runs in the background and the
+      page polls ``/setup/join-status``. On success the unit finishes on its
+      own (other saved Wi-Fi forgotten, setup recorded, firmware restarted).
+      On failure ``netctl`` stores the installer-readable
       reason before it brings the hotspot and the port-80 portal back, so the
       page that reopens says why.
     * ``keep`` — the unit is already on a network (the bench, or a LAN visit):
@@ -367,7 +458,6 @@ def network() -> ResponseReturnValue:
     from utils.netctl import (
         ap_active,
         ap_credentials,
-        join_network,
         scan_networks,
         usable_ipv4,
     )
@@ -468,43 +558,15 @@ def network() -> ResponseReturnValue:
                 return redirect(url_for("setup.network"))
             _declare(request.form, "wifi")
             ap_ssid, ap_pass = ap_credentials()
-
-            def _remember(pending: dict) -> None:
-                # Before the hotspot is raised again. A phone that rejoins
-                # the moment the AP is up must already find this sentence.
-                current_app.config["LAST_JOIN"] = _notice_for(ssid, pending, scanned)
-
-            result = join_network(
-                ssid,
-                password or None,
-                ap_ssid=ap_ssid,
-                ap_passphrase=ap_pass,
-                on_failure=_remember,
+            page = _begin_join(ssid, password, ap_ssid, ap_pass, scanned)
+            if page is not None:
+                return page
+            return render_template(
+                "setup/joining.html",
+                steps=["network"],
+                step="network",
+                ssid=ssid,
             )
-            joined_ip = str(result.get("ip") or "")
-            if result.get("connected") and usable_ipv4(joined_ip):
-                current_app.config.pop("LAST_JOIN", None)
-                _kick_register()
-                finished = _finish_setup(ssid)
-                rssi = result.get("rssi")
-                return render_template(
-                    "setup/joined.html",
-                    steps=_steps(),
-                    step="done",
-                    ssid=ssid,
-                    ip=joined_ip,
-                    identity=_identity(),
-                    registration=registration_view(),
-                    forgotten=finished["forgotten"],
-                    weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
-                    weak_message=WEAK_SIGNAL_MESSAGE,
-                    rssi=rssi,
-                )
-            # Kept on the unit, not flashed: a flash rides in this response,
-            # and this response is usually lost with the hotspot. The hook
-            # above wrote the same notice before the AP came back.
-            current_app.config["LAST_JOIN"] = _notice_for(ssid, result, scanned)
-            return redirect(url_for("setup.network"))
         if action == "keep":
             current_status = wifi_status()
             current = current_status.get("ssid")
@@ -798,6 +860,21 @@ def done() -> ResponseReturnValue:
         backhaul=str(config.get("backhaul") or "wifi"),
         probe_rows=rows,
         registration=registration_view(),
+    )
+
+
+@setup_bp.route("/join-status")
+@login_required
+def join_status() -> ResponseReturnValue:
+    """JSON the joining page polls. Open on the hotspot; no Wi-Fi secret."""
+    job = _join_job()
+    last = current_app.config.get("LAST_JOIN")
+    return jsonify(
+        {
+            "state": job.get("state") or "idle",
+            "ssid": job.get("ssid"),
+            "last_join": last,
+        }
     )
 
 

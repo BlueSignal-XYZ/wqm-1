@@ -243,5 +243,5 @@ def _join_register_kicks(monkeypatch):
     before = set(threading.enumerate())
     yield
     for thread in threading.enumerate():
-        if thread.name == "wqm1-register-kick" and thread not in before:
+        if thread.name in {"wqm1-register-kick", "wqm1-wifi-join"} and thread not in before:
             thread.join(timeout=5)

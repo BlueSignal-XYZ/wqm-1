@@ -71,7 +71,10 @@ class TestForcedSetup:
         r = client.get("/setup/")
         assert r.status_code == 302 and r.headers["Location"].endswith("/setup/network")
         assert client.get("/setup/network").status_code == 200
-        assert client.get("/login").status_code == 200
+        # /login is closed: there is no PIN to enter (Captain, 2026-10-24).
+        login = client.get("/login")
+        assert login.status_code == 403
+        assert b'name="pin"' not in login.data
 
     def test_commissioned_unit_is_not_redirected(self, commissioned_client):
         client, _ = commissioned_client
@@ -545,66 +548,25 @@ class TestWizardWalkedInOrder:
 
 
 class TestFactoryPinOnLan:
-    """Setup no longer replaces the factory PIN, so a unit online on the
-    owner's network still carries 1234. It must not log in from there."""
+    """There is no PIN. LAN login is closed; see tests/test_no_pin_auth.py."""
 
-    @pytest.fixture(autouse=True)
-    def _fresh_rate_limit(self):
-        # Login attempts are counted per IP for the process; every test here
-        # posts from the same test client address.
-        from service_window import auth
-
-        auth._attempts.clear()
-        auth._lockouts.clear()
-        yield
-        auth._attempts.clear()
-        auth._lockouts.clear()
-
-    def _finish(self, app):
+    def test_lan_login_is_closed_after_setup(self, factory_client, monkeypatch):
+        from service_window import captive
         from service_window.routes.setup import update_config_section
 
+        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
+        client, app = factory_client
         update_config_section(
             app.config["CONFIG_PATH"], "service_window", {"setup_completed": True}
         )
-
-    def test_factory_pin_is_refused_from_the_lan_after_setup(self, factory_client, monkeypatch):
-        from service_window import captive
-
-        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
-        client, app = factory_client
-        self._finish(app)
         with client.session_transaction() as sess:
             sess.clear()
         r = client.post("/login", data={"pin": "1234"})
-        assert r.status_code == 200
-        assert b"factory PIN" in r.data
+        assert r.status_code == 403
+        assert b"factory PIN" not in r.data
+        assert b'name="pin"' not in r.data
         with client.session_transaction() as sess:
             assert not sess.get("pin_verified")
-
-    def test_factory_pin_still_works_on_the_hotspot(self, factory_client, monkeypatch):
-        from service_window import captive
-
-        monkeypatch.setattr(captive, "from_hotspot", lambda: True)
-        client, app = factory_client
-        self._finish(app)
-        r = client.post("/login", data={"pin": "1234"})
-        assert r.status_code == 302
-
-    def test_factory_pin_still_works_on_the_bench_before_setup(self, factory_client, monkeypatch):
-        from service_window import captive
-
-        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
-        client, _app = factory_client
-        r = client.post("/login", data={"pin": "1234"})
-        assert r.status_code == 302
-
-    def test_a_chosen_pin_works_from_the_lan(self, commissioned_client, monkeypatch):
-        from service_window import captive
-
-        monkeypatch.setattr(captive, "from_hotspot", lambda: False)
-        client, app = commissioned_client
-        r = client.post("/login", data={"pin": str(app.config["PIN"])})
-        assert r.status_code == 302
 
 
 class TestStatusHealthPage:

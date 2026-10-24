@@ -220,7 +220,7 @@ class TestLiveVoltageEndpoint:
         """The readout drives the bus. It is not a public page."""
         app, _ = make_client()
         anon = app.test_client()
-        assert anon.get("/calibrate/live.json").status_code == 302
+        assert anon.get("/calibrate/live.json").status_code == 403
 
 
 # ---------------------------------------------------------------------------

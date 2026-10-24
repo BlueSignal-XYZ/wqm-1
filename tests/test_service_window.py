@@ -70,31 +70,28 @@ def authed_client(client):
 
 
 class TestAuth:
-    def test_login_page_renders(self, client):
+    def test_login_is_closed(self, client):
         resp = client.get("/login")
-        assert resp.status_code == 200
-        assert b"PIN" in resp.data
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
+        assert b"BlueSignal Cloud" in resp.data
 
-    def test_login_redirect_on_unauthenticated(self, client):
+    def test_unauthenticated_lan_is_refused(self, client):
         resp = client.get("/")
-        assert resp.status_code == 302
-        assert "/login" in resp.headers["Location"]
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
 
-    def test_login_with_correct_pin(self, client):
+    def test_login_does_not_accept_a_pin(self, client):
         resp = client.post("/login", data={"pin": "9999"}, follow_redirects=False)
-        assert resp.status_code == 302
-
-    def test_login_with_wrong_pin(self, client):
-        resp = client.post("/login", data={"pin": "0000"})
-        assert resp.status_code == 200
-        assert b"Incorrect" in resp.data
+        assert resp.status_code == 403
+        with client.session_transaction() as sess:
+            assert not sess.get("pin_verified")
 
     def test_logout(self, authed_client):
         resp = authed_client.get("/logout", follow_redirects=False)
         assert resp.status_code == 302
-        # After logout, dashboard should redirect to login
         resp = authed_client.get("/")
-        assert resp.status_code == 302
+        assert resp.status_code == 403
 
 
 class TestDashboard:

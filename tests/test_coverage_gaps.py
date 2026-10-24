@@ -366,21 +366,13 @@ class TestAuthRateLimiting:
     """Cover auth.py rate limiting paths."""
 
     def test_rate_limiting_blocks_after_max_attempts(self, mock_hardware):
-        """After _MAX_ATTEMPTS failed logins from same IP, further attempts are blocked."""
-        from service_window.app import create_app
-        from service_window.auth import _attempts
-
-        app = create_app({"pin": "9999", "db_path": ":memory:", "config_path": "/dev/null"})
-        app.config["TESTING"] = True
-        client = app.test_client()
+        """/login is closed; the leftover throttle still trips after _MAX_ATTEMPTS."""
+        from service_window.auth import _MAX_ATTEMPTS, _attempts, _is_rate_limited, _record_attempt
 
         _attempts.clear()
-
         try:
-            for _ in range(6):
-                client.post("/login", data={"pin": "wrong"})
-
-            resp = client.post("/login", data={"pin": "wrong"})
-            assert b"Too many" in resp.data or resp.status_code == 200
+            for _ in range(_MAX_ATTEMPTS):
+                _record_attempt("test-ip")
+            assert _is_rate_limited("test-ip")
         finally:
             _attempts.clear()

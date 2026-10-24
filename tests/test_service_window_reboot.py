@@ -92,7 +92,9 @@ class TestRebootControl:
     def test_login_required(self, app):
         app.config["TESTING"] = True
         resp = reboot(app.test_client())
-        assert b"PIN" in resp.data
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
+        assert b"BlueSignal Cloud" in resp.data
 
 
 class TestTypedConfirmation:
