@@ -617,15 +617,17 @@ join does not see the password. The two fixtures in the precondition pass.
 
 ## §9. Delete the wizard and the PIN (W6)
 
-**Held:** §9 (and the local-page-off PR) does not start until the Captain
-answers Decisions 1–3. Pulling bench pH calibration and the RS485 wizard
-has no replacement yet (`docs/sensor-calibration.md` line 4 still says
-use `http://<unit-ip>:8080`).
+Decision 1 is answered (24 Oct 2026) and does not hold this PR. This PR
+deletes the setup wizard and the PIN only. It does not turn the local
+page off and it does not remove pH calibration or RS485 setup; that is
+§10, which still waits (see that header).
 
 Captain's ruling, 2026-10-24: setup is Wi-Fi only with the LEDs as the
 guide. There is no PIN anywhere. Owners use BlueSignal Cloud only. The
 unit's local page stays off. The old wizard, PIN, sensors, QR and
-claim-token steps are obsolete.
+claim-token steps are obsolete. Same day: with the local page off, pH
+calibration and RS485 sensor setup move into BlueSignal Cloud, as Cloud
+commands with no unit page.
 
 One PR. Do not fold local-page-off, CSRF, or template cleanup into this
 change (AGENTS rule 6).
@@ -664,17 +666,18 @@ the deleted routes.
   deleting it.
 - Docs in the marketplace repo that mention PIN 1234 or `WQM1-xxxx` are
   updated through a marketplace PR (the Cloud plan's §6), not here.
-- Do not invent a replacement for bench pH calibration or the RS485 wizard
-  in this PR. See Decisions needed from the Captain.
+- Do not invent Cloud UI or command fields here. Decision 1 is answered;
+  the unit-side path is §13 and the marketplace list at the end of this
+  plan.
 
 ---
 
 ## §10. The unit's local page stays off
 
-**Held:** §9 (and the local-page-off PR) does not start until the Captain
-answers Decisions 1–3. Pulling bench pH calibration and the RS485 wizard
-has no replacement yet (`docs/sensor-calibration.md` line 4 still says
-use `http://<unit-ip>:8080`).
+**Held:** Decision 1 is answered and does not hold this PR. The unit side
+needs a Cloud command path for pH calibration and RS485 sensor setup
+(§13) before the local page can go off, so this PR still waits on that
+Cloud work and on Decision 2. Decision 3 does not hold this PR.
 
 One PR. With the local page off, **no GET page is readable from the home
 network.** This is not "read-only without a PIN." It is off. Consulted:
@@ -703,8 +706,10 @@ the chosen option.
 **Done:** no GET page is readable from a home-network address, by the
 option the Captain named.
 
-**Trap:** `docs/sensor-calibration.md` still says calibration is done at
-`http://<unit-ip>:8080`. Do not invent a replacement here.
+**Trap:** do not start this PR until §13 can accept the calibration and
+RS485 Cloud commands (types and fields still to be defined in
+marketplace #1457). Bench calibration stays on hold until those ship
+(`docs/sensor-calibration.md`).
 
 ---
 
@@ -761,12 +766,18 @@ I5. Parse the rendered page; do not grep source files.
 by default) and handles `relay`, `awg`, `restart`, `config_reload`,
 `ota_check`, `diagnostics` in `main.py` `_apply_cloud_command`.
 
-**Add two command types:**
+**Add these command types:**
 
 | Type | Does | Bounds |
 |---|---|---|
 | `identify` | the "is this the one?" pattern (§7) for `seconds` | 10–120 s, default 60 |
 | `wifi_window` | writes `/run/bluesignal/wifi-window.json` (§6) | at most 900 s |
+| pH calibration | apply a pH calibration sent from Cloud; no unit page | to be defined in marketplace #1457 |
+| RS485 sensor setup | set up an RS485 probe from Cloud; no unit page | to be defined in marketplace #1457 |
+
+Do not invent field names or endpoints in this PR. The two calibration
+rows are requirements from Decision 1 (24 Oct 2026). They must exist on
+the unit before §10 turns the local page off.
 
 There is no `local_unlock`. The unit's local page stays off; Cloud does not
 turn it on.
@@ -811,19 +822,22 @@ the lights on a bench Pi within 10 s of the tap.
 
 ## Order and dependencies
 
-§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → (§9 and §10 held) → §11 if
+§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §9 → (§10 held) → §11 if
 needed → §12 if needed → §13.
 
 §4 needs §2 (a join to call) and §3 (the open network). §5 can merge as
 soon as the Service Window still exists; after it merges, the old wizard is
 intentionally unreachable from the setup network. §8 can start once §4 is
-merged (run the precondition first). **§9 (and the local-page-off PR) does
-not start until the Captain answers Decisions 1–3.** `local_unlock` is
-gone; that is not a reason to start §9. §11 opens only if Decision 3 says
-a mutating route still answers. §12 opens only if leftover templates
-remain after §10. §13 (identify / `wifi_window` / heartbeat) can start
-after §7 and does not wait on Decisions 1–3. The Cloud half's §2 (Add
-unit) needs this plan's §13.
+merged (run the precondition first). Decision 1 is answered (24 Oct 2026)
+and no longer holds §9 or §10. §9 (wizard and PIN only) does not wait on
+Decision 1. **The unit side needs a Cloud command path for calibration
+and RS485 (§13) before the local page can go off, so the §10 PR still
+waits on that Cloud work and on Decision 2.** §11 opens only if Decision
+3 says a mutating route still answers. §12 opens only if leftover
+templates remain after §10. `identify` / `wifi_window` / heartbeat in
+§13 can start after §7. The calibration and RS485 command handlers in
+§13 must land before §10. The Cloud half's §2 (Add unit) needs this
+plan's §13.
 
 ## Not verified by this plan
 
@@ -838,18 +852,28 @@ unit) needs this plan's §13.
 
 ## Decisions needed from the Captain
 
-These conflict with the 2026-10-24 ruling, or the ruling does not pick an
-implementation, and this revision does not invent an answer.
+1. **Answered, 24 Oct 2026.** With the local page off, pH calibration and
+   RS485 sensor setup move into BlueSignal Cloud, as Cloud commands with
+   no unit page. The unit-side path is §13. Marketplace requirements are
+   below. Field names and endpoints are to be defined in #1457.
+2. **How the local page stays off on a field unit.** Open. Does the
+   Service Window still bind `0.0.0.0:8080` and 404 every GET from the
+   home network, bind loopback only, or not run? §10 waits on this.
+3. **Mutating Service Window routes from the home network.** Open. §11 is
+   CSRF (403 if `Origin` and `Referer` are both missing) for any mutating
+   route that still answers, and is skipped if none do. Should those
+   routes answer from the home network at all, or stay off the same way
+   GET pages do?
 
-1. **Where do bench pH calibration and the RS485 wizard run** once the
-   local page stays off? Today they live on the Service Window
-   (`docs/sensor-calibration.md`, `routes/calibration.py`,
-   `routes/rs485.py`). Cloud? A bench-only page? A later plan?
-2. **How the local page stays off on a field unit.** Does the Service
-   Window still bind `0.0.0.0:8080` and 404 every GET from the home
-   network, bind loopback only, or not run?
-3. **Mutating Service Window routes from the home network.** §11 is CSRF
-   (403 if `Origin` and `Referer` are both missing) for any mutating route
-   that still answers, and is skipped if none do. Should those routes
-   answer from the home network at all, or stay off the same way GET
-   pages do?
+## Marketplace Cloud work needed (for #1457's plan)
+
+Requirements only. Do not invent field names, endpoints, or Cloud UI
+steps. Each item is to be defined in marketplace #1457.
+
+- A pH calibration command: Cloud sends a pH calibration to the unit.
+  No unit page. To be defined in #1457.
+- An RS485 sensor setup command: Cloud sends RS485 probe setup to the
+  unit. No unit page. To be defined in #1457.
+- How results come back: Cloud must learn whether each command succeeded
+  or failed, and enough to show the operator what the unit did. To be
+  defined in #1457.

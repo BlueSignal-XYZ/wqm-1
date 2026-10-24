@@ -1,27 +1,25 @@
 # Sensor Calibration
 
-All calibration is done from the **Service Window** (the on-device web UI,
-under **Calibration**) with guided wizards. It answers nobody on the network:
-open `ssh -L 8080:127.0.0.1:8080 pi@<unit-ip>` and use
-`http://localhost:8080`. Each wizard
-shows a **live voltage** for its channel, refreshed every two seconds, with a
-*Use this value* button that fills the form. Save applies the calibration and
-stamps `calibrated_at`, so the firmware's drift tracking can nag you when a
-probe is due.
+All calibration is done from BlueSignal Cloud, as Cloud commands, with no
+unit page (Captain, 24 Oct 2026). Do not open `http://<unit-ip>:8080`.
+Those commands are not built yet, so bench calibration is on hold until
+they ship. Field names and endpoints are to be defined in marketplace
+#1457 (`docs/install-build-plan.md`, Marketplace Cloud work needed).
 
-> **Enter the converter voltage, not a corrected one.** The number the wizard
-> displays and fills is what the ADC sees; the unit applies the divider and
-> temperature compensation itself. The TDS page additionally *reports* the
-> compensated probe voltage — that one is information, never an input.
->
-> Until firmware 2.1.2 the wizards asked you to "read the voltage" and nothing
-> in the product displayed one, so calibration was effectively impossible in the
-> field and units ran on factory nominals. A nominal reading looks exactly like
-> a calibrated one on the dashboard: check **Never calibrated on this unit** on
-> the Calibration index, or the absence of `/etc/bluesignal/calibration.yaml`.
+When the commands exist, the number they apply is the converter voltage
+the ADC sees. The unit applies the divider and temperature compensation
+itself. A compensated TDS probe voltage, if reported, is information,
+never an input. Save stamps `calibrated_at`, so the firmware's drift
+tracking can nag when a probe is due.
+
+> Until firmware 2.1.2 nothing in the product displayed the converter
+> voltage, so calibration was effectively impossible in the field and
+> units ran on factory nominals. A nominal reading looks exactly like a
+> calibrated one on the dashboard: check the absence of
+> `/etc/bluesignal/calibration.yaml`.
 
 The live reading comes from the firmware daemon over its command socket, not
-from the Service Window opening the I²C bus. That boundary is deliberate: the
+from a second process opening the I²C bus. That boundary is deliberate: the
 ADS1115 has one conversion register shared by all four channels, so two
 independent readers can return one channel's voltage under another's name with
 nothing raised and nothing logged.
@@ -40,16 +38,15 @@ reference solution would corrupt the data record. The human recalibrates.
 | Temperature (DS18B20) | Factory calibrated — no field calibration. | — | 5+ years |
 
 > Analog ORP (AIN3) is non-functional on PCBA rev Fin_3 — the pin is spare,
-> with no ORP circuit behind it, so the Service Window's ORP page cannot
-> calibrate a base-unit channel and says so. Use the digital RS485 ORP probe
-> below.
+> with no ORP circuit behind it, so a base-unit analog ORP channel cannot
+> be calibrated. Use the digital RS485 ORP probe below.
 
 **If TDS reads far lower than the water should:** calibration is the test, not
 the fix. Put the probe in a known standard and watch the live voltage. If it
 barely moves between air and solution the probe is not conducting — check full
-immersion, fouling, and wiring — and the wizard will refuse to solve a `k` from
-it, because a `k` derived from a dead probe makes every later reading wrong
-without ever looking wrong.
+immersion, fouling, and wiring — and the firmware will refuse to solve a `k`
+from it, because a `k` derived from a dead probe makes every later reading
+wrong without ever looking wrong.
 
 ### Analog TDS — BUILD provisional scale (2026-09-04)
 
@@ -57,7 +54,7 @@ without ever looking wrong.
 > These are **not** measured bench values. Firmware 2.1.1 samples AIN0
 > only; it does not drive CD4060 excitation.
 
-The analog TDS one-point wizard uses a conductivity standard
+The analog TDS one-point calibration uses a conductivity standard
 (**1413 µS/cm** typical). The default **~500 ppm/V** coefficient is a
 provisional starting point. Absolute V/ppm is unknown until the cell
 constant is known — **order-of-magnitude only**.
@@ -75,8 +72,10 @@ HL-A250L-38 nameplate is still pending from Haolin.
 
 ## RS485 digital probes (Honde Tech)
 
-The digital probes hold their own calibration state on the probe. Calibrate
-through **Service Window → RS485 Sensors → Calibrate**.
+The digital probes hold their own calibration state on the probe. Setup
+and calibration are Cloud commands with no unit page. Those commands are
+not built yet; bench RS485 setup is on hold until they ship (marketplace
+#1457).
 
 | Probe | Method | Cadence |
 |---|---|---|
@@ -89,8 +88,8 @@ through **Service Window → RS485 Sensors → Calibrate**.
 
 Every calibration re-anchors the drift baseline. Between calibrations the
 firmware watches the long-window median against that baseline and raises a
-`calibration_drift` event — surfaced on the dashboard and the Service Window
-status page as a plain-language "recalibrate soon" — before readings go
+`calibration_drift` event — surfaced on the dashboard as a plain-language
+"recalibrate soon" — before readings go
 meaningfully wrong. A flatlined or disconnected probe is reported as a fault
 (not fake data) and its relay rules are suspended until it recovers.
 
