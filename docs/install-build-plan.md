@@ -678,7 +678,7 @@ the deleted routes.
   in with the PIN today. Find every caller of the login route before
   deleting it.
 - Docs in the marketplace repo that mention PIN 1234 or `WQM1-xxxx` are
-  updated through a marketplace PR (the Cloud plan's §6), not here.
+  updated through a marketplace PR (the Cloud plan's §7), not here.
 - Do not invent Cloud UI or command fields here. Decision 1 is answered;
   the unit-side path is §13 and the marketplace list at the end of this
   plan.
@@ -719,11 +719,23 @@ the chosen option.
 **Done:** no GET page is readable from a home-network address, by the
 option the Captain named.
 
-**Trap:** do not start this PR until §13 can accept the calibration and
-RS485 Cloud commands (types and fields still to be defined in
-marketplace #1457). Until those ship, BlueSignal staff calibrate on the
-bench from the Service Window (`docs/sensor-calibration.md`); this PR is
-what ends that, so it rewrites that page.
+**Traps:**
+- Do not start this PR until §13 can accept the calibration and RS485
+  Cloud commands (fields in marketplace `wqm1-install-build-plan.md` §5).
+  Until those ship, BlueSignal staff calibrate on the bench from the
+  Service Window (`docs/sensor-calibration.md`). With loopback, they still
+  can, through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<unit>`), so
+  loopback does not put bench calibration on hold.
+- Checked 2026-10-24 for the loopback option: the current captive portal
+  already reaches the Service Window over `127.0.0.1`
+  (`utils/captive_portal.py`, the `HTTPConnection("127.0.0.1", …)` proxy),
+  so loopback does not break it, and §4 removes that proxy anyway. The
+  `iptables` line in `systemd/bluesignal-captive-portal.service` that
+  mentions 8080 deletes a legacy redirect; it adds none. Three scripts
+  print `http://$(hostname).local:8080` as an instruction and must change in
+  this PR: `scripts/diagnostics.sh`, `scripts/first-boot-check.sh` and the
+  closing lines of `setup.sh`. `scripts/demo-unit.py` uses `localhost` and
+  is unaffected. `scripts/burn-in.sh` does not call 8080.
 
 ---
 
@@ -786,12 +798,23 @@ by default) and handles `relay`, `awg`, `restart`, `config_reload`,
 |---|---|---|
 | `identify` | the "is this the one?" pattern (§7) for `seconds` | 10–120 s, default 60 |
 | `wifi_window` | writes `/run/bluesignal/wifi-window.json` (§6) | at most 900 s |
-| pH calibration | apply a pH calibration sent from Cloud; no unit page | to be defined in marketplace #1457 |
-| RS485 sensor setup | set up an RS485 probe from Cloud; no unit page | to be defined in marketplace #1457 |
+| `adc_voltages`, `calibrate_ph`, `calibrate_tds`, `calibrate_turbidity`, `calibrate_orp` | the calibration the Service Window does today, from Cloud | fields, ranges and results: marketplace `docs/operations/wqm1-install-build-plan.md` §5 |
+| `rs485_scan`, `rs485_assign`, `rs485_calibrate` | RS485 probe setup from Cloud | the same table |
 
-Do not invent field names or endpoints in this PR. The two calibration
-rows are requirements from Decision 1 (24 Oct 2026). They must exist on
-the unit before §10 turns the local page off.
+The calibration and RS485 types are Decision 1 (24 Oct 2026). They must
+exist on the unit before §10 turns the local page off. **Move the math, do
+not copy it:** the slope, `k`, offset and RS485 calls the Service Window
+routes do today (`routes/calibration.py`, `routes/rs485.py`) move into one
+module both the routes and the command handler call, so the two cannot
+drift while both exist. The daemon applies a new calibration to the running
+sensors; it does not need a restart (the Service Window's "restart to
+apply" hint goes away with it).
+
+**Results on the ack.** `ack_command` gains an optional `result` dict,
+posted beside `status`: the slope, `k`, offset, the voltages read, or the
+probes found. A refused calibration acks `error` with the reason
+(`voltages_too_close`, `no_conduction`, `no_orp_circuit`). Cloud
+allowlists the keys (Cloud plan §5).
 
 There is no `local_unlock`. The unit's local page stays off; Cloud does not
 turn it on.
@@ -799,8 +822,17 @@ turn it on.
 Each acks `done` or `error` through the existing `ack_command`. Unknown
 fields are ignored; out-of-range values are clamped, not trusted.
 
-**Heartbeat:** add `wifiSsid` (the associated station SSID; omitted when not
-on Wi-Fi) in `utils/health.py` `build_heartbeat`. **Send one heartbeat
+**Heartbeat and register:** in `utils/health.py` `build_heartbeat` (and the
+register payload), add:
+- `wifiSsid` — the associated station SSID; omitted when not on Wi-Fi.
+- `ipv6Prefix` — the /64 of the station interface's global IPv6 address
+  (`2000::/3`), as `xxxx:xxxx:xxxx:xxxx::/64`; omitted when there is none.
+  Read from the interface, never from an outside service. Cloud uses it to
+  match a phone on the same Wi-Fi when the unit itself reports over IPv4.
+- `gps` — `{lat, lon, fixAt}` from the last fix; omitted when there has
+  never been one. **Try for a fix right after first boot** instead of
+  waiting for `gps_fix_s`, so a new unit can be found by location while the
+  installer is still there (spec W9). **Send one heartbeat
 within 30 s of a successful join** instead of waiting for `heartbeat_s`
 (600 s by default), so Cloud shows "online on SmithHome" while the
 installer is still standing there (E1).
@@ -808,10 +840,15 @@ installer is still standing there (E1).
 **Files:** `src/main.py`, `src/utils/health.py`, `src/app/workers.py` (the
 early heartbeat), `docs/cloud-payload.md`, tests.
 
-**Tests:** each command's dispatch, clamp and ack; `wifiSsid` present on a
-station and absent on LTE and on the setup network; the early heartbeat
-fires once after a join and not on every reconnect; an incoming
-`local_unlock` is ignored (unknown type) and does not write a file.
+**Tests:** each command's dispatch, clamp and ack; each calibration
+command gives the same slope, `k` or offset as the Service Window route on
+the same inputs (one shared fixture), and acks the refusal reasons above;
+`wifiSsid` present on a station and absent on LTE and on the setup
+network; `ipv6Prefix` is the /64 of a global address and is omitted for a
+link-local or ULA address; `gps` is omitted with no fix; the first-boot fix
+attempt runs once; the early heartbeat fires once after a join and not on
+every reconnect; an incoming `local_unlock` is ignored (unknown type) and
+does not write a file.
 
 **Done:** with the Cloud half's endpoint (Cloud plan §2), `identify` rocks
 the lights on a bench Pi within 10 s of the tap.
@@ -822,9 +859,13 @@ the lights on a bench Pi within 10 s of the tap.
   unit with no card has none until registration succeeds, so it cannot be
   asked to identify itself. Say so in the PR; do not invent a second
   channel.
-- An SSID is the owner's data. The marketplace side stores it under its
-  personal-data inventory (Cloud plan §1); the firmware sends it nowhere
-  else.
+- An SSID, a prefix and a location are the owner's data. The marketplace
+  side stores them under its personal-data inventory (Cloud plan §1), keeps
+  only salted tags of the prefix, and deletes the location once the unit
+  has an owner. The firmware sends them nowhere else.
+- This section is big enough to split, if the reviewer asks: (a)
+  `identify`, `wifi_window`, the heartbeat fields; (b) the calibration and
+  RS485 commands with the shared math module. (b) must land before §10.
 
 ---
 
@@ -870,8 +911,8 @@ plan's §13.
 
 1. **Answered, 24 Oct 2026.** With the local page off, pH calibration and
    RS485 sensor setup move into BlueSignal Cloud, as Cloud commands with
-   no unit page. The unit-side path is §13. Marketplace requirements are
-   below. Field names and endpoints are to be defined in #1457.
+   no unit page. The unit-side path is §13; the Cloud side, with field
+   names and results, is marketplace `wqm1-install-build-plan.md` §5.
 2. **How the local page stays off on a field unit.** Open. Does the
    Service Window still bind `0.0.0.0:8080` and 404 every GET from the
    home network, bind loopback only, or not run? §10 waits on this.
@@ -879,7 +920,8 @@ plan's §13.
    (§4), which no longer proxies to 8080, so nothing outside the unit needs
    8080. Loopback keeps the Service Window for bench scripts on the unit and
    makes "off" a property of the socket, not of a route list that can miss
-   a new route.
+   a new route. Grok reached the same recommendation independently
+   (24 Oct 2026).
 3. **Mutating Service Window routes from the home network.** Open. §11 is
    CSRF (403 if `Origin` and `Referer` are both missing) for any mutating
    route that still answers, and is skipped if none do. Should those
@@ -889,15 +931,9 @@ plan's §13.
    home network needs them, and §11 is skipped. With loopback (Decision 2)
    this answer comes for free.
 
-## Marketplace Cloud work needed (for #1457's plan)
+## Marketplace Cloud work (defined in marketplace #1457)
 
-Requirements only. Do not invent field names, endpoints, or Cloud UI
-steps. Each item is to be defined in marketplace #1457.
-
-- A pH calibration command: Cloud sends a pH calibration to the unit.
-  No unit page. To be defined in #1457.
-- An RS485 sensor setup command: Cloud sends RS485 probe setup to the
-  unit. No unit page. To be defined in #1457.
-- How results come back: Cloud must learn whether each command succeeded
-  or failed, and enough to show the operator what the unit did. To be
-  defined in #1457.
+Defined in marketplace `docs/operations/wqm1-install-build-plan.md` §5: the
+command types, their fields and ranges, the `result` each ack carries, and
+the Calibration panel in Cloud. That plan's §1 accepts `wifiSsid`,
+`ipv6Prefix` and `gps`; its §2 uses them to find the unit.
