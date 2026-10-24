@@ -193,7 +193,8 @@ join of the day. The setup page repeats the short version.
 - [ ] Wi-Fi signal checked **with the enclosure closed**
 - [ ] GPS fix acquired (LED 3), or knowingly accepted as unavailable
 - [ ] LoRa joined — or knowingly accepted as not joining, per T2
-- [ ] Factory PIN replaced (the wizard refuses 1234)
+- [ ] Setup finished: the unit is on the site network (or recorded as LTE /
+      no-network) and Cloud shows a recent reading. There is no PIN to replace.
 - [ ] Relays confirmed inert, or confirmed clicking on the correct channel
 - [ ] Device id, DevEUI and the identity QR recorded for the install record
 - [ ] `journalctl -u bluesignal-ota -f` shows the agent polling, and

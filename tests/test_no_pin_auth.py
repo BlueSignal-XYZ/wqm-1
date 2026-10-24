@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from service_window.app import create_app
 from tests.test_service_window_setup import make_app
 
 # Setup routes a phone on the unit's own hotspot may hit with no PIN.
@@ -133,6 +134,21 @@ class TestPinCodeIsGone:
         response = client.get("/settings/")
         assert response.status_code == 403
         _no_pin_form(response)
+
+    def test_create_app_does_not_load_a_pin_key(self, tmp_path, mock_hardware):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text('service_window:\n  port: 8080\n  pin: "1234"\n')
+        app = create_app(
+            {
+                "TESTING": True,
+                "CONFIG_PATH": str(config_path),
+                "SECRET_KEY": "test-secret",
+                "DB_PATH": str(tmp_path / "wqm1.db"),
+            }
+        )
+        assert "PIN" not in app.config
+        example = Path("config/config.yaml.example").read_text()
+        assert "\n  pin:" not in example
 
     def test_test_open_window_is_ignored_when_not_testing(
         self, tmp_path, mock_hardware, monkeypatch

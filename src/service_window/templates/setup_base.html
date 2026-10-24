@@ -19,7 +19,7 @@
     <main class="setup-shell">
         {% if steps|length > 1 %}
         <ol class="steps-track" aria-label="Setup progress">
-            {% set labels = {'welcome': 'Welcome', 'pin': 'PIN', 'identity': 'Identity',
+            {% set labels = {'welcome': 'Welcome', 'identity': 'Identity',
                              'network': 'Network', 'cloud': 'Cloud', 'sensors': 'Sensors',
                              'done': 'Finish'} %}
             {% for s in steps %}

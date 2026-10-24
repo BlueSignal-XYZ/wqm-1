@@ -31,7 +31,7 @@ if [ "$APP_KEY" = "00000000000000000000000000000000" ] || [ -z "$APP_KEY" ]; the
     echo "   sudo python3 /opt/bluesignal/scripts/provision.py"
     echo ""
     echo " Option B (Web):"
-    echo "   Visit: http://$(hostname).local:8080/provision"
-    echo "   PIN: 1234 (change in $CONFIG)"
+    echo "   On this unit's setup hotspot, open the setup page."
+    echo "   There is no PIN. Owners use BlueSignal Cloud."
     echo "================================================"
 fi

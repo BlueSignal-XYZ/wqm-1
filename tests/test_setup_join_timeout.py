@@ -5,8 +5,11 @@ nmcli attempts. The phone is on the hotspot that goes down, so the page
 must start the join and poll a status endpoint instead of one long POST.
 """
 
+import shutil
+import subprocess
 import threading
 import time
+from pathlib import Path
 
 from tests.test_service_window_setup import make_app
 
@@ -183,8 +186,12 @@ class TestJoinDoesNotHoldTheHttpRequest:
         release.set()
         worker.join(timeout=1)
 
-    def test_joining_page_explains_a_dropped_hotspot(self, tmp_path, mock_hardware, monkeypatch):
+    def test_joining_poll_treats_a_dropped_hotspot(self, tmp_path, mock_hardware, monkeypatch):
+        """Runs joining-poll.js under node (the page only wires those functions)."""
         from utils import netctl
+
+        node = shutil.which("node")
+        assert node, "node is required to run joining-poll.js"
 
         started = threading.Event()
         release = threading.Event()
@@ -214,7 +221,37 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert started.wait(timeout=2)
         worker.join(timeout=1.0)
         page = posted["response"].get_data(as_text=True)
-        assert "Reconnect to this unit's Wi-Fi, or check BlueSignal Cloud." in page
-        assert "r.status === 403" in page or "status === 403" in page
+        assert "joining-poll.js" in page
+        assert "poll.RECONNECT" in page
+        script = (
+            Path(__file__).resolve().parent.parent / "src/service_window/static/joining-poll.js"
+        )
+        result = subprocess.run(  # nosec B603 — node runs this repo's poll helper
+            [
+                node,
+                "-e",
+                (
+                    "const p = require(process.argv[1]);"
+                    "const forbiddenJson = {status: 403, headers: {get: () => 'application/json'}};"
+                    "if (!p.droppedHotspot(forbiddenJson)) process.exit(2);"
+                    "if (!p.droppedHotspot({status: 200, contentType: 'text/html'}))"
+                    " process.exit(3);"
+                    "const json = {status: 200, headers: {get: () => 'application/json'}};"
+                    "if (p.droppedHotspot(json)) process.exit(4);"
+                    "if (p.afterPoll(null, 88) !== 'retry') process.exit(5);"
+                    "if (p.afterPoll(null, 89) !== 'reconnect') process.exit(6);"
+                    "if (p.afterPoll({state: 'ok'}, 1) !== 'ok') process.exit(7);"
+                    "if (p.afterPoll({state: 'fail'}, 1) !== 'fail') process.exit(8);"
+                    "if (p.afterPoll({state: 'joining'}, 90) !== 'reconnect') process.exit(9);"
+                    "if (p.RECONNECT.indexOf('BlueSignal Cloud') < 0) process.exit(10);"
+                    "console.log('ok');"
+                ),
+                str(script),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
         release.set()
         worker.join(timeout=1)

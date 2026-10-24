@@ -215,8 +215,8 @@ def _nmcli(*args: str, timeout: float = 15.0) -> tuple[int, str, str]:
 def derived_passphrase(pi_serial: str) -> str:
     """AP passphrase for a unit with no identity file: 12 hex from a hash of
     its Pi serial. Printed by scripts/diagnostics.sh so it can be written on
-    the enclosure. Never a fleet-wide default — an open or shared AP into a
-    PIN-gated page is still an open AP."""
+    the enclosure. Never a fleet-wide default — an open or shared AP is
+    still an open AP."""
     return hashlib.sha256(f"wqm1-ap:{pi_serial}".encode()).hexdigest()[:12]
 
 
@@ -518,8 +518,7 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
     """Raise the setup hotspot with hostapd. WPA2-PSK, 192.168.4.1/24.
 
     Refuses a passphrase under 8 characters (WPA2 minimum) rather than
-    raising an open network — an open AP into a PIN-gated page is still an
-    open AP.
+    raising an open network — an open AP is still an open AP.
 
     NetworkManager is told to leave ``wlan0`` alone, then hostapd beacons
     and dnsmasq serves DHCP and the captive DNS. A leftover

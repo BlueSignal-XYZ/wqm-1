@@ -74,11 +74,10 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
             passthrough[key] = value
 
     app.config["SERVICE_PORT"] = sw_config.get("port", 8080)
-    app.config["PIN"] = str(sw_config.get("pin", "1234"))
     app.config["SECRET_KEY"] = sw_config.get(
         "secret_key", os.environ.get("SW_SECRET_KEY", secrets.token_hex(32))
     )
-    # Every state-changing route (relays, AWG circuit, reboot, PIN, keys) is
+    # Every state-changing route (relays, AWG circuit, reboot, keys) is
     # a plain form/JSON POST with no CSRF token, so the session cookie must
     # never be sent on a cross-site request: a page on any other origin the
     # installer's phone visits could otherwise POST /relays/set. SameSite=Lax

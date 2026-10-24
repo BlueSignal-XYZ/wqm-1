@@ -220,8 +220,8 @@ def welcome() -> ResponseReturnValue:
 
     Getting online is the only thing the unit asks for on site. Probes,
     thresholds, alerts and the owner are set from BlueSignal Cloud once it
-    is online (founder, 2026-10-22, after WQM-10001). A PIN, a probe list
-    and a variant before the join were what made a 2-minute step an hour.
+    is online (founder, 2026-10-22, after WQM-10001). A probe list and a
+    variant before the join were what made a 2-minute step an hour.
     """
     return redirect(url_for("setup.network"))
 

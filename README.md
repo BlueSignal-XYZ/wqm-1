@@ -269,15 +269,14 @@ wizard:
 
 | Step | What it settles |
 |------|-----------------|
-| PIN | Replaces the factory PIN (1234 is refused) |
+| Network | Join the site Wi-Fi **at the final mounting position, enclosure closed**. That finishes setup. There is no PIN. |
 | Identity | Device ID + DevEUI, with a QR code for your install records |
-| Network | WiFi signal **at the final mounting position, enclosure closed** |
-| Cloud | The device API key, verified against the cloud before you leave |
+| Cloud | The unit registers itself; the installer path has no key paste |
 | Sensors | **Which probes are physically fitted** — nothing is sampled until declared |
 | Finish | Go/no-go over sensors, cloud, LoRa, GPS and storage |
 
-The wizard gates the UI only while the PIN is still `1234` and setup has never
-been completed. After that the same pages are reachable individually.
+Until setup is finished the unit serves only the wizard, and only on its own
+hotspot. After that the local page stays off; owners use BlueSignal Cloud.
 
 > **WiFi credentials can only be set when the card is imaged.** The Service
 > Window is served over the unit's own network connection, so it cannot join a
@@ -566,7 +565,7 @@ http://<pi-ip>:8080/relays/            # manual relay control
 http://<pi-ip>:8080/calibration/       # pH/TDS/turbidity calibration
 http://<pi-ip>:8080/rs485/             # add and address RS485 digital probes
 http://<pi-ip>:8080/awg/               # bind / switch the AWG smart-breaker circuit (optional)
-http://<pi-ip>:8080/settings/          # config, PIN, remote reboot
+http://<pi-ip>:8080/settings/          # config, remote reboot (LAN: closed; use Cloud)
 http://<pi-ip>:8080/diagnostics/       # run hardware probe
 ```
 

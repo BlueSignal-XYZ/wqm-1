@@ -10,24 +10,19 @@ A join can take a couple of minutes.</p>
 <code>/setup/join-status</code> until the unit has an answer.</p>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='joining-poll.js') }}"></script>
 <script>
 (function () {
+  var poll = window.WQM1JoiningPoll;
   var tries = 0;
-  var maxTries = 90;
-  var reconnect = "Reconnect to this unit's Wi-Fi, or check BlueSignal Cloud.";
   function showReconnect() {
     var lead = document.querySelector('.lead');
-    if (lead) lead.textContent = reconnect;
-  }
-  function droppedHotspot(r) {
-    if (!r || r.status === 403) return true;
-    var type = (r.headers && r.headers.get('Content-Type')) || '';
-    return type.indexOf('json') === -1;
+    if (lead) lead.textContent = poll.RECONNECT;
   }
   function tick() {
     fetch('/setup/join-status', {headers: {Accept: 'application/json'}})
       .then(function (r) {
-        if (droppedHotspot(r)) {
+        if (poll.droppedHotspot(r)) {
           showReconnect();
           return null;
         }
@@ -37,25 +32,29 @@ A join can take a couple of minutes.</p>
         });
       })
       .then(function (j) {
-        if (!j) {
-          if (++tries < maxTries) setTimeout(tick, 2000);
-          else showReconnect();
-          return;
-        }
-        if (j.state === 'ok') {
+        var next = poll.afterPoll(j, tries);
+        if (next === 'ok') {
           document.querySelector('.setup-h1').textContent = 'Joined ' + (j.ssid || '') + '. You\u2019re done here.';
           return;
         }
-        if (j.state === 'fail') {
+        if (next === 'fail') {
           window.location = '/setup/network';
           return;
         }
-        if (++tries < maxTries) setTimeout(tick, 2000);
-        else showReconnect();
+        if (next === 'reconnect') {
+          showReconnect();
+          return;
+        }
+        tries += 1;
+        setTimeout(tick, 2000);
       })
       .catch(function () {
-        if (++tries < maxTries) setTimeout(tick, 2000);
-        else showReconnect();
+        var next = poll.afterPoll(null, tries);
+        if (next === 'reconnect') showReconnect();
+        else {
+          tries += 1;
+          setTimeout(tick, 2000);
+        }
       });
   }
   setTimeout(tick, 400);

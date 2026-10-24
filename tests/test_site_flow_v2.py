@@ -422,7 +422,7 @@ class TestDemoUnit:
         assert "BlueSignal-Shop" in net["saved"]
         assert len(unit["ap_passphrase"]) >= 8  # WPA2 minimum, so card and unit agree
         cfg = yaml.safe_load(unit["config"].read_text())
-        assert cfg["service_window"]["pin"] == "1234"
+        assert "pin" not in (cfg.get("service_window") or {})
         assert cfg["cloud_api_base"].startswith("http://127.0.0.1")
 
     def test_cloud_is_never_production(self):

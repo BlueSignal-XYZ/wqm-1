@@ -475,4 +475,4 @@ class TestServiceWindow:
         client, _, _, _ = sw_client
         client.application.config["TEST_OPEN_WINDOW"] = False
         client.get("/logout")
-        assert client.get("/apple-home/").status_code in (302, 401, 403)
+        assert client.get("/apple-home/").status_code == 403
