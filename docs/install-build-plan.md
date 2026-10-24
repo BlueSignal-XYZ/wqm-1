@@ -1,5 +1,8 @@
 # Install v3: firmware build plan
 
+**Stack:** this stacks on #155 (base `claude/loving-lamport-hq4t3a`). The
+Captain merges #155 first or retargets. Not checked against master.
+
 **Status:** plan, 2026-10-24. Written by Claude for Grok under the `AGENTS.md`
 handoff. Revised the same day after the review on PR #155 to match the
 Captain's ruling: setup is Wi-Fi only with the LEDs as the guide; there is
@@ -37,7 +40,9 @@ to do. The unit does not serve a local page on the home network.
   `setup.sh`, only if that PR has to change it), §6 and §7 (`setup.sh` and
   `systemd/`). Say so in the PR body; the Captain reviews those lines.
   `SETTINGS_SCHEMA` is not named by any section below. If a later decision
-  (see the end of this plan) requires it, that PR says so.
+  (see the end of this plan) requires it, that PR says so. §10 may touch
+  `setup.sh` or `systemd/` if Decision 2 removes the Service Window from a
+  field install.
 - **Prove it the way CI does:** `ruff check . && ruff format --check . &&
   pytest tests/ -q`. Paste the command and the summary line in the PR.
 - **Say what you did not verify.** Most of this needs a Pi and a phone; the
@@ -49,11 +54,11 @@ Every PR keeps all of these, and the tests named below pin them.
 
 | # | Invariant | Pinned by |
 |---|---|---|
-| I1 | A client on the setup network (192.168.4.0/24) can reach one thing: the Wi-Fi page. Nothing that changes the unit, other than its Wi-Fi, answers there. | §4 tests; §5 tests; §9 tests |
+| I1 | A client on the setup network (192.168.4.0/24) can reach one thing: the Wi-Fi page. Nothing that changes the unit, other than its Wi-Fi, answers there. | §4 tests; §5 tests; §10 tests |
 | I2 | The home Wi-Fi password is written only into the NetworkManager profile (root-only). Never into a log, a state file, the boot partition, a heartbeat or Cloud. | §2, §4 tests (capture logs and files, search for the password) |
 | I3 | A network that has reached BlueSignal is never deleted by the unit until another network has reached BlueSignal. | §2, §6 tests |
 | I4 | At most one join runs at a time. | §2 test |
-| I5 | No page the unit serves reloads itself, navigates on a timer, or replaces a form. A status change edits text in place. | §4 tests (the port-80 page); §9 tests (any leftover Service Window template) |
+| I5 | No page the unit serves reloads itself, navigates on a timer, or replaces a form. A status change edits text in place. | §4 tests (the port-80 page); §12 tests (any leftover Service Window template) |
 | I6 | Every failure ends with the setup network up and the lights at "ready", unless a proven network exists and is being retried. | §2, §6 tests |
 | I7 | The setup network and its page work without the firmware (`bluesignal-wqm`), the Service Window or Cloud running. | §4 test (portal answers with both stopped) |
 
@@ -351,7 +356,7 @@ Wi-Fi page plus the lights, then Cloud. Do not add a bypass, a proxy, or a
 
 **Tests:**
 - A request to the Service Window from 192.168.4.23 returns 404; from
-  10.0.0.5 it does not (until §9 turns the local page off on the home
+  10.0.0.5 it does not (until §10 turns the local page off on the home
   network too).
 - The 404 body is the sentence above.
 
@@ -395,7 +400,7 @@ clock and netctl so it is testable):
   gets 3 minutes at boot, then is deleted and the unit goes to `first` or
   `lost`.
 - **Planned Wi-Fi change (G3).** A request file
-  `/run/bluesignal/wifi-window.json {until}` (written by §10's cloud
+  `/run/bluesignal/wifi-window.json {until}` (written by §13's cloud
   command) raises the setup network until `until` (at most 15 min) even
   though the station is up. The chip cannot run both, so the unit is offline
   for that window; Cloud's copy says so.
@@ -451,7 +456,7 @@ pattern.
   together), online (LED 1 slow), couldn't join (chase plus LED 4 double),
   on Wi-Fi but BlueSignal unreachable (LED 1 slow plus LED 4 slow),
   undervoltage (LED 4 double, A4), and "is this the one?" (LEDs 1+4 then
-  2+3, back and forth, §10). Patterns are timings, never colours (H4).
+  2+3, back and forth, §13). Patterns are timings, never colours (H4).
 - `bluesignal-lights.service`, started early (before the network), reads
   `/run/bluesignal/netwatch.json`, `join-state.json` and the portal mode
   file once a second and drives the LEDs through `platform_support.gpio`
@@ -503,32 +508,47 @@ from Crypto.Protocol.KDF import HKDF
 from Crypto.Hash import SHA256
 from Crypto.Cipher import ChaCha20_Poly1305
 import Crypto
+
+def kdf(x):
+    return HKDF(x, 32, b"", SHA256, 1)
+
 print("pycryptodome", Crypto.__version__)
 a = ECC.generate(curve="curve25519")
 b = ECC.generate(curve="curve25519")
-secret = key_agreement(static_priv=a, static_pub=b.public_key(), kdf=lambda x: HKDF(x, 32, b"", SHA256, 1))
-ChaCha20_Poly1305.new(key=secret, nonce=b"\x00" * 24)
-print("X25519 key_agreement: yes")
-print("shared_len", len(secret))
-print("XChaCha20-Poly1305 24-byte nonce: yes")
+ab = key_agreement(static_priv=a, static_pub=b.public_key(), kdf=kdf)
+ba = key_agreement(static_priv=b, static_pub=a.public_key(), kdf=kdf)
+print("shared_len_ab", len(ab))
+print("shared_len_ba", len(ba))
+print("both_directions_equal", ab == ba)
+nonce = b"\x00" * 24
+plain = b"wqm1-precondition"
+enc = ChaCha20_Poly1305.new(key=ab, nonce=nonce)
+ct, tag = enc.encrypt_and_digest(plain)
+dec = ChaCha20_Poly1305.new(key=ba, nonce=nonce)
+out = dec.decrypt_and_verify(ct, tag)
+print("roundtrip_ok", out == plain)
+print("ct_len", len(ct), "tag_len", len(tag))
 '
 ```
 
-Real output (Python 3.12.3 on this VM, 2026-10-24):
+Real output (Python 3.12.3 on this VM, 2026-10-24, rerun after the #156
+review):
 
 ```
 Python 3.12.3
 pycryptodome 3.24.0
 pycryptodome 3.24.0
-X25519 key_agreement: yes
-shared_len 32
-XChaCha20-Poly1305 24-byte nonce: yes
+shared_len_ab 32
+shared_len_ba 32
+both_directions_equal True
+roundtrip_ok True
+ct_len 17 tag_len 16
 ```
 
-`Crypto.Protocol.DH.key_agreement` accepted `curve25519` keys and returned
-32 bytes. `ChaCha20_Poly1305.new` accepted a 24-byte nonce (XChaCha20).
-Not verified: the same imports on CI's Python 3.11 image; this check was
-not run under `pytest`.
+Both directions of `key_agreement` on `curve25519` returned the same 32
+bytes. One XChaCha20-Poly1305 encrypt/decrypt with a 24-byte nonce
+round-tripped the plaintext. Not verified: the same check on CI's Python
+3.11 image; this check was not run under `pytest`.
 
 **How HKDF-SHA256 + XChaCha20-Poly1305 will be checked across JS and
 Python** (do this in the §8 PR; it is unverified today — there is no
@@ -569,7 +589,7 @@ the page needs its own crypto library.
 - Python: `pycryptodome` 3.24.0 (already in `requirements.txt`): X25519 key
   agreement (`Crypto.Protocol.DH.key_agreement` on `curve25519`), HKDF,
   `ChaCha20_Poly1305` with a 24-byte nonce. The precondition above already
-  imported those symbols on this VM.
+  agreed in both directions and round-tripped one ciphertext on this VM.
 - The server rejects a plaintext password field, a wrong or reused page
   nonce, and a decryption failure (with "Reload the page and try again").
 
@@ -586,25 +606,33 @@ password; the key changes across a simulated restart.
 join does not see the password. The two fixtures in the precondition pass.
 
 **Traps:**
-- The precondition already showed `key_agreement` on `curve25519` in
-  3.24.0. If CI's 3.11 image disagrees, raise it in the PR rather than
-  adding a second crypto library.
+- The precondition already showed both-direction `key_agreement` on
+  `curve25519` and one XChaCha20-Poly1305 round-trip in 3.24.0. If CI's
+  3.11 image disagrees, raise it in the PR rather than adding a second
+  crypto library.
 - This does not stop a fake "BlueSignal Setup" (spec risk 3). Do not claim
   it does in comments or docs.
 
 ---
 
-## §9. Delete the wizard; the unit's local page stays off (W6)
+## §9. Delete the wizard and the PIN (W6)
+
+**Held:** §9 (and the local-page-off PR) does not start until the Captain
+answers Decisions 1–3. Pulling bench pH calibration and the RS485 wizard
+has no replacement yet (`docs/sensor-calibration.md` line 4 still says
+use `http://<unit-ip>:8080`).
 
 Captain's ruling, 2026-10-24: setup is Wi-Fi only with the LEDs as the
 guide. There is no PIN anywhere. Owners use BlueSignal Cloud only. The
 unit's local page stays off. The old wizard, PIN, sensors, QR and
 claim-token steps are obsolete.
 
+One PR. Do not fold local-page-off, CSRF, or template cleanup into this
+change (AGENTS rule 6).
+
 This section used to say the Service Window would drop its login and become
 a read-only local page, unlocked from Cloud for 30 minutes (`local_unlock`).
-That LAN-read decision is withdrawn. With the local page off, **no GET page
-is readable from the home network.**
+That LAN-read decision is withdrawn.
 
 **Change:**
 - Delete the setup wizard: `routes/setup.py` pages `welcome`, `pin`,
@@ -615,50 +643,20 @@ is readable from the home network.**
   branch of `auth.py`.
 - **No PIN anywhere.** Delete the login route and every PIN check. There is
   no factory PIN on the hotspot and no PIN later.
-- **No GET page from the home network.** Status, readings, Wi-Fi, firmware
-  and every other Service Window GET must not be readable from a
-  home-network client. This is not "read-only without a PIN." It is off.
-  Consulted: this plan, `SECURITY.md` (reporting policy only; it does not
-  define LAN exposure), `docs/site-flow-v2.md` (the flow this plan
-  replaces). How "off" is implemented (404 from `0.0.0.0:8080`, loopback
-  bind, or the process not running on field units) is a Captain decision;
-  the tests pin the outcome, not the bind.
-- **No `local_unlock` and no `local-unlock.json`.** With the page off there
-  is nothing to unlock. Do not add `unlock_required`.
-- **CSRF on any mutating route that still answers.** Relays, calibration,
-  RS485, settings and the rest are not a substitute local UI. If a route
-  whose methods include POST, PUT, PATCH or DELETE still answers, it
-  requires an `Origin` or `Referer` whose host is the unit's own address or
-  hostname. **If both `Origin` and `Referer` are missing, reject with 403**
-  (curl, some webviews). A foreign host in either header is also 403.
-  Whether those mutating routes should answer from the home network at all
-  is a Captain decision; CSRF is the gate if they do.
-- **No auto-refresh on any page that remains** (I5): leftover templates
-  (`sensors.html` 15 s, `status.html` 30 s, `static/app.js` 30 s on `/`)
-  must not reload themselves. The port-80 setup page is already I5 under
-  §4.
 - The bench key paste from the old cloud step moves to `scripts/provision.py`
   only.
 
-**Files:** `src/service_window/` (app, auth, captive, routes, templates,
-static), `scripts/provision.py`, `docs/site-flow-v2.md`,
-`docs/install-day-runbook.md`, `docs/getting-started.md` (PIN 1234 and
-`WQM1-xxxx` mentions), tests for each route.
+**Files:** `src/service_window/` (app, auth, captive, routes/setup,
+templates/setup, setup_base.html), `scripts/provision.py`,
+`docs/site-flow-v2.md`, `docs/install-day-runbook.md`,
+`docs/getting-started.md` (PIN 1234 and `WQM1-xxxx` mentions), tests for
+the deleted routes.
 
 **Tests:**
-- Walk the Flask `url_map`: every GET page returns 404 (or otherwise does
-  not render) when `request.remote_addr` is a home-network address. Do not
-  keep a hand-written list of routes; read the map (AGENTS rule 3).
-- Walk the same map: every rule whose methods include POST, PUT, PATCH or
-  DELETE returns 403 when both `Origin` and `Referer` are missing.
-- A POST with a foreign `Origin` returns 403. A POST with a foreign
-  `Referer` and no `Origin` returns 403.
-- Every remaining template renders without the strings named in I5.
 - No route answers `/setup/...` any more.
 - No PIN prompt, PIN field or factory PIN remains.
 
-**Done:** the Service Window has no PIN anywhere; no GET page is readable
-from a home-network address.
+**Done:** the Service Window has no wizard and no PIN anywhere.
 
 **Traps:**
 - `scripts/provision.py`, `scripts/diagnostics.sh` and the burn-in may log
@@ -666,13 +664,98 @@ from a home-network address.
   deleting it.
 - Docs in the marketplace repo that mention PIN 1234 or `WQM1-xxxx` are
   updated through a marketplace PR (the Cloud plan's §6), not here.
-- `docs/sensor-calibration.md` still says calibration is done at
-  `http://<unit-ip>:8080`. Do not invent a replacement in this PR; see
-  Decisions needed from the Captain.
+- Do not invent a replacement for bench pH calibration or the RS485 wizard
+  in this PR. See Decisions needed from the Captain.
 
 ---
 
-## §10. Cloud commands and heartbeat fields (W9, and the hooks for M2, M5)
+## §10. The unit's local page stays off
+
+**Held:** §9 (and the local-page-off PR) does not start until the Captain
+answers Decisions 1–3. Pulling bench pH calibration and the RS485 wizard
+has no replacement yet (`docs/sensor-calibration.md` line 4 still says
+use `http://<unit-ip>:8080`).
+
+One PR. With the local page off, **no GET page is readable from the home
+network.** This is not "read-only without a PIN." It is off. Consulted:
+this plan, `SECURITY.md` (reporting policy only; it does not define LAN
+exposure), `docs/site-flow-v2.md` (the flow this plan replaces).
+
+**No `local_unlock` and no `local-unlock.json`.** With the page off there
+is nothing to unlock. Do not add `unlock_required`.
+
+How "off" is implemented is Decision 2. Do not start this PR until that
+answer exists. Write the test for the option the Captain picks:
+
+| Decision 2 | Test |
+|---|---|
+| 404 on `0.0.0.0:8080` | Walk the Flask `url_map` (AGENTS rule 3): every GET returns 404 when `request.remote_addr` is a home-network address. |
+| loopback bind | The Service Window listens on loopback only. A client using the unit's LAN address does not get a GET page (connection refused or no route). |
+| process not running | The Service Window unit is not installed or not enabled on a field image. A client using the unit's LAN address on port 8080 does not get a GET page. |
+
+Do not keep a hand-written list of routes when the 404 option is picked;
+read the map.
+
+**Files:** `src/service_window/app.py` and/or the systemd unit that starts
+it, `setup.sh` if the service is removed from a field install, tests for
+the chosen option.
+
+**Done:** no GET page is readable from a home-network address, by the
+option the Captain named.
+
+**Trap:** `docs/sensor-calibration.md` still says calibration is done at
+`http://<unit-ip>:8080`. Do not invent a replacement here.
+
+---
+
+## §11. CSRF, only if any mutating route still answers
+
+One PR, and only if Decision 3 says a mutating Service Window route still
+answers from the home network. If those routes stay off with the GET
+pages, skip this PR.
+
+Relays, calibration, RS485, settings and the rest are not a substitute
+local UI. If a route whose methods include POST, PUT, PATCH or DELETE
+still answers, it requires an `Origin` or `Referer` whose host is the
+unit's own address or hostname. **If both `Origin` and `Referer` are
+missing, reject with 403** (curl, some webviews). A foreign host in either
+header is also 403.
+
+**Files:** `src/service_window/` (the CSRF check), tests that walk
+`url_map`.
+
+**Tests** (held until Decision 3; skip the PR if no mutating route
+answers):
+- Walk the Flask `url_map`: every remaining rule whose methods include
+  POST, PUT, PATCH or DELETE returns 403 when both `Origin` and `Referer`
+  are missing.
+- A POST with a foreign `Origin` returns 403. A POST with a foreign
+  `Referer` and no `Origin` returns 403.
+
+**Done:** every mutating route that still answers rejects the missing-
+header case with 403.
+
+---
+
+## §12. I5 template cleanup
+
+One PR. Remove auto-refresh from leftover Service Window templates
+(`sensors.html` 15 s, `status.html` 30 s, `static/app.js` 30 s on `/`).
+They must not reload themselves, navigate on a timer, or replace a form
+(I5). The port-80 setup page is already I5 under §4.
+
+If §10 deletes those templates, this PR has nothing to do — skip it.
+
+**Files:** the leftover templates and `static/app.js`, plus a render test.
+
+**Tests:** every remaining template renders without the strings named in
+I5. Parse the rendered page; do not grep source files.
+
+**Done:** no leftover Service Window page reloads itself.
+
+---
+
+## §13. Cloud commands and heartbeat fields (W9, and the hooks for M2, M5)
 
 **Today:** the firmware polls `deviceCommands` every `command_poll_s` (5 s
 by default) and handles `relay`, `awg`, `restart`, `config_reload`,
@@ -728,14 +811,19 @@ the lights on a bench Pi within 10 s of the tap.
 
 ## Order and dependencies
 
-§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §9 → §10.
+§1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → (§9 and §10 held) → §11 if
+needed → §12 if needed → §13.
 
 §4 needs §2 (a join to call) and §3 (the open network). §5 can merge as
 soon as the Service Window still exists; after it merges, the old wizard is
 intentionally unreachable from the setup network. §8 can start once §4 is
-merged (run the precondition first). §9 no longer waits on a Cloud unlock
-command: `local_unlock` is gone. The Cloud half's §2 (Add unit) needs this
-plan's §10.
+merged (run the precondition first). **§9 (and the local-page-off PR) does
+not start until the Captain answers Decisions 1–3.** `local_unlock` is
+gone; that is not a reason to start §9. §11 opens only if Decision 3 says
+a mutating route still answers. §12 opens only if leftover templates
+remain after §10. §13 (identify / `wifi_window` / heartbeat) can start
+after §7 and does not wait on Decisions 1–3. The Cloud half's §2 (Add
+unit) needs this plan's §13.
 
 ## Not verified by this plan
 
@@ -746,6 +834,7 @@ plan's §10.
   generated).
 - That the X25519 check above also passes on CI's Python 3.11 image.
 - The repro numbers in §1 came from this session's scratch test, not CI.
+- That this stacked branch is current with master (not checked).
 
 ## Decisions needed from the Captain
 
@@ -759,7 +848,8 @@ implementation, and this revision does not invent an answer.
 2. **How the local page stays off on a field unit.** Does the Service
    Window still bind `0.0.0.0:8080` and 404 every GET from the home
    network, bind loopback only, or not run?
-3. **Mutating Service Window routes from the home network.** §9 keeps CSRF
+3. **Mutating Service Window routes from the home network.** §11 is CSRF
    (403 if `Origin` and `Referer` are both missing) for any mutating route
-   that still answers. Should those routes answer from the home network at
-   all, or stay off the same way GET pages do?
+   that still answers, and is skipped if none do. Should those routes
+   answer from the home network at all, or stay off the same way GET
+   pages do?
