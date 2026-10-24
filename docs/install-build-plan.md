@@ -1,7 +1,8 @@
 # Install v3: firmware build plan
 
-**Stack:** this stacks on #155 (base `claude/loving-lamport-hq4t3a`). The
-Captain merges #155 first or retargets. Not checked against master.
+**PR:** this is #155. Base is `master`. Claude's review of #155
+(github-actions comment 6387319904, 24 Oct 2026) found the branch up
+to date with master.
 
 **Status:** plan, 2026-10-24. Written by Claude for Grok under the `AGENTS.md`
 handoff. Revised the same day after the review on PR #155 to match the
@@ -11,7 +12,11 @@ Cloud only; the unit's local page stays off; the old wizard, PIN, sensors,
 QR and claim-token steps are obsolete. Revised again the same day after
 the Captain answered Decisions 2 and 3: the Service Window stays running
 but binds loopback only; no mutating route answers from the home
-network, so §11 is skipped. Nothing here is built yet.
+network, so §11 is skipped. Revised again the same day after Claude's
+third review (comment 6387319904, changes needed): the 8080 block is
+§3, the port-80 page is §4, and the open-network switch is last as §5;
+the HTTP `Date` clock step is capped; bench units stay off home
+networks until §10. Nothing here is built yet.
 
 **What it builds:** the firmware half of the install spec,
 `marketplace/docs/operations/wqm1-install-spec.md` (marketplace PR #1457).
@@ -58,13 +63,17 @@ Every PR keeps all of these, and the tests named below pin them.
 
 | # | Invariant | Pinned by |
 |---|---|---|
-| I1 | A client on the setup network (192.168.4.0/24) can reach one thing: the Wi-Fi page. Nothing that changes the unit, other than its Wi-Fi, answers there. | §4 tests; §5 tests; §10 tests |
+| I1 | A client on the setup network (192.168.4.0/24) can reach one thing: the Wi-Fi page. Nothing that changes the unit, other than its Wi-Fi, answers there. | §3 tests; §4 tests; §10 tests |
 | I2 | The home Wi-Fi password is written only into the NetworkManager profile (root-only). Never into a log, a state file, the boot partition, a heartbeat or Cloud. | §2, §4 tests (capture logs and files, search for the password) |
 | I3 | A network that has reached BlueSignal is never deleted by the unit until another network has reached BlueSignal. | §2, §6 tests |
 | I4 | At most one join runs at a time. | §2 test |
 | I5 | No page the unit serves reloads itself, navigates on a timer, or replaces a form. A status change edits text in place. | §4 tests (the port-80 page); §12 tests (any leftover Service Window template) |
 | I6 | Every failure ends with the setup network up and the lights at "ready", unless a proven network exists and is being retried. | §2, §6 tests |
 | I7 | The setup network and its page work without the firmware (`bluesignal-wqm`), the Service Window or Cloud running. | §4 test (portal answers with both stopped) |
+
+The unit must never be open with 8080 reachable — not on `:8080`
+directly, and not through the port-80 proxy. That is why the
+open-network switch (`passphrase=None`) is last of §3/§4/§5.
 
 ---
 
@@ -107,10 +116,11 @@ Build this before the page (§4), so the page has a join to call.
 
 The old wizard's network step can call the new join until §9 deletes the
 wizard. That is not the same as the wizard remaining usable from the setup
-network. From the 8080 block (§5) onward the old wizard is intentionally
-unreachable from `192.168.4.0/24`. Do not read this section as "the current
-wizard keeps working in the meantime" on BlueSignal Setup: it does not,
-once §5 has merged.
+network. From the 8080 block (§3) onward the old wizard is intentionally
+unreachable from `192.168.4.0/24` on port 8080. The port-80 proxy still
+reaches it until §4. Do not read this section as "the current wizard
+keeps working in the meantime" on BlueSignal Setup: it does not, once
+§3 has merged, on `:8080`.
 
 **New module `src/utils/join.py`**, pure orchestration over `netctl`:
 
@@ -154,7 +164,15 @@ once §5 has merged.
    read the `Date` header, and set the clock forward only, through the
    existing `utils/clock.py` path (`sudo -n date -u -s`, one sudoers line
    from `setup.sh`). Then retry the HTTPS request once. Never move the
-   clock backwards.
+   clock backwards. **Bound:** accept the `Date` only when the step
+   forward is at most two years. Why a step cap, not "only if the clock
+   is before `utils.clock.EARLIEST_PLAUSIBLE_UTC`": this path runs when
+   the clock is behind (the implausible case). A floor on the current
+   clock would still accept a `Date` of 2099 and break TLS to Cloud.
+   Two years is the largest lag this section already treats as a
+   legitimate stuck clock. A 1970 epoch clock is a 50+ year step and
+   is refused here; `utils.clock` already corrects that from GPS or
+   NTP, not from an unauthenticated HTTP header.
 5. **Forget older networks only after success** (rule 7 of the spec). The
    existing `forget_saved_wifi(keep=ssid)` moves from `_finish_setup` in
    `routes/setup.py` into the success path of the worker, after
@@ -179,6 +197,7 @@ once §5 has merged.
   failure written. Blocked for 200 s: `no_bluesignal` after 180 s.
 - Clock 2 years behind, TLS time error: clock set forward from the Date
   header, retry succeeds. Clock ahead of the header: clock not moved.
+  A `Date` of year 2099 is refused: clock not moved.
 - Two `start_join` calls 100 ms apart: the second returns `busy` with the
   first SSID (I4).
 - The password string appears in no log record (caplog), no file under the
@@ -187,8 +206,9 @@ once §5 has merged.
 
 **Done:** all of the above pass. Until §9 deletes it, the old wizard's
 network step still joins through the new path when a test client (or a
-browser not on the setup network) reaches it. After §5, a phone on
-BlueSignal Setup cannot open that wizard; that is intended.
+browser not on the setup network) reaches it. After §3, a phone on
+the setup network cannot open that wizard on `:8080`; that is
+intended. After §4 it cannot open it through port 80 either.
 
 **Bench check:** wrong password, then right; a router with client approval
 (or a firewall rule blocking the API host for 2 minutes).
@@ -203,66 +223,60 @@ BlueSignal Setup cannot open that wizard; that is intended.
 
 ---
 
-## §3. Open "BlueSignal Setup" plus identity and firstboot (W1 name)
+## §3. Close 8080 to the setup network (I1)
 
-One PR. Do not fold the port-80 page or the 8080 block into this change
-(AGENTS rule 6).
+One PR. Do not fold the port-80 page or the open-network switch
+(`passphrase=None`) into this change (AGENTS rule 6).
 
-- `utils/identity.py`: `SETUP_SSID = "BlueSignal Setup"`. `ap_name()`
-  returns it, for every unit and every argument. Add `host_name(device_id=None)`
-  returning today's rule (`wqm1-` + last four, lowercase), for the hostname
-  only.
-- `tools/golden/overlay/usr/local/sbin/wqm1-firstboot` line 57: call
-  `host_name()`. **If it keeps calling `ap_name()`, the regex check fails
-  and the script silently falls back to the Pi serial**, so every unit gets
-  a hostname from its Pi instead of its label. Add a test that runs the
-  script (it already has `WQM1_*` overrides for tests) against a label
-  identity file and expects `wqm1-0001`.
-- `netctl.hostapd_config(ssid, passphrase=None)`: with no passphrase, emit
-  no `wpa`, `wpa_key_mgmt`, `wpa_passphrase` or `rsn_pairwise` lines (an
-  open network). `start_ap()` accepts `passphrase=None`; it still refuses a
-  non-empty passphrase under 8 characters. Rewrite the docstrings that say
-  "an open AP into a PIN-gated page is still an open AP": the premise is
-  gone because the page sets only Wi-Fi (spec decision 1) and there is no
-  PIN anywhere.
-- `ap_credentials()` returns `(SETUP_SSID, None)`. Remove the passphrase
-  from `join_network`'s `ap_passphrase`, `_restore_ap`,
-  `scripts/wqm1-ap-fallback.py`, `diagnostics/ap_fail.py` (keep its
-  generic `psk=` redaction), `scripts/make-unit-label.py`,
-  `scripts/demo-unit.py`, `scripts/simulate-fleet.py`, `utils/netsim.py`.
-  `derived_passphrase()` is deleted with its callers
-  (`scripts/wqm1-ap-fallback.py`, `scripts/make-unit-label.py`) and tests
-  (`tests/test_netctl.py`, `tests/test_unit_label.py`).
-- OWE (Enhanced Open) is **not** in this PR. Whether the BCM43430 offers it
-  in AP mode is a bench question; add it later as a separate PR if it does.
+The Service Window binds `0.0.0.0:8080`, so a phone on the setup
+network can open `http://192.168.4.1:8080` directly. Add a `before_request`
+in `service_window/app.py`: if `request.remote_addr` is in `AP_NETWORK`,
+return 404 with "This page isn't available on the setup network." Direct
+connections carry the phone's real address, so `captive.from_hotspot()`
+works for this.
 
-**Files:** `src/utils/identity.py`, `src/utils/netctl.py`,
-`tools/golden/overlay/usr/local/sbin/wqm1-firstboot`,
-the scripts and diagnostics named above, `tests/test_netctl.py`,
-`tests/test_ap_unit_layout.py`, `tests/test_simulate.py`,
-`tests/test_netinfo.py`, `tests/test_unit_label.py`.
+**The old wizard is intentionally unreachable from the setup network on
+port 8080 from this PR onward.** Identity, sensors, PIN, QR and cloud
+steps still exist in the tree until §9 deletes them, and a test client
+(or a browser on the home network) can still hit them until then. A
+phone on the setup network cannot open them on `:8080`. That is the
+intended gap, not a bug. Do not add a bypass, a proxy, or a
+"keep the wizard on 8080 for the setup network" exception.
+
+Until §4, the port-80 captive-portal proxy still reaches the wizard
+(the Service Window sees `127.0.0.1`, so this `before_request` does not
+stop it). Until §5, the setup network still has a passphrase. The
+open-network switch is last of §3/§4/§5 for that reason.
+
+**The unit must never be open with 8080 reachable** — not on `:8080`
+directly, and not through the port-80 proxy. This PR is the first of
+those two closes. It is not the open-network switch.
+
+**Files:** `src/service_window/app.py`, `tests/test_service_window_setup.py`.
 
 **Tests:**
-- `ap_name()` is "BlueSignal Setup" for a label, a derived id and a
-  simulated id; `host_name()` is `wqm1-0001` for `WQM-10001`.
-- `hostapd_config(ssid, None)` contains no `wpa` line; with an 8-character
-  passphrase it is unchanged from today.
-- The firstboot script test named above.
+- A request to the Service Window from 192.168.4.23 returns 404; from
+  10.0.0.5 it does not (until §10 binds loopback, when a client using
+  the unit's LAN address gets connection refused).
+- The 404 body is the sentence above.
 
-**Done:** a simulated unit advertises "BlueSignal Setup" as an open
-network; `host_name()` is what firstboot writes.
+**Done:** `http://192.168.4.1:8080` does not answer the wizard, or any
+other Service Window page, from a client whose address is in
+`192.168.4.0/24`.
 
-**Bench check:** the phone's Wi-Fi list shows an open network named
-"BlueSignal Setup". Opening the page is §4.
+**Bench check:** `http://192.168.4.1:8080` does not answer from the phone
+on the setup network.
 
-**Trap:** firstboot must call `host_name()`, not `ap_name()`. See the
-silent serial fallback above.
+**Trap:** do not delete the wizard or the PIN in this PR. That is §9.
 
 ---
 
 ## §4. The Wi-Fi page on port 80, without the proxy (W2)
 
-One PR. Depends on §2 (a join to call) and §3 (the open setup network).
+One PR. Depends on §2 (a join to call). Does not wait on the open
+setup network (§5). The page can land while the setup network still
+has a passphrase. After this PR the port-80 proxy is gone, so a phone
+on the setup network cannot reach the wizard through port 80 either.
 
 **Decision: the port-80 listener renders the page itself.** Today
 `utils/captive_portal.py` proxies every request to the Service Window
@@ -322,7 +336,8 @@ page reaches `joined` against the virtual radio.
 
 **Bench check (spec section 5):** iPhone, Pixel and Samsung each open the
 page by themselves (B3, B4, B6); phone call and app switch mid-typing keep
-the form (C1).
+the form (C1). Auto-open of the captive page needs the open network
+(§5); until then, type the setup address.
 
 **Traps:**
 - **Scanning while the setup network is up.** The spec lists this as
@@ -339,39 +354,64 @@ the form (C1).
 
 ---
 
-## §5. Close 8080 to the setup network (I1)
+## §5. Open "BlueSignal Setup" plus identity and firstboot (W1 name)
 
-One PR. The Service Window binds `0.0.0.0:8080`, so a phone on the setup
-network can open `http://192.168.4.1:8080` directly. Add a `before_request`
-in `service_window/app.py`: if `request.remote_addr` is in `AP_NETWORK`,
-return 404 with "This page isn't available on the setup network." Direct
-connections carry the phone's real address, so `captive.from_hotspot()`
-works for this.
+One PR. Do not fold the port-80 page or the 8080 block into this change
+(AGENTS rule 6).
 
-**The old wizard is intentionally unreachable from the setup network from
-this PR onward.** Identity, sensors, PIN, QR and cloud steps still exist in
-the tree until §9 deletes them, and a test client (or a browser on the home
-network) can still hit them until then. A phone on BlueSignal Setup cannot.
-That is the intended gap, not a bug. Setup from this point is the port-80
-Wi-Fi page plus the lights, then Cloud. Do not add a bypass, a proxy, or a
-"keep the wizard on 8080 for the setup network" exception.
+**This PR is last of §3/§4/§5.** It must not merge until §3 (8080 closed
+to `AP_NETWORK`) and §4 (no port-80 proxy) have merged. The unit must
+never be open with 8080 reachable.
 
-**Files:** `src/service_window/app.py`, `tests/test_service_window_setup.py`.
+- `utils/identity.py`: `SETUP_SSID = "BlueSignal Setup"`. `ap_name()`
+  returns it, for every unit and every argument. Add `host_name(device_id=None)`
+  returning today's rule (`wqm1-` + last four, lowercase), for the hostname
+  only.
+- `tools/golden/overlay/usr/local/sbin/wqm1-firstboot` line 57: call
+  `host_name()`. **If it keeps calling `ap_name()`, the regex check fails
+  and the script silently falls back to the Pi serial**, so every unit gets
+  a hostname from its Pi instead of its label. Add a test that runs the
+  script (it already has `WQM1_*` overrides for tests) against a label
+  identity file and expects `wqm1-0001`.
+- `netctl.hostapd_config(ssid, passphrase=None)`: with no passphrase, emit
+  no `wpa`, `wpa_key_mgmt`, `wpa_passphrase` or `rsn_pairwise` lines (an
+  open network). `start_ap()` accepts `passphrase=None`; it still refuses a
+  non-empty passphrase under 8 characters. Rewrite the docstrings that say
+  "an open AP into a PIN-gated page is still an open AP": the premise is
+  gone because the page sets only Wi-Fi (spec decision 1) and there is no
+  PIN anywhere.
+- `ap_credentials()` returns `(SETUP_SSID, None)`. Remove the passphrase
+  from `join_network`'s `ap_passphrase`, `_restore_ap`,
+  `scripts/wqm1-ap-fallback.py`, `diagnostics/ap_fail.py` (keep its
+  generic `psk=` redaction), `scripts/make-unit-label.py`,
+  `scripts/demo-unit.py`, `scripts/simulate-fleet.py`, `utils/netsim.py`.
+  `derived_passphrase()` is deleted with its callers
+  (`scripts/wqm1-ap-fallback.py`, `scripts/make-unit-label.py`) and tests
+  (`tests/test_netctl.py`, `tests/test_unit_label.py`).
+- OWE (Enhanced Open) is **not** in this PR. Whether the BCM43430 offers it
+  in AP mode is a bench question; add it later as a separate PR if it does.
+
+**Files:** `src/utils/identity.py`, `src/utils/netctl.py`,
+`tools/golden/overlay/usr/local/sbin/wqm1-firstboot`,
+the scripts and diagnostics named above, `tests/test_netctl.py`,
+`tests/test_ap_unit_layout.py`, `tests/test_simulate.py`,
+`tests/test_netinfo.py`, `tests/test_unit_label.py`.
 
 **Tests:**
-- A request to the Service Window from 192.168.4.23 returns 404; from
-  10.0.0.5 it does not (until §10 binds loopback, when a client using
-  the unit's LAN address gets connection refused).
-- The 404 body is the sentence above.
+- `ap_name()` is "BlueSignal Setup" for a label, a derived id and a
+  simulated id; `host_name()` is `wqm1-0001` for `WQM-10001`.
+- `hostapd_config(ssid, None)` contains no `wpa` line; with an 8-character
+  passphrase it is unchanged from today.
+- The firstboot script test named above.
 
-**Done:** `http://192.168.4.1:8080` does not answer the wizard, or any
-other Service Window page, from a client whose address is in
-`192.168.4.0/24`.
+**Done:** a simulated unit advertises "BlueSignal Setup" as an open
+network; `host_name()` is what firstboot writes.
 
-**Bench check:** `http://192.168.4.1:8080` does not answer from the phone
-on BlueSignal Setup.
+**Bench check:** the phone's Wi-Fi list shows an open network named
+"BlueSignal Setup". Opening the page is §4 (already merged).
 
-**Trap:** do not delete the wizard or the PIN in this PR. That is §9.
+**Trap:** firstboot must call `host_name()`, not `ap_name()`. See the
+silent serial fallback above.
 
 ---
 
@@ -551,11 +591,13 @@ ct_len 17 tag_len 16
 
 Both directions of `key_agreement` on `curve25519` returned the same 32
 bytes. One XChaCha20-Poly1305 encrypt/decrypt with a 24-byte nonce
-round-tripped the plaintext. Rerun independently on 2026-10-24 under
-Python 3.11.17 (CI's version) and 3.13.17, each in a fresh venv with
-`pycryptodome==3.24.0`: both directions equal (32 bytes), round-trip ok,
-and a ciphertext with one flipped bit is rejected (`ValueError`). Not
-verified: this check is not under `pytest`; the §8 PR adds it as a test.
+round-tripped the plaintext. The recorded run is Python 3.12.3 on this
+VM. The check is for Python 3.11, 3.12 and 3.13 (CI sets
+`python-version: '3.11'` in `.github/workflows/ci.yml`). This plan does
+not record a 3.11 or 3.13 patch number. Not verified: a rerun under
+3.11 or 3.13; this check is not under `pytest`; the §8 PR adds it as a
+test. The open dependabot branch `pycryptodome-4.0.0` (PR #146) means
+§8 pins `pycryptodome==3.24.0`; any bump needs the fixtures rerun.
 
 **How HKDF-SHA256 + XChaCha20-Poly1305 will be checked across JS and
 Python** (do this in the §8 PR; it is unverified today — there is no
@@ -597,6 +639,8 @@ the page needs its own crypto library.
   agreement (`Crypto.Protocol.DH.key_agreement` on `curve25519`), HKDF,
   `ChaCha20_Poly1305` with a 24-byte nonce. The precondition above already
   agreed in both directions and round-tripped one ciphertext on this VM.
+  The pin stays 3.24.0 while the dependabot branch `pycryptodome-4.0.0`
+  is open; any bump needs the fixtures rerun.
 - The server rejects a plaintext password field, a wrong or reused page
   nonce, and a decryption failure (with "Reload the page and try again").
 
@@ -614,9 +658,11 @@ join does not see the password. The two fixtures in the precondition pass.
 
 **Traps:**
 - The precondition showed both-direction `key_agreement` on `curve25519`,
-  one XChaCha20-Poly1305 round-trip and a rejected tampered ciphertext in
-  3.24.0, on Python 3.11 and 3.12/3.13. If CI disagrees, raise it in the
-  PR rather than adding a second crypto library.
+  one XChaCha20-Poly1305 round-trip in 3.24.0, on the recorded Python
+  3.12.3 run. The same check is for 3.11, 3.12 and 3.13. If CI
+  disagrees, raise it in the PR rather than adding a second crypto
+  library. The pin stays 3.24.0; the open dependabot branch
+  `pycryptodome-4.0.0` does not land without the fixtures rerun.
 - This does not stop a fake "BlueSignal Setup" (spec risk 3). Do not claim
   it does in comments or docs.
 
@@ -945,24 +991,32 @@ the lights on a bench Pi within 10 s of the tap.
 §1 → §2 → §3 → §4 → §5 → §6 → §7 → §8 → §13 → §10 (held on §13
 Cloud commands) → §9 → §12. §11 is skipped.
 
+**The unit must never be open with 8080 reachable.** §5 (the
+`passphrase=None` default) is last of §3/§4/§5 and never merges
+before §3 (8080 closed to `AP_NETWORK`) and §4 (no port-80 proxy).
+
 **§9 never merges before §10.** §9 deletes the PIN, and the PIN is the
 only gate on the mutating 8080 routes until §10 binds loopback.
 
-§4 needs §2 (a join to call) and §3 (the open network). §5 can merge as
-soon as the Service Window still exists; after it merges, the old wizard is
-intentionally unreachable from the setup network. §8 can start once §4 is
-merged (run the precondition first). Decision 1 is answered (24 Oct 2026)
-and no longer holds §9 or §10. Decisions 2 and 3 are answered (24 Oct
-2026) and no longer hold §10. §9 (wizard and PIN only) can be built
-now but merges only after §10 (see above). **The unit side needs a Cloud
-command path for calibration and RS485 (§13; marketplace #1457) before
-the local page can go off, so the §10 PR still waits on that Cloud
-work.** §11 is skipped: Decision 3 answered no mutating route from the
-home network. §12 still opens: loopback does not delete leftover
-templates. `identify` / `wifi_window` / heartbeat in
-§13 can start after §7. The calibration and RS485 command handlers in
-§13 must land before §10. The Cloud half's §2 (Add unit) needs this
-plan's §13.
+Bench units that run this firmware stay off home networks until §10
+merges. The Captain can reverse this.
+
+§4 needs §2 (a join to call). It does not wait on the open network.
+§3 can merge as soon as the Service Window still exists; after it
+merges, the old wizard is intentionally unreachable from the setup
+network on `:8080`. After §4 it is unreachable through port 80 too.
+§8 can start once §4 is merged (run the precondition first). Decision 1
+is answered (24 Oct 2026) and no longer holds §9 or §10. Decisions 2
+and 3 are answered (24 Oct 2026) and no longer hold §10. §9 (wizard
+and PIN only) can be built now but merges only after §10 (see above).
+**The unit side needs a Cloud command path for calibration and RS485
+(§13; marketplace #1457) before the local page can go off, so the
+§10 PR still waits on that Cloud work.** §11 is skipped: Decision 3
+answered no mutating route from the home network. §12 still opens:
+loopback does not delete leftover templates. `identify` /
+`wifi_window` / heartbeat in §13 can start after §7. The calibration
+and RS485 command handlers in §13 must land before §10. The Cloud
+half's §2 (Add unit) needs this plan's §13.
 
 ## Not verified by this plan
 
