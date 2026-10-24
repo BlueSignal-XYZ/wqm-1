@@ -384,7 +384,9 @@ def sw_client(tmp_path, monkeypatch):
     )
     conn.close()
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump({"apple_home_enabled": False}))
+    config_path.write_text(
+        yaml.safe_dump({"apple_home_enabled": False, "service_window": {"setup_completed": True}})
+    )
     app = create_app(
         {
             "db_path": db_path,
@@ -396,9 +398,8 @@ def sw_client(tmp_path, monkeypatch):
         }
     )
     app.config["TESTING"] = True
+    app.config["TEST_OPEN_WINDOW"] = True
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
     sent: list[tuple[str, dict]] = []
     answer: dict[str, Any] = {
         "ok": True,
@@ -472,5 +473,6 @@ class TestServiceWindow:
 
     def test_page_requires_login(self, sw_client):
         client, _, _, _ = sw_client
+        client.application.config["TEST_OPEN_WINDOW"] = False
         client.get("/logout")
         assert client.get("/apple-home/").status_code in (302, 401, 403)

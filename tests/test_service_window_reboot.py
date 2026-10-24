@@ -35,11 +35,13 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def app(db_path, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("service_window:\n  setup_completed: true\n")
     return create_app(
         {
             "db_path": db_path,
             "pin": "9999",
-            "config_path": str(tmp_path / "config.yaml"),
+            "config_path": str(config_path),
             "cal_path": str(tmp_path / "calibration.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
         }
@@ -49,10 +51,8 @@ def app(db_path, tmp_path):
 @pytest.fixture
 def authed_client(app):
     app.config["TESTING"] = True
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client
+    app.config["TEST_OPEN_WINDOW"] = True
+    return app.test_client()
 
 
 @pytest.fixture

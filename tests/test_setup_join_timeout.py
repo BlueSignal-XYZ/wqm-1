@@ -88,3 +88,133 @@ class TestJoinDoesNotHoldTheHttpRequest:
             time.sleep(0.05)
         assert body["state"] == "ok"
         worker.join(timeout=1)
+
+    def test_join_exception_marks_the_job_failed(self, tmp_path, mock_hardware, monkeypatch):
+        from utils import netctl
+
+        def boom(*_a, **_k):
+            raise RuntimeError("nmcli missing")
+
+        monkeypatch.setattr(netctl, "join_network", boom)
+        client, app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        response = client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/setup/network")
+        body = client.get("/setup/join-status").get_json()
+        assert body["state"] == "fail"
+        notice = app.config.get("LAST_JOIN") or {}
+        assert notice.get("ssid") == "PondHouse"
+        assert notice.get("error")
+        # A later join must not be stuck on the polling page.
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *_a, **_k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
+        )
+        again = client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        assert again.status_code == 200
+        assert b"Joined PondHouse" in again.data
+
+    def test_second_join_post_keeps_the_running_ssid(self, tmp_path, mock_hardware, monkeypatch):
+        from utils import netctl
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_join(ssid, *_a, **_k):
+            started.set()
+            assert release.wait(timeout=5)
+            return {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+                "ssid": ssid,
+            }
+
+        monkeypatch.setattr(netctl, "join_network", slow_join)
+        monkeypatch.setattr(
+            netctl,
+            "scan_networks",
+            lambda iface="wlan0": [
+                {"ssid": "PondHouse", "signal": 72, "secured": True},
+                {"ssid": "Barn", "signal": 60, "secured": True},
+            ],
+        )
+        client, _app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+
+        posted: dict[str, object] = {}
+
+        def _post() -> None:
+            posted["response"] = client.post(
+                "/setup/network",
+                data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+            )
+
+        worker = threading.Thread(target=_post, name="wqm1-test-join-post")
+        worker.start()
+        assert started.wait(timeout=2)
+        worker.join(timeout=1.0)
+        assert not worker.is_alive()
+
+        second = client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "Barn", "password": "hunter22"},
+        )
+        assert second.status_code == 200
+        assert b"PondHouse" in second.data
+        assert b"Joining Barn" not in second.data
+        body = client.get("/setup/join-status").get_json()
+        assert body["state"] == "joining"
+        assert body["ssid"] == "PondHouse"
+        release.set()
+        worker.join(timeout=1)
+
+    def test_joining_page_explains_a_dropped_hotspot(self, tmp_path, mock_hardware, monkeypatch):
+        from utils import netctl
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_join(*_a, **_k):
+            started.set()
+            release.wait(timeout=5)
+            return {
+                "ok": False,
+                "connected": False,
+                "ap_restored": True,
+                "error": "x",
+            }
+
+        monkeypatch.setattr(netctl, "join_network", slow_join)
+        client, _app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        posted: dict[str, object] = {}
+
+        def _post() -> None:
+            posted["response"] = client.post(
+                "/setup/network",
+                data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+            )
+
+        worker = threading.Thread(target=_post, name="wqm1-test-join-post")
+        worker.start()
+        assert started.wait(timeout=2)
+        worker.join(timeout=1.0)
+        page = posted["response"].get_data(as_text=True)
+        assert "Reconnect to this unit's Wi-Fi, or check BlueSignal Cloud." in page
+        assert "r.status === 403" in page or "status === 403" in page
+        release.set()
+        worker.join(timeout=1)

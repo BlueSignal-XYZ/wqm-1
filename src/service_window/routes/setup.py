@@ -2,24 +2,22 @@
 Guided first-boot setup wizard — the installer-first commissioning path.
 
 Replaces the CLI wizard as the primary way a dealer/installer commissions a
-unit from a phone browser: set a real PIN (the shipped `1234` is banned),
-confirm device identity (v2 QR), watch live sensor checks come green, join
-the site network, and let the unit register itself with BlueSignal Cloud.
-The installer never pastes a device API key. Config writes go through the
-atomic YAML editor; the firmware is restarted through the command socket
-instead of telling anyone to run systemctl.
+unit from a phone browser: confirm device identity (v2 QR), watch live
+sensor checks come green, join the site network, and let the unit register
+itself with BlueSignal Cloud. The installer never pastes a device API key.
+Config writes go through the atomic YAML editor; the firmware is restarted
+through the command socket instead of telling anyone to run systemctl.
 
-While the unit still has the factory PIN and setup hasn't been completed,
-every page redirects here (see app.py) — a unit can't be left half set up
-by accident.
+Until setup has been completed, every page redirects here (see app.py)
+— a unit can't be left half set up by accident. There is no PIN to set.
 
 Site flow v2 (2026-10-03, onboarding v2 2026-10-19): **the network step is
 last before cloud registration, and joining the site's Wi-Fi is what
 finishes setup on a Wi-Fi site.** The wizard is usually served over the
 unit's own setup hotspot, which goes down the moment a join succeeds; the
-join handler finishes setup on the unit itself (PIN checked before the radio
-is touched, other saved Wi-Fi forgotten, setup marked complete, firmware
-restarted) and kicks self-registration. A failed join keeps its reason on
+join handler finishes setup on the unit itself (other saved Wi-Fi
+forgotten, setup marked complete, firmware restarted) and kicks
+self-registration. A failed join keeps its reason on
 the unit. A unit whose bench card already carries its identity and cloud
 key skips the identity step (``CARDED_STEPS``). The HTTP key paste lives
 only as a bench/dev override, clearly marked, not on the installer path.
@@ -39,7 +37,6 @@ from flask import (
     redirect,
     render_template,
     request,
-    session,
     url_for,
 )
 from flask.typing import ResponseReturnValue
@@ -103,19 +100,17 @@ def _firmware_starting_ctx() -> dict[str, bool]:
     return {"firmware_starting": not ready}
 
 
-_PIN_RE = re.compile(r"^\d{4,8}$")
 _CLOUD_KEY_RE = re.compile(r"^[0-9a-zA-Z]{16,128}$")
 # LoRaWAN OTAA credentials, both issued by the cloud at claim time.
 _APP_KEY_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 _APP_EUI_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 _ZERO_APP_KEY = "00000000000000000000000000000000"
-_FACTORY_PIN = "1234"
 
 # Network, then cloud registration: see the module docstring. ``STEPS`` stays
 # exported for callers that render the full track; ``steps_for`` is what
 # routes use. Join still finishes setup because the hotspot drops.
-STEPS = ["welcome", "pin", "identity", "sensors", "network", "cloud", "done"]
-CARDED_STEPS = ["welcome", "pin", "sensors", "network", "done"]
+STEPS = ["welcome", "identity", "sensors", "network", "cloud", "done"]
+CARDED_STEPS = ["welcome", "sensors", "network", "done"]
 
 
 def is_carded(config: dict) -> bool:
@@ -138,22 +133,14 @@ def _steps() -> list[str]:
     return steps_for(read_config(current_app.config["CONFIG_PATH"]))
 
 
-def _next_url(step: str) -> str:
-    steps = _steps()
-    i = steps.index(step) if step in steps else 0
-    return url_for(f"setup.{steps[min(i + 1, len(steps) - 1)]}")
-
-
 def setup_completed(config_path: str) -> bool:
     sw = read_config(config_path).get("service_window") or {}
     return bool(sw.get("setup_completed"))
 
 
 def needs_setup(app_config: dict) -> bool:
-    """Factory PIN still in place and the wizard never finished."""
-    return app_config.get("PIN") == _FACTORY_PIN and not setup_completed(
-        app_config.get("CONFIG_PATH", "/etc/bluesignal/config.yaml")
-    )
+    """The wizard never finished. There is no PIN to replace."""
+    return not setup_completed(app_config.get("CONFIG_PATH", "/etc/bluesignal/config.yaml"))
 
 
 def _identity() -> dict[str, str]:
@@ -239,33 +226,6 @@ def welcome() -> ResponseReturnValue:
     return redirect(url_for("setup.network"))
 
 
-@setup_bp.route("/pin", methods=["GET", "POST"])
-@login_required
-def pin() -> ResponseReturnValue:
-    if request.method == "POST":
-        new_pin = request.form.get("pin", "").strip()
-        confirm = request.form.get("pin_confirm", "").strip()
-        if not _PIN_RE.match(new_pin):
-            flash("PIN must be 4–8 digits.", "error")
-        elif new_pin == _FACTORY_PIN:
-            flash(
-                "That's the factory PIN — pick your own so only you can access this unit.", "error"
-            )
-        elif new_pin != confirm:
-            flash("PINs don't match — try again.", "error")
-        else:
-            update_config_section(
-                current_app.config["CONFIG_PATH"], "service_window", {"pin": new_pin}
-            )
-            current_app.config["PIN"] = new_pin
-            # The hotspot exemption in auth.login_required ends the moment the
-            # factory PIN is gone; the person who just chose the PIN stays in.
-            session["pin_verified"] = True
-            flash("PIN set. Keep it with the site records.", "success")
-            return redirect(_next_url("pin"))
-    return render_template("setup/pin.html", steps=_steps(), step="pin")
-
-
 @setup_bp.route("/identity")
 @login_required
 def identity() -> ResponseReturnValue:
@@ -291,7 +251,7 @@ def _finish_setup(keep_ssid: str | None) -> dict:
     the one in use, record completion, restart the firmware. Shared by the
     Wi-Fi join (which finishes setup — its response may never reach the
     phone) and the Finish button (LTE / no-network sites). The caller has
-    already refused the factory PIN."""
+    already confirmed the join or the Finish tap."""
     forgot = forget_saved_wifi(keep_ssid)
     with contextlib.suppress(OSError):
         confirm_binding()
@@ -355,6 +315,29 @@ def _join_job() -> dict:
     return job
 
 
+_JOIN_FAIL_MESSAGE = "The unit could not join that network. Try again from the setup page."
+
+
+def _joining_page(ssid: str) -> str:
+    return render_template(
+        "setup/joining.html",
+        steps=["network"],
+        step="network",
+        ssid=ssid,
+    )
+
+
+def _fail_join_job(app: object, ssid: str, message: str) -> None:
+    live = _join_job()
+    live["state"] = "fail"
+    app.config["LAST_JOIN"] = {  # type: ignore[attr-defined]
+        "ssid": ssid,
+        "error": message,
+        "reason": "join_error",
+        "ap_restored": False,
+    }
+
+
 def _begin_join(
     ssid: str,
     password: str | None,
@@ -366,7 +349,8 @@ def _begin_join(
 
     Returns the joined page or a redirect when the join finishes inside
     ``_JOIN_HTTP_WAIT_S``. Returns None when the join is still running so
-    the caller can serve the status-polling page.
+    the caller can serve the status-polling page. A second POST while a
+    join is running gets the running job's SSID, not the new one.
     """
     from utils.netctl import join_network, usable_ipv4
 
@@ -375,40 +359,48 @@ def _begin_join(
     with _JOIN_LOCK:
         job = _join_job()
         if job.get("state") == "joining":
-            return None
+            return _joining_page(str(job.get("ssid") or ssid))
         job.update(state="joining", ssid=ssid, view=None)
 
     def _run() -> None:
         with app.app_context():
+            try:
 
-            def _remember(pending: dict) -> None:
-                app.config["LAST_JOIN"] = _notice_for(ssid, pending, scanned)
+                def _remember(pending: dict) -> None:
+                    app.config["LAST_JOIN"] = _notice_for(ssid, pending, scanned)
 
-            result = join_network(
-                ssid,
-                password or None,
-                ap_ssid=ap_ssid,
-                ap_passphrase=ap_pass,
-                on_failure=_remember,
-            )
-            live = _join_job()
-            joined_ip = str(result.get("ip") or "")
-            if result.get("connected") and usable_ipv4(joined_ip):
-                app.config.pop("LAST_JOIN", None)
-                _kick_register()
-                finished = _finish_setup(ssid)
-                rssi = result.get("rssi")
-                live["state"] = "ok"
-                live["view"] = {
-                    "ssid": ssid,
-                    "ip": joined_ip,
-                    "forgotten": finished["forgotten"],
-                    "weak": is_weak_rssi(rssi if isinstance(rssi, int) else None),
-                    "rssi": rssi,
-                }
-            else:
-                app.config["LAST_JOIN"] = _notice_for(ssid, result, scanned)
-                live["state"] = "fail"
+                result = join_network(
+                    ssid,
+                    password or None,
+                    ap_ssid=ap_ssid,
+                    ap_passphrase=ap_pass,
+                    on_failure=_remember,
+                )
+                live = _join_job()
+                joined_ip = str(result.get("ip") or "")
+                if result.get("connected") and usable_ipv4(joined_ip):
+                    app.config.pop("LAST_JOIN", None)
+                    _kick_register()
+                    finished = _finish_setup(ssid)
+                    rssi = result.get("rssi")
+                    live["state"] = "ok"
+                    live["view"] = {
+                        "ssid": ssid,
+                        "ip": joined_ip,
+                        "forgotten": finished["forgotten"],
+                        "weak": is_weak_rssi(rssi if isinstance(rssi, int) else None),
+                        "rssi": rssi,
+                    }
+                else:
+                    app.config["LAST_JOIN"] = _notice_for(ssid, result, scanned)
+                    live["state"] = "fail"
+            except Exception:
+                logger.exception("Join %s failed in the background", ssid)
+                _fail_join_job(app, ssid, _JOIN_FAIL_MESSAGE)
+            finally:
+                live = _join_job()
+                if live.get("state") == "joining":
+                    _fail_join_job(app, ssid, _JOIN_FAIL_MESSAGE)
 
     thread = threading.Thread(target=_run, name="wqm1-wifi-join", daemon=True)
     thread.start()

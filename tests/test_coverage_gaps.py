@@ -360,19 +360,3 @@ class TestDownlinkProcessing:
         frame = bytes([0x60]) + dev_addr + bytes([0x00]) + struct.pack("<H", 0) + bytes(4)
         result = mac._process_downlink(frame)
         assert result is None
-
-
-class TestAuthRateLimiting:
-    """Cover auth.py rate limiting paths."""
-
-    def test_rate_limiting_blocks_after_max_attempts(self, mock_hardware):
-        """/login is closed; the leftover throttle still trips after _MAX_ATTEMPTS."""
-        from service_window.auth import _MAX_ATTEMPTS, _attempts, _is_rate_limited, _record_attempt
-
-        _attempts.clear()
-        try:
-            for _ in range(_MAX_ATTEMPTS):
-                _record_attempt("test-ip")
-            assert _is_rate_limited("test-ip")
-        finally:
-            _attempts.clear()

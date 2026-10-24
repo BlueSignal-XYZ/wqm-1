@@ -41,13 +41,14 @@ def db_path(tmp_path):
 @pytest.fixture
 def app(db_path, tmp_path):
     """Create test Flask app."""
-    config_path = str(tmp_path / "config.yaml")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("service_window:\n  setup_completed: true\n")
     cal_path = str(tmp_path / "calibration.yaml")
     return create_app(
         {
             "db_path": db_path,
             "pin": "9999",
-            "config_path": config_path,
+            "config_path": str(config_path),
             "cal_path": cal_path,
             "cmd_sock": str(tmp_path / "cmd.sock"),
         }
@@ -62,10 +63,9 @@ def client(app):
 
 
 @pytest.fixture
-def authed_client(client):
-    """Flask test client with authenticated session."""
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
+def authed_client(app, client):
+    """Flask test client with the test-only window open."""
+    app.config["TEST_OPEN_WINDOW"] = True
     return client
 
 
@@ -87,9 +87,12 @@ class TestAuth:
         with client.session_transaction() as sess:
             assert not sess.get("pin_verified")
 
-    def test_logout(self, authed_client):
+    def test_logout(self, app, authed_client):
         resp = authed_client.get("/logout", follow_redirects=False)
         assert resp.status_code == 302
+        with authed_client.session_transaction() as sess:
+            assert not sess.get("pin_verified")
+        app.config["TEST_OPEN_WINDOW"] = False
         resp = authed_client.get("/")
         assert resp.status_code == 403
 

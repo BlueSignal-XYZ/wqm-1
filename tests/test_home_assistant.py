@@ -445,15 +445,8 @@ class TestWorkerHook:
 
 @pytest.fixture
 def sw_client(tmp_path, monkeypatch):
-    from service_window import auth
     from service_window.app import create_app
     from service_window.routes import home_assistant as route
-
-    # The login throttle is per-process; a run of Service Window suites
-    # would otherwise lock the test client out after five logins.
-    monkeypatch.setattr(auth, "_attempts", {})
-    monkeypatch.setattr(auth, "_failures", {})
-    monkeypatch.setattr(auth, "_lockouts", {})
 
     db_path = str(tmp_path / "t.db")
     conn = sqlite3.connect(db_path)
@@ -467,7 +460,15 @@ def sw_client(tmp_path, monkeypatch):
     )
     conn.close()
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump({"mqtt_enabled": False, "mqtt_password": "keep-me"}))
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "mqtt_enabled": False,
+                "mqtt_password": "keep-me",
+                "service_window": {"setup_completed": True},
+            }
+        )
+    )
     app = create_app(
         {
             "db_path": db_path,
@@ -479,9 +480,8 @@ def sw_client(tmp_path, monkeypatch):
         }
     )
     app.config["TESTING"] = True
+    app.config["TEST_OPEN_WINDOW"] = True
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
     sent: list[tuple[str, dict]] = []
     answer: dict[str, Any] = {"ok": True, **publisher().status()}
 
@@ -556,5 +556,6 @@ class TestServiceWindow:
 
     def test_page_requires_login(self, sw_client):
         client, _, _, _ = sw_client
+        client.application.config["TEST_OPEN_WINDOW"] = False
         client.get("/logout")
         assert client.get("/home-assistant/").status_code in (302, 401, 403)

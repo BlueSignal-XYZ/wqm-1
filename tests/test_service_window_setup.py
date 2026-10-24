@@ -8,7 +8,14 @@ import pytest
 import yaml
 
 
-def make_app(tmp_path, mock_hardware, pin="1234", setup_completed=False, config_extra=None):
+def make_app(
+    tmp_path,
+    mock_hardware,
+    pin="1234",
+    setup_completed=False,
+    config_extra=None,
+    open_window=False,
+):
     from service_window.app import create_app
     from storage.database import WQM1Database
 
@@ -27,6 +34,7 @@ def make_app(tmp_path, mock_hardware, pin="1234", setup_completed=False, config_
     app = create_app(
         {
             "TESTING": True,
+            "TEST_OPEN_WINDOW": open_window,
             "DB_PATH": db_path,
             "CONFIG_PATH": str(config_path),
             "CAL_PATH": str(tmp_path / "cal.yaml"),
@@ -40,21 +48,17 @@ def make_app(tmp_path, mock_hardware, pin="1234", setup_completed=False, config_
 
 @pytest.fixture
 def factory_client(tmp_path, mock_hardware):
-    """Client for a factory-fresh unit (PIN 1234, setup not completed)."""
-    app = make_app(tmp_path, mock_hardware)
+    """Client for a factory-fresh unit (setup not completed)."""
+    app = make_app(tmp_path, mock_hardware, open_window=True)
     with app.test_client() as c:
-        with c.session_transaction() as sess:
-            sess["pin_verified"] = True
         yield c, app
 
 
 @pytest.fixture
 def commissioned_client(tmp_path, mock_hardware):
-    """Client for a unit that finished setup (non-factory PIN)."""
-    app = make_app(tmp_path, mock_hardware, pin="8642", setup_completed=True)
+    """Client for a unit that finished setup."""
+    app = make_app(tmp_path, mock_hardware, pin="8642", setup_completed=True, open_window=True)
     with app.test_client() as c:
-        with c.session_transaction() as sess:
-            sess["pin_verified"] = True
         yield c, app
 
 
@@ -80,40 +84,13 @@ class TestForcedSetup:
         client, _ = commissioned_client
         assert client.get("/", follow_redirects=False).status_code == 200
 
-    def test_changed_pin_alone_clears_the_redirect(self, tmp_path, mock_hardware):
-        app = make_app(tmp_path, mock_hardware, pin="9753")
+    def test_changed_pin_alone_does_not_clear_the_redirect(self, tmp_path, mock_hardware):
+        """There is no PIN gate. Unfinished setup still funnels to /setup/."""
+        app = make_app(tmp_path, mock_hardware, pin="9753", open_window=True)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
-            assert c.get("/", follow_redirects=False).status_code == 200
-
-
-class TestPinStep:
-    def test_rejects_factory_pin(self, factory_client):
-        client, _ = factory_client
-        resp = client.post(
-            "/setup/pin", data={"pin": "1234", "pin_confirm": "1234"}, follow_redirects=True
-        )
-        assert b"factory PIN" in resp.data
-
-    def test_rejects_mismatched_confirm(self, factory_client):
-        client, _ = factory_client
-        resp = client.post(
-            "/setup/pin", data={"pin": "8642", "pin_confirm": "8643"}, follow_redirects=True
-        )
-        assert b"don&#39;t match" in resp.data or b"match" in resp.data
-
-    def test_sets_pin_and_persists(self, factory_client):
-        client, app = factory_client
-        resp = client.post(
-            "/setup/pin", data={"pin": "8642", "pin_confirm": "8642"}, follow_redirects=False
-        )
-        assert resp.status_code == 302
-        assert app.config["PIN"] == "8642"
-        saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
-        assert saved["service_window"]["pin"] == "8642"
-        # app_key from the base config must survive the nested merge
-        assert saved["app_key"] == "A" * 32
+            resp = c.get("/", follow_redirects=False)
+            assert resp.status_code == 302
+            assert "/setup" in resp.headers["Location"]
 
 
 class TestCloudStep:
@@ -321,10 +298,6 @@ class TestCardStatus:
 class TestDoneStep:
     def test_finish_marks_setup_completed(self, factory_client):
         client, app = factory_client
-        # A real walk sets the PIN first; finishing on the factory PIN is
-        # refused (see the next test), so this one sets it the way the
-        # wizard does before finishing.
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post("/setup/done", data={}, follow_redirects=False)
         assert resp.status_code == 302
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
@@ -406,7 +379,6 @@ class TestNetworkStepDeclaresTheVariant:
         monkeypatch.setattr(netctl, "join_network", fake_join)
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "river-cedar-42"))
         client, app = factory_client
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post(
             "/setup/network",
             data={"action": "join", "ssid": "PondHouse", "password": "wrongpass"},
@@ -443,7 +415,6 @@ class TestNetworkStepDeclaresTheVariant:
         )
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "river-cedar-42"))
         client, app = factory_client
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         client.post(
             "/setup/network",
             data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},

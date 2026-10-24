@@ -105,3 +105,42 @@ class TestFactoryPinRefusalIsGone:
         assert response.status_code == 403
         with client.session_transaction() as sess:
             assert not sess.get("pin_verified")
+
+
+class TestPinCodeIsGone:
+    def test_setup_pin_route_is_gone(self, tmp_path, mock_hardware, monkeypatch):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch, on_hotspot=True)
+        assert client.get("/setup/pin").status_code == 404
+        posted = client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
+        assert posted.status_code == 404
+
+    def test_factory_pin_and_lockout_helpers_are_gone(self):
+        from service_window import auth
+        from service_window.routes import setup as setup_mod
+
+        assert not hasattr(auth, "_record_failure")
+        assert not hasattr(auth, "_is_rate_limited")
+        assert not hasattr(auth, "_attempts")
+        assert not hasattr(setup_mod, "_FACTORY_PIN")
+        assert not hasattr(setup_mod, "pin")
+
+    def test_pin_verified_session_does_not_open_the_lan(self, tmp_path, mock_hardware, monkeypatch):
+        client, _app = _client(
+            tmp_path, mock_hardware, monkeypatch, on_hotspot=False, setup_completed=True
+        )
+        with client.session_transaction() as sess:
+            sess["pin_verified"] = True
+        response = client.get("/settings/")
+        assert response.status_code == 403
+        _no_pin_form(response)
+
+    def test_test_open_window_is_ignored_when_not_testing(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        client, app = _client(
+            tmp_path, mock_hardware, monkeypatch, on_hotspot=False, setup_completed=True
+        )
+        app.config["TEST_OPEN_WINDOW"] = True
+        app.config["TESTING"] = False
+        response = client.get("/settings/")
+        assert response.status_code == 403

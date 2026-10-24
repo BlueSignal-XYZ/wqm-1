@@ -7,12 +7,12 @@ BlueSignal Cloud. See docs/launch-audit.md (M7) and SECURITY.md.
 """
 
 import functools
-import time
 from collections.abc import Callable
 from typing import Any
 
 from flask import (
     Blueprint,
+    current_app,
     redirect,
     request,
     session,
@@ -22,20 +22,7 @@ from flask.typing import ResponseReturnValue
 
 auth_bp = Blueprint("auth", __name__)
 
-# In-memory rate limiting is kept so a leftover caller cannot hammer /login.
-# /login itself no longer accepts a PIN.
-_attempts: dict[str, list[float]] = {}
-_MAX_ATTEMPTS = 5
-_WINDOW_S = 60.0
-
-_failures: dict[str, list[float]] = {}
-_lockouts: dict[str, float] = {}
-_LOCKOUT_AFTER = 15
-_LOCKOUT_WINDOW_S = 3600.0
-_LOCKOUT_S = 900.0
-
 # Setup routes a phone on this unit's own hotspot may hit with no PIN.
-# setup.pin is not listed: there is no PIN to set or enter.
 _HOTSPOT_OPEN = frozenset(
     {
         "setup.welcome",
@@ -64,14 +51,17 @@ def service_window_closed() -> ResponseReturnValue:
 
 
 def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
-    """Decorator: hotspot setup pages are open; everything else needs a
-    leftover test session or is refused. There is no PIN prompt."""
+    """Hotspot setup pages are open. Everything else is refused.
+
+    Tests may set ``TESTING`` and ``TEST_OPEN_WINDOW`` on the app. Both are
+    off in production; a leftover session cookie is not a way in.
+    """
 
     @functools.wraps(f)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         if _wifi_setup_on_hotspot():
             return f(*args, **kwargs)
-        if session.get("pin_verified"):
+        if current_app.config.get("TESTING") and current_app.config.get("TEST_OPEN_WINDOW"):
             return f(*args, **kwargs)
         return service_window_closed()
 
@@ -92,63 +82,6 @@ def _wifi_setup_on_hotspot() -> bool:
         return request.endpoint in _HOTSPOT_OPEN and from_hotspot()
     except Exception:
         return False
-
-
-def _is_locked_out(ip: str, now: float | None = None) -> float:
-    """Seconds of lockout remaining for ``ip`` (0 = not locked out)."""
-    now = time.time() if now is None else now
-    until = _lockouts.get(ip)
-    if until is None:
-        return 0.0
-    if now >= until:
-        _lockouts.pop(ip, None)
-        return 0.0
-    return until - now
-
-
-def _record_failure(ip: str, now: float | None = None) -> None:
-    """Count a wrong PIN; lock the address out once the hourly budget is spent."""
-    now = time.time() if now is None else now
-    recent = [t for t in _failures.get(ip, []) if now - t < _LOCKOUT_WINDOW_S]
-    recent.append(now)
-    _failures[ip] = recent
-    if len(recent) >= _LOCKOUT_AFTER:
-        _lockouts[ip] = now + _LOCKOUT_S
-        _failures.pop(ip, None)
-
-
-def _clear_failures(ip: str) -> None:
-    _failures.pop(ip, None)
-    _lockouts.pop(ip, None)
-
-
-def _is_rate_limited(ip: str) -> bool:
-    """Check if IP has exceeded attempt limit."""
-    now = time.time()
-    if _is_locked_out(ip, now) > 0:
-        return True
-    attempts = _attempts.get(ip, [])
-    attempts = [t for t in attempts if now - t < _WINDOW_S]
-    if attempts:
-        _attempts[ip] = attempts
-    else:
-        _attempts.pop(ip, None)
-    _prune_stale_ips(now)
-    return len(attempts) >= _MAX_ATTEMPTS
-
-
-def _prune_stale_ips(now: float) -> None:
-    """Remove IPs with no recent attempts to prevent unbounded dict growth."""
-    stale = [ip for ip, ts in _attempts.items() if not ts or now - ts[-1] >= _WINDOW_S]
-    for ip in stale:
-        del _attempts[ip]
-
-
-def _record_attempt(ip: str) -> None:
-    """Record a login attempt."""
-    if ip not in _attempts:
-        _attempts[ip] = []
-    _attempts[ip].append(time.time())
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])

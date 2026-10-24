@@ -36,7 +36,9 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def config_path(tmp_path):
-    return str(tmp_path / "config.yaml")
+    p = tmp_path / "config.yaml"
+    p.write_text("service_window:\n  setup_completed: true\n")
+    return str(p)
 
 
 @pytest.fixture
@@ -55,10 +57,8 @@ def app(db_path, tmp_path, config_path):
 @pytest.fixture
 def client(app):
     app.config["TESTING"] = True
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client
+    app.config["TEST_OPEN_WINDOW"] = True
+    return app.test_client()
 
 
 class FakeBus:
@@ -133,6 +133,10 @@ def fake_probe(monkeypatch):
 
 
 def write_config(config_path, **values):
+    values = dict(values)
+    sw = dict(values.get("service_window") or {})
+    sw.setdefault("setup_completed", True)
+    values["service_window"] = sw
     with open(config_path, "w") as f:
         yaml.safe_dump(values, f)
 

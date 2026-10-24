@@ -13,10 +13,35 @@ A join can take a couple of minutes.</p>
 <script>
 (function () {
   var tries = 0;
+  var maxTries = 90;
+  var reconnect = "Reconnect to this unit's Wi-Fi, or check BlueSignal Cloud.";
+  function showReconnect() {
+    var lead = document.querySelector('.lead');
+    if (lead) lead.textContent = reconnect;
+  }
+  function droppedHotspot(r) {
+    if (!r || r.status === 403) return true;
+    var type = (r.headers && r.headers.get('Content-Type')) || '';
+    return type.indexOf('json') === -1;
+  }
   function tick() {
     fetch('/setup/join-status', {headers: {Accept: 'application/json'}})
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (droppedHotspot(r)) {
+          showReconnect();
+          return null;
+        }
+        return r.json().then(function (j) { return j; }, function () {
+          showReconnect();
+          return null;
+        });
+      })
       .then(function (j) {
+        if (!j) {
+          if (++tries < maxTries) setTimeout(tick, 2000);
+          else showReconnect();
+          return;
+        }
         if (j.state === 'ok') {
           document.querySelector('.setup-h1').textContent = 'Joined ' + (j.ssid || '') + '. You\u2019re done here.';
           return;
@@ -25,10 +50,12 @@ A join can take a couple of minutes.</p>
           window.location = '/setup/network';
           return;
         }
-        if (++tries < 90) setTimeout(tick, 2000);
+        if (++tries < maxTries) setTimeout(tick, 2000);
+        else showReconnect();
       })
       .catch(function () {
-        if (++tries < 90) setTimeout(tick, 2000);
+        if (++tries < maxTries) setTimeout(tick, 2000);
+        else showReconnect();
       });
   }
   setTimeout(tick, 400);

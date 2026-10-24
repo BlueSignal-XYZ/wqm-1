@@ -302,6 +302,7 @@ class TestBoardFaultInTheServiceWindow:
             encoding="utf-8",
         )
         monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
+        (tmp_path / "config.yaml").write_text("service_window:\n  setup_completed: true\n")
         app = create_app(
             {
                 "db_path": str(db),
@@ -312,9 +313,8 @@ class TestBoardFaultInTheServiceWindow:
             }
         )
         app.config["TESTING"] = True
+        app.config["TEST_OPEN_WINDOW"] = True
         client = app.test_client()
-        with client.session_transaction() as sess:
-            sess["pin_verified"] = True
         for path in ("/", "/provision/"):
             resp = client.get(path)
             assert resp.status_code == 200, path
