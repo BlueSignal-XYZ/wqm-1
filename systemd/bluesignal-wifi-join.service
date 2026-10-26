@@ -1,0 +1,24 @@
+[Unit]
+Description=BlueSignal WQM-1 Wi-Fi join helper (root, local socket for the port-80 page)
+# The port-80 Wi-Fi page runs as the install user. A join stops hostapd,
+# drops 192.168.4.1 and hands wlan0 back to NetworkManager, and a rescan
+# with the setup network up is `iw scan ap-force`; all of that needs root.
+# This service does those two things and nothing else, for requests on
+# /run/bluesignal/wifi-join.sock (mode 0600, owned by the install user, peer
+# uid checked). It listens on no network port. No RuntimeDirectory= here:
+# a root unit declaring it would take /run/bluesignal from the install user.
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 -m utils.join_service
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

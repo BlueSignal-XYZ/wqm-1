@@ -481,16 +481,31 @@ def blocked_networks(networks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [n for n in networks if n.get("ssid") and not n.get("joinable")]
 
 
-def block_reason(net: dict[str, Any] | None) -> str | None:
-    """Why a scanned network cannot be joined, or None when the join may start."""
+def block_code(net: dict[str, Any] | None) -> str | None:
+    """Why a scanned network cannot be joined, as a short code, or None.
+
+    ``refused_band`` (5 or 6 GHz), or ``refused_<security>`` for enterprise,
+    WPA3-only and WEP. The port-80 page maps the code to a sentence in the
+    phone's language (``utils.setup_copy``).
+    """
     if net is None:
         return None
     if net.get("band") in _HIGH_BANDS:
-        return BAND_MESSAGE
+        return "refused_band"
     security = str(net.get("security") or "")
     if security in _UNJOINABLE:
-        return security_message(security)
+        return f"refused_{security}"
     return None
+
+
+def block_reason(net: dict[str, Any] | None) -> str | None:
+    """Why a scanned network cannot be joined, or None when the join may start."""
+    code = block_code(net)
+    if code is None:
+        return None
+    if code == "refused_band":
+        return BAND_MESSAGE
+    return security_message(code.removeprefix("refused_"))
 
 
 def normalize_password(raw: str, *, keep_trailing_space: bool) -> tuple[str, str | None]:
@@ -508,24 +523,56 @@ def normalize_password(raw: str, *, keep_trailing_space: bool) -> tuple[str, str
     return text, None
 
 
+_PASSWORD_MESSAGES = {
+    "password_needed": "This network needs a password of 8 to 63 characters.",  # nosec B105 - a sentence
+    "password_char": "The password has a character this unit cannot type. Re-type it on this page.",  # nosec B105 - a sentence
+    "password_short": "A Wi-Fi password must be 8 to 63 characters. This one is too short.",  # nosec B105 - a sentence
+    "password_long": "A Wi-Fi password must be 8 to 63 characters. This one is too long.",  # nosec B105 - a sentence
+}
+
+
+def password_problem_code(password: str, *, secured: bool) -> str | None:
+    """The rule ``password_problem`` states, as a short code, or None.
+
+    ``password_needed``, ``password_char``, ``password_short`` or
+    ``password_long``. One rule, two wordings: the Service Window prints the
+    English sentence, the port-80 page the phone's language.
+    """
+    if not password:
+        return "password_needed" if secured else None
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in password):
+        return "password_char"
+    length = len(password)
+    if length < WPA_PSK_MIN:
+        return "password_short"
+    if length > WPA_PSK_MAX:
+        return "password_long"
+    return None
+
+
 def password_problem(password: str, *, secured: bool) -> str | None:
     """Length 8–63 for a WPA-PSK. A blank password is only valid on open Wi-Fi.
 
     Spaces and other visible characters count. A control character is refused
     so it cannot be mistaken for a line break in the form.
     """
-    if not password:
-        if secured:
-            return "This network needs a password of 8 to 63 characters."
-        return None
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in password):
-        return "The password has a character this unit cannot type. Re-type it on this page."
-    length = len(password)
-    if length < WPA_PSK_MIN:
-        return "A Wi-Fi password must be 8 to 63 characters. This one is too short."
-    if length > WPA_PSK_MAX:
-        return "A Wi-Fi password must be 8 to 63 characters. This one is too long."
-    return None
+    code = password_problem_code(password, secured=secured)
+    return None if code is None else _PASSWORD_MESSAGES[code]
+
+
+# Default SSIDs a phone's hotspot advertises. A unit left on one goes offline
+# when the installer drives away (spec C6). A name match is a warning, never
+# a refusal: a home router can be named anything.
+_PHONE_HOTSPOT_RE = re.compile(
+    r"(?<![a-z])(iphone|ipad|android|androidap|galaxy|pixel|oneplus|moto|motorola|"
+    r"redmi|xiaomi|huawei|oppo|vivo|hotspot)(?![a-z])",
+    re.IGNORECASE,
+)
+
+
+def looks_like_phone_hotspot(ssid: str) -> bool:
+    """True when ``ssid`` reads like a phone's own hotspot ("Jo's iPhone")."""
+    return bool(_PHONE_HOTSPOT_RE.search(ssid or ""))
 
 
 def wifi_connect_argv(

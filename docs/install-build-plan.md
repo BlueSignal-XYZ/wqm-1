@@ -391,6 +391,17 @@ the form (C1). Auto-open of the captive page needs the open network
   time). Keep handlers short; the join runs in §2's worker thread.
 - `captive.py` and the PIN-on-hotspot checks in `auth.py` become dead for
   port 80; leave their removal to §9 so this PR stays reviewable.
+- **Found while building §4: the join needs root.** Stopping hostapd,
+  dropping 192.168.4.1, writing `/run/wqm1/hostapd.conf` and
+  `iw scan ap-force` all need root, and the listener runs as the install
+  user with only `CAP_NET_BIND_SERVICE` in its bounding set. The same was
+  true of the Service Window's join. §4 adds `utils/join_service.py` and
+  `systemd/bluesignal-wifi-join.service` (root): two requests, join and
+  rescan, on `/run/bluesignal/wifi-join.sock` (0600, install user, peer uid
+  checked), no network port. Root-written `join-state.json` and `join.lock`
+  are handed to the state directory's owner. Registration after the join is
+  kicked by the listener, as the install user. §6's netwatch daemon can
+  absorb this service later.
 
 ---
 

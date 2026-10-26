@@ -5,6 +5,7 @@ All hardware is mocked at the sys.modules level so tests run on any
 platform without RPi.GPIO, smbus2, spidev, or w1thermsensor installed.
 """
 
+import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -83,7 +84,7 @@ def _reset_active_board():
 
 
 @pytest.fixture(autouse=True)
-def _no_real_bluesignal_probe(monkeypatch):
+def _no_real_bluesignal_probe(monkeypatch, tmp_path):
     """A join proves itself by reaching BlueSignal over HTTPS (install plan
     §2). No test may make that request: BlueSignal answers, the clock is
     synced, and no HTTP Date is read, unless a test says otherwise."""
@@ -100,7 +101,17 @@ def _no_real_bluesignal_probe(monkeypatch):
     from utils import join
 
     monkeypatch.setattr(join, "START_DELAY_S", 0.0)
+    # The port-80 page (§4): no test reaches the root join socket, writes
+    # the real /run/bluesignal/scan.json, or kicks a real registration.
+    from utils import captive_portal, join_service
+
+    monkeypatch.setattr(join_service, "_use_socket", lambda: False)
+    monkeypatch.setattr(captive_portal, "_kick_register", lambda: None)
+    captive_portal._watching.clear()
+    if "WQM1_SCAN_CACHE" not in os.environ:
+        monkeypatch.setenv("WQM1_SCAN_CACHE", str(tmp_path / "scan.json"))
     yield
+    captive_portal._watching.clear()
 
 
 @pytest.fixture(autouse=True)

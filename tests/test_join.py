@@ -352,6 +352,19 @@ class TestStartJoin:
         assert second == {"state": "busy", "ssid": HOME}
         assert calls == [HOME]
 
+    def test_a_page_checking_the_lock_does_not_make_a_join_busy(self, radio):
+        """Every state poll takes the lock for an instant to see whether a
+        join runs. A Connect tap that lands in that instant still starts."""
+        probe = join._try_lock()
+        assert probe is not None
+        timer = threading.Timer(0.03, join._release, args=(probe,))
+        timer.start()
+        try:
+            assert join.start_join(HOME, RIGHT)["state"] == "joining"
+        finally:
+            timer.join()
+        _wait_done()
+
     def test_the_lock_is_free_again_after_a_join(self, radio):
         join.start_join(HOME, RIGHT)
         _wait_done()

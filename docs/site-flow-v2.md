@@ -60,8 +60,10 @@ and raise the setup hotspot instead. The setup join is stricter.
 | Piece | File |
 |---|---|
 | Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) and DHCP `192.168.4.10-254` | `utils/captive_portal.dnsmasq_ap_config`, written at AP start to `/run/wqm1/dnsmasq-ap.conf` and served by `wqm1-setup-dnsmasq.service` bound to `wlan0`. Stopped before a station join. |
-| Port 80 captive listener, hotspot only | `utils/captive_portal`, `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Closes when the station joins. |
-| Service Window, including setup, still on 8080 | `service_window` — the port-80 process proxies the setup UI here so the phone never sees `:8080` |
+| Port 80 Wi-Fi page, hotspot only | `utils/captive_portal` serves the page and `/api/*` itself; every sentence is in `utils/setup_copy` (English, Spanish). `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Nothing is proxied to 8080 (install plan §4). Closes when the station joins. |
+| The page's join and rescan, as root | `utils/join_service`, `systemd/bluesignal-wifi-join.service`: a local socket at `/run/bluesignal/wifi-join.sock` (0600, install user). The join is `utils/join` (one at a time, result in `join-state.json`). |
+| Scan list for the page | `utils/netctl.write_scan_cache`, taken before the setup network comes up, at `/run/bluesignal/scan.json`; a rescan is `iw dev wlan0 scan ap-force` and keeps the old list if that fails |
+| Service Window, still on 8080 | `service_window` — closed to the setup network since install plan §3 |
 | Probe paths + foreign-host redirect | `utils/captive_portal` on port 80, and `service_window/captive.py` on 8080 (same target: `http://192.168.4.1/setup/`) |
 | Setup pages open on the hotspot; no PIN | `service_window/auth.login_required` + `captive.from_hotspot` |
 | Network-last wizard; join finishes setup | `service_window/routes/setup.py` |

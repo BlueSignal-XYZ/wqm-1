@@ -8,11 +8,14 @@ the sheet answered "no local sign-in". The other tests monkeypatch
 
 The mark also keeps a phone from counting as the bench SSH tunnel, which
 arrives from loopback too.
+
+Since install plan §4 the port-80 listener serves the Wi-Fi page itself and
+relays nothing (last class below). The Service Window still reads the mark
+until §9 deletes the wizard, so its checks stay pinned here.
 """
 
 import http.client
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -251,47 +254,32 @@ class TestBenchTunnel:
             assert b"no local sign-in" not in r.data, headers
 
 
-class _Echo(BaseHTTPRequestHandler):
-    seen: dict[str, str] = {}
-
-    def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
-        type(self).seen = {k.lower(): v for k, v in self.headers.items()}
-        body = b"ok"
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *_a):
-        pass
-
-
-class TestRelayMarksEveryRequest:
-    def test_relay_sets_the_mark_and_replaces_a_forged_one(self):
+class TestPort80RelaysNothing:
+    def test_a_service_window_path_is_404_and_carries_no_relay(self):
+        """The listener used to proxy /setup/network to 8080 with the relay mark.
+        Now no request leaves it: a Service Window path is a 404 here."""
         from utils import captive_portal
 
-        backend = HTTPServer(("127.0.0.1", 0), _Echo)
-        portal = captive_portal.make_server("127.0.0.1", 0, backend=backend.server_port)
-        threads = [
-            threading.Thread(target=s.serve_forever, daemon=True, name=f"wqm1-test-{n}")
-            for n, s in (("backend", backend), ("portal", portal))
-        ]
-        for t in threads:
-            t.start()
+        portal = captive_portal.make_server("127.0.0.1", 0)
+        thread = threading.Thread(target=portal.serve_forever, daemon=True)
+        thread.start()
         try:
-            conn = http.client.HTTPConnection("127.0.0.1", portal.server_port, timeout=5)
-            conn.request(
-                "GET",
-                "/setup/network",
-                headers={"Host": "192.168.4.1", "x-wqm1-relay": "forged"},
-            )
-            resp = conn.getresponse()
-            resp.read()
-            conn.close()
-            assert resp.status == 200
-            assert _Echo.seen.get("x-wqm1-relay") == "hotspot"
+            for method, path in (
+                ("GET", "/setup/network"),
+                ("POST", "/setup/network"),
+                ("GET", "/settings"),
+            ):
+                conn = http.client.HTTPConnection("127.0.0.1", portal.server_port, timeout=5)
+                conn.request(
+                    method, path, headers={"Host": "192.168.4.1", "x-wqm1-relay": "forged"}
+                )
+                resp = conn.getresponse()
+                resp.read()
+                conn.close()
+                assert resp.status == 404, (method, path)
         finally:
             portal.shutdown()
-            backend.shutdown()
             portal.server_close()
-            backend.server_close()
+            thread.join(timeout=2)
+        assert not hasattr(captive_portal, "rewrite_location")
+        assert not hasattr(captive_portal.PortalHandler, "_proxy")

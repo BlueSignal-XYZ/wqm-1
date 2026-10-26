@@ -20,6 +20,11 @@ The worker waits ``START_DELAY_S`` before touching the radio, so the HTTP
 answer that started the join reaches the phone before the setup network goes
 down. Saved networks other than the joined one are forgotten only after the
 join reached BlueSignal (spec rule 7).
+
+On a unit the join runs as root, in ``utils.join_service``: stopping hostapd
+and dropping 192.168.4.1 need root. The files here are then handed to the
+owner of the state directory (the install user), so the port-80 page and the
+Service Window, which run as that user, still read them.
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ STATE_NAME = "join-state.json"
 LOCK_NAME = "join.lock"
 FILE_MODE = 0o600
 START_DELAY_S = 1.5
+LOCK_RETRIES = 4
+LOCK_RETRY_S = 0.02
 STATES = ("idle", "joining", "joined", "failed")
 # What may be written to the state file. The password is never one of them.
 _FIELDS = ("state", "ssid", "reason", "message", "at", "ap_restored", "ip", "rssi", "forgotten")
@@ -71,10 +78,39 @@ def _idle() -> dict[str, Any]:
     return {"state": "idle", "ssid": None, "reason": None, "message": None, "at": None}
 
 
+def _state_owner() -> tuple[int, int] | None:
+    """(uid, gid) of the state directory, or None when root owns it."""
+    try:
+        st = state_dir().stat()
+    except OSError:
+        return None
+    return None if st.st_uid == 0 else (st.st_uid, st.st_gid)
+
+
+def _hand_to_owner(path: Path) -> None:
+    """When root wrote ``path``, give it to the state directory's owner.
+
+    The join runs as root on a unit; the page and the Service Window read
+    these files as the install user. A state directory owned by root (a test,
+    a bench shell) is left alone.
+    """
+    try:
+        if os.geteuid() != 0:
+            return
+    except AttributeError:
+        return
+    owner = _state_owner()
+    if owner is None:
+        return
+    with contextlib.suppress(OSError):
+        os.chown(path, owner[0], owner[1])
+
+
 def _try_lock() -> int | None:
     """An fd holding the join lock, or None when another join holds it."""
     ensure_state_dir()
     fd = os.open(lock_path(), os.O_RDWR | os.O_CREAT, FILE_MODE)
+    _hand_to_owner(lock_path())
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -112,6 +148,8 @@ def _write_state(fields: dict[str, Any]) -> None:
         atomic_write_text(state_path(), json.dumps(clean, sort_keys=True), mode=FILE_MODE)
     except OSError as e:
         logger.error("Could not record the join state: %s", e)
+        return
+    _hand_to_owner(state_path())
 
 
 def read_state() -> dict[str, Any]:
@@ -154,6 +192,13 @@ def start_join(
     """
     with _THREAD_LOCK:
         fd = _try_lock()
+        for _ in range(LOCK_RETRIES):
+            if fd is not None:
+                break
+            # A page polling read_state takes the lock for an instant to
+            # see whether a join runs. That is not a join; try again.
+            time.sleep(LOCK_RETRY_S)
+            fd = _try_lock()
         if fd is None:
             running = read_state()
             return {"state": "busy", "ssid": running.get("ssid") or ssid}

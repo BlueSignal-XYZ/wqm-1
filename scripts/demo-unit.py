@@ -3,14 +3,16 @@
 demo-unit.py — one virtual WQM-1, factory-fresh, ready for a person or a
 browser bot to commission from a phone-sized browser.
 
-    python3 scripts/demo-unit.py                 # http://localhost:8080/setup/
+    python3 scripts/demo-unit.py                 # Wi-Fi page: http://localhost:8081/setup/
     python3 scripts/demo-unit.py --reset         # wipe it back to factory state
-    cloudflared tunnel --url http://localhost:8080   # give a remote bot a URL
+    cloudflared tunnel --url http://localhost:8081   # give a remote bot a URL
 
-What runs: the real firmware (``python -m main``, simulate_enabled) and the
-real Service Window, exactly as the full-tier fleet simulator runs them, plus
-a supervisor that relaunches the firmware when setup restarts it (systemd's
-job on a real unit). The unit boots the way a unit does at a well head:
+What runs: the real firmware (``python -m main``, simulate_enabled), the
+real Service Window, and the real port-80 Wi-Fi page (``utils.captive_portal``,
+here on ``--portal-port``), plus a supervisor that relaunches them (systemd's
+job on a real unit). The Wi-Fi page is what a phone on the setup network
+sees; the Service Window is the bench page. The unit boots the way a unit
+does at a well head:
 
 * its identity came from the bench card (serial, DevEUI, hotspot passphrase),
   so the wizard is the short, carded one: probes → join the owner's Wi-Fi;
@@ -59,7 +61,8 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--port", type=int, default=8080, help="Service Window (bench page)")
+    p.add_argument("--portal-port", type=int, default=8081, help="the port-80 Wi-Fi page")
     p.add_argument("--host", default="127.0.0.1", help="bind address (0.0.0.0 for a LAN phone)")
     p.add_argument("--workdir", default="/tmp/wqm1-demo-unit")  # nosec B108 — a demo sandbox
     p.add_argument("--reset", action="store_true", help="wipe the unit back to factory state")
@@ -147,12 +150,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.reset and workdir.exists():
         shutil.rmtree(workdir)
     unit = build_unit(workdir, args.port, args.seed)
+    # The Wi-Fi page listens while this file says "up", as on a unit with
+    # its setup network raised; a join writes "down: …" and it closes.
+    mode = workdir / "portal.mode"
+    if json.loads(unit["netsim"].read_text()).get("ap"):
+        mode.write_text("up\n")
     env = dict(
         os.environ,
         PYTHONPATH=str(_SRC),
         BLUESIGNAL_IDENTITY_FILE=str(unit["identity"]),
         BLUESIGNAL_CONFIG=str(unit["config"]),
         WQM1_VIRTUAL_NET=str(unit["netsim"]),
+        # One state directory for all three processes: the join's result
+        # (join-state.json) is read by the page and the Service Window alike.
+        BLUESIGNAL_STATE_DIR=str(workdir / "state"),
+        WQM1_PORTAL_MODE_FILE=str(mode),
+        WQM1_PORTAL_BIND=f"{args.host}:{args.portal_port}",
+        WQM1_SCAN_CACHE=str(workdir / "scan.json"),
     )
     fw_argv = [sys.executable, "-m", "main", "--config", str(unit["config"])]
     sw_argv = [
@@ -166,21 +180,24 @@ def main(argv: list[str] | None = None) -> int:
         "--host",
         args.host,
     ]
+    portal_argv = [sys.executable, "-m", "utils.captive_portal"]
     fw = _spawn(fw_argv, env, workdir / "firmware.out")
     sw = _spawn(sw_argv, env, workdir / "service_window.out")
+    portal = _spawn(portal_argv, env, workdir / "portal.out")
 
     print(
         f"""
 Virtual WQM-1 {unit["serial"]} is up (factory state).
 
-  Setup page        http://localhost:{args.port}/setup/
+  Wi-Fi page        http://localhost:{args.portal_port}/setup/   (the phone on the setup network)
+  Bench page        http://localhost:{args.port}/setup/   (the Service Window)
   Setup hotspot     {unit["ap_ssid"]}   passphrase {unit["ap_passphrase"]}   (virtual)
   Owner's Wi-Fi     {netsim.DEMO_HOME_SSID}   password {netsim.DEMO_HOME_PASSWORD}   (virtual)
   Bench network     {netsim.BENCH_SSID} — saved now, forgotten when setup finishes
   Box label link    {demo_claim_url(unit["serial"], unit["claim_token"])}
 
   Public URL for a remote browser bot:
-      cloudflared tunnel --url http://localhost:{args.port}
+      cloudflared tunnel --url http://localhost:{args.portal_port}
 
   Back to factory state:  python3 scripts/demo-unit.py --reset
   Files and logs:         {workdir}
@@ -206,10 +223,12 @@ Ctrl-C to stop.
                 fw = _spawn(fw_argv, env, workdir / "firmware.out")
             if sw.poll() is not None:
                 sw = _spawn(sw_argv, env, workdir / "service_window.out")
+            if portal.poll() is not None:
+                portal = _spawn(portal_argv, env, workdir / "portal.out")
     finally:
-        for p in (fw, sw):
+        for p in (fw, sw, portal):
             p.terminate()
-        for p in (fw, sw):
+        for p in (fw, sw, portal):
             try:
                 p.wait(timeout=10)
             except subprocess.TimeoutExpired:

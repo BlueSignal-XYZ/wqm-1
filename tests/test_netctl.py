@@ -362,7 +362,7 @@ class TestAccessPoint:
 
         monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "mode"))
         assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
-        portal = make_server("127.0.0.1", 0, backend=9)
+        portal = make_server("127.0.0.1", 0)
         thread = threading.Thread(target=portal.serve_forever, daemon=True)
         thread.start()
         try:
@@ -396,13 +396,65 @@ class TestAccessPoint:
             "\tSSID: Barn\n"
         )
         assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        # start_ap scans once with nmcli before it unmanages wlan0 (§4's
+        # cached list); from here on the AP holds the radio.
+        after_ap = len(nm.calls)
         nets = scan_networks()
         assert [n["ssid"] for n in nets] == ["PondHouse", "Barn"]
         assert nets[0]["secured"] is True
         assert nets[0]["signal"] == 100
         assert nets[1]["secured"] is False
-        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in nm.calls)
-        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in nm.calls)
+        calls = nm.calls[after_ap:]
+        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in calls)
+        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in calls)
+
+    def test_start_ap_caches_the_scan_before_it_takes_the_radio(self, nm):
+        from utils.netctl import read_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        cached = read_scan_cache()
+        assert cached["at"]
+        visible = [n["ssid"] for n in cached["networks"] if not n["hidden"]]
+        assert visible == ["PondHouse", "Barn"]
+        assert any(n["hidden"] for n in cached["networks"]), "kept so the page asks for the name"
+        listed = next(i for i, c in enumerate(nm.calls) if c[1:3] == ["-t", "-f"] and "list" in c)
+        unmanaged = next(
+            i
+            for i, c in enumerate(nm.calls)
+            if c[1:6] == ["device", "set", "wlan0", "managed", "no"]
+        )
+        assert listed < unmanaged
+
+    def test_a_failed_rescan_keeps_the_cached_list(self, nm):
+        from utils.netctl import read_scan_cache, refresh_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        before = read_scan_cache()["networks"]
+        real = nm.run
+
+        def failing(argv, timeout=15.0):
+            if argv[:5] == ["iw", "dev", "wlan0", "scan", "ap-force"]:
+                nm.calls.append(argv)
+                return 240, "", "command failed: Operation not supported (-95)"
+            return real(argv, timeout)
+
+        from utils import netctl
+
+        netctl._run = failing  # restored by the nm fixture's monkeypatch
+        assert refresh_scan_cache() == {"ok": False, "count": 0}
+        assert read_scan_cache()["networks"] == before
+        assert any(c[:5] == ["iw", "dev", "wlan0", "scan", "ap-force"] for c in nm.calls)
+        assert not any(c[1:5] == ["device", "set", "wlan0", "managed"] for c in nm.calls[-3:])
+
+    def test_a_rescan_with_the_ap_up_uses_ap_force(self, nm):
+        from utils.netctl import read_scan_cache, refresh_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        nm.iw_scan = "BSS aa:bb:cc:dd:ee:09(on wlan0)\n\tsignal: -50.00 dBm\n\tSSID: Loft\n"
+        assert refresh_scan_cache() == {"ok": True, "count": 1}
+        assert [n["ssid"] for n in read_scan_cache()["networks"]] == ["Loft"]
+        assert nm.calls[-1][:5] == ["iw", "dev", "wlan0", "scan", "ap-force"]
+        assert nm.ap is True, "the setup network stayed up"
 
     def test_stop_orders_dnsmasq_then_hostapd_then_nm(self, nm):
         from utils.netctl import start_ap, stop_ap

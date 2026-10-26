@@ -139,6 +139,7 @@ def main() -> int:
         ensure_portal_service,
         wait_until_reachable,
     )
+    from utils.join_service import ensure_join_service
     from utils.netctl import ensure_reachable, remove_legacy_captive_nat
 
     # Captive DNS (wildcard + DHCP option 114) before the AP comes up, so
@@ -171,6 +172,10 @@ def main() -> int:
         started = ensure_portal_service()
         if not started.get("ok"):
             logger.warning("Captive portal service: %s", started.get("error"))
+        # The page's joins run here as root (install plan §4).
+        joiner = ensure_join_service()
+        if not joiner.get("ok"):
+            logger.warning("Wi-Fi join service: %s", joiner.get("error"))
         portal = wait_until_reachable()
         logger.info("Captive portal: %s", portal)
         station_failure = result.get("station_failure")

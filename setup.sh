@@ -439,7 +439,7 @@ done
 # files below; this copy is what /opt/bluesignal/current/systemd and an
 # OTA extract share. Without it the setup AP reports the unit missing.
 sudo mkdir -p "$RELEASE_DIR/systemd"
-for unit in wqm1-setup-hostapd.service wqm1-setup-dnsmasq.service bluesignal-captive-portal.service; do
+for unit in wqm1-setup-hostapd.service wqm1-setup-dnsmasq.service bluesignal-captive-portal.service bluesignal-wifi-join.service; do
     sudo cp "$SCRIPT_DIR/systemd/$unit" "$RELEASE_DIR/systemd/"
 done
 if [ -f "$SCRIPT_DIR/scripts/host-pins.py" ]; then
@@ -500,6 +500,9 @@ sudo sed -e "s/^User=pi$/User=$INSTALL_USER/" \
 sudo sed -e "s/^User=pi$/User=$INSTALL_USER/" \
     "$SCRIPT_DIR/systemd/bluesignal-captive-portal.service" \
     | sudo tee /etc/systemd/system/bluesignal-captive-portal.service > /dev/null
+# The port-80 page's root half: join and rescan, on a local socket only the
+# install user can open (install plan §4). Root, so installed verbatim.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-join.service" /etc/systemd/system/
 # OTA agent runs as root (symlink flip + systemctl restart) — install verbatim.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ota.service" /etc/systemd/system/
 if [ -f "$SCRIPT_DIR/systemd/bluesignal-provision.service" ]; then
@@ -551,6 +554,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-captive-portal.service
+sudo systemctl enable bluesignal-wifi-join.service
 sudo systemctl enable bluesignal-ota.service
 sudo systemctl enable bluesignal-ap-fallback.service
 sudo systemctl enable bluesignal-wifi-retry.timer

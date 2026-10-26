@@ -67,6 +67,7 @@ import contextlib
 import errno
 import hashlib
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -87,6 +88,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from utils import netsim
+from utils.atomic import atomic_write_text
 from utils.captive_portal import (
     arm_portal,
     disarm_portal,
@@ -214,6 +216,11 @@ _JOIN_MESSAGES = {
         "you to approve new devices, approve this one, then try again."
     ),
 }
+
+
+def valid_ssid(ssid: str) -> bool:
+    """1–32 characters with no control character: what nmcli is given."""
+    return bool(_SSID_RE.match(ssid or ""))
 
 
 def _run(argv: list[str], timeout: float = 15.0) -> tuple[int, str, str]:
@@ -559,6 +566,8 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
     if any(ord(ch) < 32 for ch in passphrase):
         return {"ok": False, "error": "invalid passphrase"}
     if netsim.is_virtual():
+        if not netsim.ap_active():
+            _cache_scan_before_ap(iface)
         result = netsim.start_ap(ssid, passphrase)
         if result.get("ok"):
             _arm_portal()
@@ -569,6 +578,7 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
     installed = ensure_ap_units()
     if not installed.get("ok"):
         return {"ok": False, "error": str(installed.get("error") or "ap units")}
+    _cache_scan_before_ap(iface)
     # Best-effort. An unmanaged or idle interface has nothing to disconnect.
     _nmcli("device", "disconnect", iface)
     _nmcli("connection", "delete", AP_CONNECTION_NAME)
@@ -663,6 +673,82 @@ def scan_networks(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, Any]]:
     if rc != 0:
         return []
     return parse_nmcli_wifi(out)
+
+
+SCAN_CACHE = Path("/run/bluesignal/scan.json")
+# Readable by the port-80 page (the install user). Network names in range,
+# no secret: the rows are ``annotate_network`` output and carry no password.
+SCAN_CACHE_MODE = 0o644
+
+
+def scan_cache_path() -> Path:
+    override = os.environ.get("WQM1_SCAN_CACHE")
+    return Path(override) if override else SCAN_CACHE
+
+
+def write_scan_cache(networks: list[dict[str, Any]]) -> bool:
+    """Record a scan for the port-80 page. Never raises."""
+    payload = {
+        "at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "networks": [annotate_network(n) for n in networks],
+    }
+    try:
+        atomic_write_text(scan_cache_path(), json.dumps(payload), mode=SCAN_CACHE_MODE)
+    except OSError as e:
+        logger.warning("Scan list not cached: %s", e)
+        return False
+    return True
+
+
+def read_scan_cache() -> dict[str, Any]:
+    """The last cached scan: ``{"at": str | None, "networks": [...]}``."""
+    try:
+        raw = json.loads(scan_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"at": None, "networks": []}
+    rows = raw.get("networks") if isinstance(raw, dict) else None
+    if not isinstance(rows, list):
+        return {"at": None, "networks": []}
+    networks = [annotate_network(r) for r in rows if isinstance(r, dict)]
+    return {"at": raw.get("at") if isinstance(raw.get("at"), str) else None, "networks": networks}
+
+
+def _cache_scan_before_ap(iface: str) -> None:
+    """Scan while the radio is still a station and keep the list.
+
+    The spec lists scanning in AP mode as unverified on the BCM43430, so the
+    port-80 page shows this list first and a rescan is only a refresh.
+    """
+    try:
+        rows = scan_networks(iface)
+        if not rows and not netsim.is_virtual():
+            # NetworkManager's list fills a few seconds after a rescan.
+            time.sleep(SCAN_POLL_S)
+            rows = scan_networks(iface)
+    except Exception:  # noqa: BLE001 - a scan never decides whether the AP comes up
+        logger.exception("Scan before the setup network failed")
+        return
+    if rows:
+        write_scan_cache(rows)
+
+
+def refresh_scan_cache(iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
+    """Rescan for the port-80 page without dropping the setup network.
+
+    While the setup network is up the scan is ``iw dev <iface> scan ap-force``
+    (root). An error or an empty answer keeps the cached list: dropping the
+    setup network to rescan would drop the phone. Returns ``{"ok", "count"}``.
+    """
+    if netsim.is_virtual():
+        rows = scan_networks(iface)
+    elif ap_active(iface):
+        rc, out, _err = _run(["iw", "dev", iface, "scan", "ap-force"], timeout=20)
+        rows = parse_iw_scan(out) if rc == 0 else []
+    else:
+        rows = scan_networks(iface)
+    if not rows:
+        return {"ok": False, "count": 0}
+    return {"ok": write_scan_cache(rows), "count": len(rows)}
 
 
 def read_station_rssi(iface: str = DEFAULT_WIFI_IFACE) -> int | None:
