@@ -20,7 +20,7 @@ from pathlib import Path
 import yaml
 
 from service_window.app import create_app
-from tests.remote import HOME_NETWORK, HOTSPOT, from_addr
+from tests.remote import HOME_NETWORK, HOTSPOT, HOTSPOT_RELAYED, from_addr
 from tests.test_service_window_setup import make_app
 
 # Setup routes a phone on the unit's own hotspot may hit with no PIN.
@@ -51,7 +51,7 @@ def _client(tmp_path, mock_hardware, monkeypatch, *, on_hotspot, setup_completed
 
     monkeypatch.setattr(captive, "from_hotspot", lambda: on_hotspot)
     app = make_app(tmp_path, mock_hardware, pin="1234", setup_completed=setup_completed)
-    client = from_addr(app.test_client(), HOTSPOT if on_hotspot else HOME_NETWORK)
+    client = from_addr(app.test_client(), HOTSPOT_RELAYED if on_hotspot else HOME_NETWORK)
     with client.session_transaction() as sess:
         sess.clear()
     return client, app
@@ -76,6 +76,18 @@ class TestHotspotSetupNeedsNoPin:
             location = response.headers.get("Location") or ""
             assert "/login" not in location, path
             _no_pin_form(response)
+
+    def test_a_phone_directly_on_8080_gets_nothing(self, tmp_path, mock_hardware, monkeypatch):
+        """Install plan §3 (I1): from the setup network, 8080 answers no page."""
+        from service_window.app import SETUP_NETWORK_CLOSED
+
+        _client(tmp_path, mock_hardware, monkeypatch, on_hotspot=True)
+        app = make_app(tmp_path, mock_hardware, pin="1234", setup_completed=False)
+        client = from_addr(app.test_client(), HOTSPOT)
+        for path in (*_HOTSPOT_SETUP_PATHS, "/", "/settings/", "/relays/", "/login"):
+            response = client.get(path)
+            assert response.status_code == 404, path
+            assert response.get_data(as_text=True) == SETUP_NETWORK_CLOSED, path
 
 
 class TestLanHasNoLogin:

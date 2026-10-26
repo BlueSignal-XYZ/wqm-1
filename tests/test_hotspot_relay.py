@@ -104,7 +104,12 @@ class TestRelayedSetupRequests:
                         headers={"Host": "192.168.4.1", **extra, **headers},
                         environ_base={"REMOTE_ADDR": remote},
                     )
-                assert r.status_code == 403, (remote, headers)
+                # Directly from the setup network, 8080 is closed outright
+                # (install plan §3); through the relay the gate refuses it.
+                assert r.status_code == (404 if remote.startswith("192.168.4.") else 403), (
+                    remote,
+                    headers,
+                )
 
     def test_the_setup_page_itself_still_posts(self, tmp_path, mock_hardware, real_hotspot):
         app = make_app(tmp_path, mock_hardware)
@@ -142,7 +147,9 @@ class TestRelayedSetupRequests:
                     headers={"Host": "192.168.4.1", **extra},
                     environ_base={"REMOTE_ADDR": remote},
                 )
-            assert r.status_code == 403, remote
+            # Directly from the setup network, 8080 is closed outright
+            # (install plan §3); through the relay the gate refuses it.
+            assert r.status_code == (404 if remote.startswith("192.168.4.") else 403), remote
         assert (tmp_path / "config.yaml").read_text() == before
         assert yaml.safe_load(before).get("api_key") != "k" * 20
 

@@ -4,6 +4,7 @@ Service Window — Flask application factory.
 Lightweight local web UI for WQM-1 commissioning, calibration, and diagnostics.
 """
 
+import ipaddress
 import logging
 import os
 import secrets
@@ -42,6 +43,27 @@ _SETTING_ALIASES = {
     # (integrations.smart_breaker.secrets). Tests point it at tmp_path.
     "SECRETS_DIR": "secrets_dir",
 }
+
+
+# Install plan §3 (I1). The Service Window binds 0.0.0.0:8080 until §10 binds
+# loopback, so without this a phone on the setup network could open
+# http://192.168.4.1:8080 directly. A direct connection carries the phone's
+# real address. The port-80 relay connects from 127.0.0.1, so it is not
+# stopped here; §4 removes it.
+SETUP_NETWORK_CLOSED = "This page isn't available on the setup network."
+
+
+def _closed_to_setup_network() -> Response | None:
+    """404 for every Service Window path asked from the setup network."""
+    from utils.netctl import AP_NETWORK
+
+    try:
+        addr = ipaddress.ip_address(request.remote_addr or "")
+    except ValueError:
+        return None
+    if addr in ipaddress.ip_network(AP_NETWORK):
+        return Response(SETUP_NETWORK_CLOSED, status=404, mimetype="text/plain")
+    return None
 
 
 def create_app(config: dict | None = None, config_path: str | None = None) -> Flask:
@@ -102,6 +124,9 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
     # variant would re-apply keys the loop already handled. One mechanism, not
     # two: passthrough wins.
     app.config.update(passthrough)
+
+    # First of every request hook: nothing on 8080 answers the setup network.
+    app.before_request(_closed_to_setup_network)
 
     # Register blueprints
     app.register_blueprint(auth_bp)
