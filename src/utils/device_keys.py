@@ -15,12 +15,21 @@ root and do not read the identity seed. ``ensure_keypair`` is idempotent:
 a present, valid seed is never regenerated. After an unclean power loss
 the completed file is used; a leftover ``.tmp`` of the right size is
 promoted, a truncated one is discarded.
+
+The firmware and the Service Window both call ``ensure_keypair`` at first
+boot. The thread lock only covers one process, so the read-or-create also
+holds an exclusive ``flock`` on ``<key>.lock`` next to the key. Without it
+two processes write the same ``.tmp`` at once: one fails, or returns a key
+that is not the one on disk, and registration signs with a key the unit
+does not hold. The lock file is never deleted: a process that deleted it
+would let the next one lock a different inode.
 """
 
 from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -211,14 +220,35 @@ def _key_from_seed(seed: bytes) -> Any:
     return ECC.construct(curve="Ed25519", seed=seed)
 
 
+@contextlib.contextmanager
+def _key_file_lock(path: Path):
+    """Exclusive ``flock`` on ``<path>.lock``, held across processes.
+
+    The lock file stays on disk (mode 0600). Deleting it after use would let
+    a third process lock a new inode while another still holds the old one.
+    """
+    lock_path = path.with_name(path.name + ".lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, FILE_MODE)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def ensure_keypair() -> bytes:
     """Return the 32-byte public key, generating the seed once if absent.
 
-    Disk is the source of truth. Two first-boot processes racing both end up
-    using whichever seed won the rename, never a discarded in-memory pair.
+    Disk is the source of truth. The whole read-or-create runs under the
+    thread lock and the cross-process key lock, so a second first-boot
+    process waits, then reads the key the first one wrote.
     """
     with _STATE_LOCK:
-        return _ensure_keypair_locked()
+        ensure_state_dir()
+        with _key_file_lock(private_key_path()):
+            return _ensure_keypair_locked()
 
 
 def _ensure_keypair_locked() -> bytes:
@@ -264,7 +294,9 @@ def sign_bytes(message: bytes) -> bytes:
         path = private_key_path()
         seed = _read_seed(path)
         if seed is None:
-            _ensure_keypair_locked()
+            ensure_state_dir()
+            with _key_file_lock(path):
+                _ensure_keypair_locked()
             seed = _read_seed(path)
         if seed is None:
             raise RuntimeError("identity key missing")
