@@ -327,15 +327,36 @@ def _joining_page(ssid: str) -> str:
     )
 
 
-def _fail_join_job(app: object, ssid: str, message: str) -> None:
+def _fail_join_job(app: object, ssid: str, message: str, ap_restored: bool = False) -> None:
     live = _join_job()
     live["state"] = "fail"
     app.config["LAST_JOIN"] = {  # type: ignore[attr-defined]
         "ssid": ssid,
         "error": message,
         "reason": "join_error",
-        "ap_restored": False,
+        "ap_restored": ap_restored,
     }
+
+
+def _bring_hotspot_back(ap_ssid: str | None, ap_pass: str | None) -> bool:
+    """After ``join_network`` raised, put the setup hotspot back up.
+
+    ``join_network`` takes the hotspot down before it tries the site network
+    and restores it on its own failures. An exception that escapes it skips
+    that, which leaves the unit with no hotspot and no way for the phone to
+    retry. Best effort: a failure here is logged, never raised.
+    """
+    if not (ap_ssid and ap_pass):
+        return False
+    from utils.netctl import ap_active, start_ap
+
+    try:
+        if ap_active():
+            return True
+        return bool(start_ap(ap_ssid, ap_pass).get("ok"))
+    except Exception:
+        logger.exception("Could not bring the setup hotspot back after a join error")
+        return False
 
 
 def _begin_join(
@@ -364,6 +385,7 @@ def _begin_join(
 
     def _run() -> None:
         with app.app_context():
+            joined = False
             try:
 
                 def _remember(pending: dict) -> None:
@@ -379,15 +401,23 @@ def _begin_join(
                 live = _join_job()
                 joined_ip = str(result.get("ip") or "")
                 if result.get("connected") and usable_ipv4(joined_ip):
+                    joined = True
                     app.config.pop("LAST_JOIN", None)
-                    _kick_register()
-                    finished = _finish_setup(ssid)
+                    # The radio is on the site network now. A failure while
+                    # recording setup is not a failed join: the hotspot is
+                    # down and the installer must not be sent to retry it.
+                    forgotten: list = []
+                    try:
+                        _kick_register()
+                        forgotten = _finish_setup(ssid)["forgotten"]
+                    except Exception:
+                        logger.exception("Joined %s, but recording setup failed", ssid)
                     rssi = result.get("rssi")
                     live["state"] = "ok"
                     live["view"] = {
                         "ssid": ssid,
                         "ip": joined_ip,
-                        "forgotten": finished["forgotten"],
+                        "forgotten": forgotten,
                         "weak": is_weak_rssi(rssi if isinstance(rssi, int) else None),
                         "rssi": rssi,
                     }
@@ -396,7 +426,8 @@ def _begin_join(
                     live["state"] = "fail"
             except Exception:
                 logger.exception("Join %s failed in the background", ssid)
-                _fail_join_job(app, ssid, _JOIN_FAIL_MESSAGE)
+                restored = False if joined else _bring_hotspot_back(ap_ssid, ap_pass)
+                _fail_join_job(app, ssid, _JOIN_FAIL_MESSAGE, ap_restored=restored)
             finally:
                 live = _join_job()
                 if live.get("state") == "joining":

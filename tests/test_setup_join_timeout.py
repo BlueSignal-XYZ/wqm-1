@@ -130,6 +130,71 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert again.status_code == 200
         assert b"Joined PondHouse" in again.data
 
+    def test_join_exception_brings_the_hotspot_back(self, tmp_path, mock_hardware, monkeypatch):
+        """Bugbot on #157: an exception that escapes join_network skips its own
+        hotspot restore, which strands the phone. The worker restores it."""
+        from utils import netctl
+
+        state = {"ap": True, "started": []}
+
+        def boom(*_a, **_k):
+            state["ap"] = False  # join_network took the hotspot down first
+            raise RuntimeError("nmcli missing")
+
+        client, app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        monkeypatch.setattr(netctl, "join_network", boom)
+        monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": state["ap"])
+
+        def start_ap(ssid, passphrase, iface="wlan0"):
+            state["started"].append((ssid, passphrase))
+            state["ap"] = True
+            return {"ok": True}
+
+        monkeypatch.setattr(netctl, "start_ap", start_ap)
+        client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        assert state["started"] == [("WQM1-0001", "river-cedar-42")]
+        assert (app.config.get("LAST_JOIN") or {}).get("ap_restored") is True
+
+    def test_setup_record_error_after_join_is_not_a_failed_join(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        """Bugbot on #157: once the radio is on the site network, a config
+        write error is logged, and the installer is not told to retry."""
+        from service_window.routes import setup as setup_routes
+        from utils import netctl
+
+        client, app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *_a, **_k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
+        )
+        started = []
+        monkeypatch.setattr(netctl, "start_ap", lambda *a, **k: started.append(a) or {"ok": True})
+
+        def broken_finish(_ssid):
+            raise OSError("config.yaml is read-only")
+
+        monkeypatch.setattr(setup_routes, "_finish_setup", broken_finish)
+        response = client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        assert response.status_code == 200
+        assert b"Joined PondHouse" in response.data
+        assert client.get("/setup/join-status").get_json()["state"] == "ok"
+        assert "LAST_JOIN" not in app.config
+        assert started == []
+
     def test_second_join_post_keeps_the_running_ssid(self, tmp_path, mock_hardware, monkeypatch):
         from utils import netctl
 
