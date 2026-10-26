@@ -83,6 +83,27 @@ def _reset_active_board():
 
 
 @pytest.fixture(autouse=True)
+def _no_real_bluesignal_probe(monkeypatch):
+    """A join proves itself by reaching BlueSignal over HTTPS (install plan
+    §2). No test may make that request: BlueSignal answers, the clock is
+    synced, and no HTTP Date is read, unless a test says otherwise."""
+    try:
+        from utils import netctl
+    except Exception:  # noqa: BLE001 — netctl may be unimportable mid-refactor
+        yield
+        return
+    monkeypatch.setattr(netctl, "_https_status", lambda url, timeout=None: "ok")
+    monkeypatch.setattr(netctl, "_http_date", lambda url, timeout=None: None)
+    monkeypatch.setattr(netctl, "_ntp_synced", lambda: True)
+    # The 1.5 s head start lets a real phone get the HTTP answer before the
+    # setup network drops. Tests run the join at once; test_join pins it.
+    from utils import join
+
+    monkeypatch.setattr(join, "START_DELAY_S", 0.0)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def mock_hardware():
     """Provide access to mock hardware objects and reset between tests."""
     _gpio.reset_mock()

@@ -57,6 +57,7 @@ from service_window.health import (
     system_cards,
     worst_status,
 )
+from utils import join
 from utils.cardmove import card_status_payload, confirm_binding
 from utils.device_keys import identity_qr_payload
 from utils.identity import ap_name
@@ -247,13 +248,16 @@ _BACKHAULS = ("wifi", "lte", "none")
 _SSID_RE = re.compile(r"^[^\x00-\x1f]{1,32}$")
 
 
-def _finish_setup(keep_ssid: str | None) -> dict:
+def _finish_setup(keep_ssid: str | None, *, forget: bool = True) -> dict:
     """Mark setup complete on the unit: forget every saved Wi-Fi network but
     the one in use, record completion, restart the firmware. Shared by the
     Wi-Fi join (which finishes setup — its response may never reach the
     phone) and the Finish button (LTE / no-network sites). The caller has
-    already confirmed the join or the Finish tap."""
-    forgot = forget_saved_wifi(keep_ssid)
+    already confirmed the join or the Finish tap.
+
+    The join worker (``utils.join``) forgets other networks itself, after the
+    join reached BlueSignal, so it passes ``forget=False``."""
+    forgot = forget_saved_wifi(keep_ssid) if forget else {"forgotten": []}
     with contextlib.suppress(OSError):
         confirm_binding()
     update_config_section(
@@ -301,22 +305,11 @@ def _declare(form: dict, backhaul: str) -> None:
     update_config(current_app.config["CONFIG_PATH"], values)
 
 
-_JOIN_LOCK = threading.Lock()
 # Instant joins (tests, the virtual radio) finish in this window so existing
 # callers still get the joined page on the same POST. A real join of up to
-# ~150 s returns the polling page instead of holding the HTTP request.
+# a few minutes returns the polling page instead of holding the HTTP request.
 _JOIN_HTTP_WAIT_S = 0.2
-
-
-def _join_job() -> dict:
-    job = current_app.config.get("JOIN_JOB")
-    if not isinstance(job, dict):
-        job = {"state": "idle", "ssid": None, "view": None}
-        current_app.config["JOIN_JOB"] = job
-    return job
-
-
-_JOIN_FAIL_MESSAGE = "The unit could not join that network. Try again from the setup page."
+_JOIN_POLL_S = 0.02
 
 
 def _joining_page(ssid: str) -> str:
@@ -328,42 +321,16 @@ def _joining_page(ssid: str) -> str:
     )
 
 
-def _fail_join_job(app: object, ssid: str, message: str, ap_restored: bool = False) -> None:
-    live = _join_job()
-    live["state"] = "fail"
-    app.config["LAST_JOIN"] = {  # type: ignore[attr-defined]
-        "ssid": ssid,
-        "error": message,
-        "reason": "join_error",
-        "ap_restored": ap_restored,
-    }
+def _last_join_notice(networks: list[dict]) -> dict | None:
+    """The failed join the network page explains, from ``join.read_state``.
 
-
-def _restore_sleep(seconds: float) -> None:
-    time.sleep(seconds)
-
-
-def _bring_hotspot_back(ap_ssid: str | None, ap_pass: str | None) -> bool:
-    """After ``join_network`` raised, put the setup hotspot back up.
-
-    ``join_network`` takes the hotspot down before it tries the site network
-    and restores it on its own failures. An exception that escapes it skips
-    that, which leaves the unit with no hotspot and no way for the phone to
-    retry. Best effort: a failure here is logged, never raised.
-    """
-    if not (ap_ssid and ap_pass):
-        return False
-    from utils import netctl
-
-    try:
-        if netctl.ap_active():
-            return True
-        # The radio is often still settling after stop_ap and a connect, so
-        # use join_network's own restore: AP_ATTEMPTS tries, 2 s apart.
-        return netctl._restore_ap(True, ap_ssid, ap_pass, netctl.DEFAULT_WIFI_IFACE, _restore_sleep)
-    except Exception:
-        logger.exception("Could not bring the setup hotspot back after a join error")
-        return False
+    The state is on disk, so a restart of this process, or a second phone
+    talking to another process, still sees it (spec D3)."""
+    state = join.read_state()
+    if state.get("state") != "failed":
+        return None
+    ssid = str(state.get("ssid") or "")
+    return _notice_for(ssid, state, networks)
 
 
 def _begin_join(
@@ -373,84 +340,48 @@ def _begin_join(
     ap_pass: str | None,
     scanned: list,
 ) -> ResponseReturnValue | None:
-    """Run ``join_network`` off the request thread.
+    """Start the join through ``utils.join`` (one at a time, on disk).
 
     Returns the joined page or a redirect when the join finishes inside
     ``_JOIN_HTTP_WAIT_S``. Returns None when the join is still running so
     the caller can serve the status-polling page. A second POST while a
-    join is running gets the running job's SSID, not the new one.
+    join is running gets the running join's SSID, not the new one.
     """
-    from utils.netctl import join_network, usable_ipv4
-
     # LocalProxy: the real app object is what the worker thread must hold.
     app = current_app._get_current_object()  # type: ignore[attr-defined]
-    with _JOIN_LOCK:
-        job = _join_job()
-        if job.get("state") == "joining":
-            return _joining_page(str(job.get("ssid") or ssid))
-        job.update(state="joining", ssid=ssid, view=None)
 
-    def _run() -> None:
+    def _after_join(_result: dict) -> None:
+        # The radio is on the site network now. A failure while recording
+        # setup is not a failed join: the hotspot is down and the installer
+        # must not be sent to retry it. The register kick and the setup
+        # record are separate: a kick that raises must not leave setup
+        # unrecorded.
         with app.app_context():
-            joined = False
             try:
-
-                def _remember(pending: dict) -> None:
-                    app.config["LAST_JOIN"] = _notice_for(ssid, pending, scanned)
-
-                result = join_network(
-                    ssid,
-                    password or None,
-                    ap_ssid=ap_ssid,
-                    ap_passphrase=ap_pass,
-                    on_failure=_remember,
-                )
-                live = _join_job()
-                joined_ip = str(result.get("ip") or "")
-                if result.get("connected") and usable_ipv4(joined_ip):
-                    joined = True
-                    app.config.pop("LAST_JOIN", None)
-                    # The radio is on the site network now. A failure while
-                    # recording setup is not a failed join: the hotspot is
-                    # down and the installer must not be sent to retry it.
-                    # The register kick and the setup record are separate:
-                    # a kick that raises must not leave setup unrecorded.
-                    forgotten: list = []
-                    try:
-                        _kick_register()
-                    except Exception:
-                        logger.exception("Joined %s, but the register kick failed", ssid)
-                    try:
-                        forgotten = _finish_setup(ssid)["forgotten"]
-                    except Exception:
-                        logger.exception("Joined %s, but recording setup failed", ssid)
-                    rssi = result.get("rssi")
-                    live["state"] = "ok"
-                    live["view"] = {
-                        "ssid": ssid,
-                        "ip": joined_ip,
-                        "forgotten": forgotten,
-                        "weak": is_weak_rssi(rssi if isinstance(rssi, int) else None),
-                        "rssi": rssi,
-                    }
-                else:
-                    app.config["LAST_JOIN"] = _notice_for(ssid, result, scanned)
-                    live["state"] = "fail"
+                _kick_register()
             except Exception:
-                logger.exception("Join %s failed in the background", ssid)
-                restored = False if joined else _bring_hotspot_back(ap_ssid, ap_pass)
-                _fail_join_job(app, ssid, _JOIN_FAIL_MESSAGE, ap_restored=restored)
-            finally:
-                live = _join_job()
-                if live.get("state") == "joining":
-                    _fail_join_job(app, ssid, _JOIN_FAIL_MESSAGE)
+                logger.exception("Joined %s, but the register kick failed", ssid)
+            try:
+                _finish_setup(ssid, forget=False)
+            except Exception:
+                logger.exception("Joined %s, but recording setup failed", ssid)
 
-    thread = threading.Thread(target=_run, name="wqm1-wifi-join", daemon=True)
-    thread.start()
-    thread.join(timeout=_JOIN_HTTP_WAIT_S)
-    done = _join_job()
-    if done.get("state") == "ok":
-        view = done.get("view") or {}
+    started = join.start_join(
+        ssid,
+        password or None,
+        ap_ssid=ap_ssid,
+        ap_passphrase=ap_pass,
+        on_joined=_after_join,
+    )
+    if started.get("state") == "busy":
+        return _joining_page(str(started.get("ssid") or ssid))
+    deadline = time.monotonic() + _JOIN_HTTP_WAIT_S
+    state = join.read_state()
+    while state.get("state") == "joining" and time.monotonic() < deadline:
+        time.sleep(_JOIN_POLL_S)
+        state = join.read_state()
+    if state.get("state") == "joined":
+        rssi = state.get("rssi")
         return render_template(
             "setup/joined.html",
             steps=_steps(),
@@ -458,9 +389,13 @@ def _begin_join(
             identity=_identity(),
             registration=registration_view(),
             weak_message=WEAK_SIGNAL_MESSAGE,
-            **view,
+            ssid=state.get("ssid") or ssid,
+            ip=state.get("ip") or "",
+            forgotten=state.get("forgotten") or [],
+            weak=is_weak_rssi(rssi if isinstance(rssi, int) else None),
+            rssi=rssi,
         )
-    if done.get("state") == "fail":
+    if state.get("state") == "failed":
         return redirect(url_for("setup.network"))
     return None
 
@@ -549,7 +484,7 @@ def network() -> ResponseReturnValue:
             band_notice=band_notice(scanned),
             hidden_note=HIDDEN_NOTE if has_hidden(scanned) else None,
             weak_message=WEAK_SIGNAL_MESSAGE,
-            last_join=current_app.config.get("LAST_JOIN"),
+            last_join=_last_join_notice(scanned),
             backhaul=str(config.get("backhaul") or "wifi"),
             lora_enabled=bool(config.get("lora_enabled", True)),
             gps_enabled=bool(config.get("gps_enabled", True)),
@@ -909,12 +844,14 @@ def done() -> ResponseReturnValue:
 @login_required
 def join_status() -> ResponseReturnValue:
     """JSON the joining page polls. Open on the hotspot; no Wi-Fi secret."""
-    job = _join_job()
-    last = current_app.config.get("LAST_JOIN")
+    state = join.read_state()
+    # The joining page reads the job words it always has: ok / fail.
+    shown = {"joined": "ok", "failed": "fail"}.get(str(state.get("state")), state.get("state"))
+    last = _notice_for(str(state.get("ssid") or ""), state, []) if shown == "fail" else None
     return jsonify(
         {
-            "state": job.get("state") or "idle",
-            "ssid": job.get("ssid"),
+            "state": shown or "idle",
+            "ssid": state.get("ssid"),
             "last_join": last,
         }
     )

@@ -539,12 +539,14 @@ class TestSiteScenarios:
             "/setup/network",
             data={"action": "join", "ssid": "Smith-Home", "password": "not-the-one"},
         )
-        assert "LAST_JOIN" in app.config
+        from utils import join
+
+        assert join.read_state()["state"] == "failed"
         c.post(
             "/setup/network",
             data={"action": "join", "ssid": "Smith-Home", "password": netsim.DEMO_HOME_PASSWORD},
         )
-        assert "LAST_JOIN" not in app.config
+        assert join.read_state()["state"] == "joined"
         assert b"Could not join" not in c.get("/setup/network").data
 
     def test_three_wrong_passwords_never_strand_the_installer(

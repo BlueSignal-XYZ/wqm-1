@@ -70,14 +70,21 @@ import ipaddress
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
+import ssl
 import subprocess  # nosec B404 - fixed argv, no shell, resolved binaries only
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from utils import netsim
 from utils.captive_portal import (
@@ -138,6 +145,19 @@ JOIN_TIMEOUT_S = 40
 # Whole join, including association, DHCP, and a gateway or DNS probe.
 # nmcli's own activation timeout is JOIN_TIMEOUT_S and sits inside this budget.
 ADDRESS_WAIT_S = 55.0
+# A join is tried under a temporary profile name. Only a join that reached
+# BlueSignal renames it to the SSID; a failure deletes only the temporary
+# profile, so a wrong password re-typed for a proven network keeps it (I3).
+TRY_PROFILE_PREFIX = "bs-try-"
+# Success means BlueSignal answered over HTTPS through this network. A router
+# that asks the owner to approve new devices (Eero, Firewalla) is approved in
+# this window without anyone redoing the join (spec D5).
+BLUESIGNAL_HOLD_S = 180.0
+BLUESIGNAL_POLL_S = 10.0
+HTTPS_TIMEOUT_S = 8.0
+# The HTTP Date header is unauthenticated. It may move a stuck clock forward
+# by at most this many calendar years, inclusive; never backwards (spec D6).
+CLOCK_STEP_MAX_YEARS = 2
 ADDRESS_POLL_S = 2.0
 # After the setup AP lets go of wlan0, NetworkManager's scan list is EMPTY:
 # it could not scan while hostapd held the radio. `nmcli device wifi connect`
@@ -162,6 +182,7 @@ _STATION_FAIL = {
     "no_association": "could not join",
     "invalid_ssid": "invalid network name",
     "captive_sign_in": "sign-in page",
+    "no_bluesignal": "no BlueSignal",
 }
 _JOIN_MESSAGES = {
     "wrong_password": (
@@ -188,6 +209,10 @@ _JOIN_MESSAGES = {
         "is on, then try again."
     ),
     "invalid_ssid": "That network name cannot be used. Pick one from the list.",
+    "no_bluesignal": (
+        "The unit is on the Wi-Fi but could not reach BlueSignal. If the router asks "
+        "you to approve new devices, approve this one, then try again."
+    ),
 }
 
 
@@ -886,6 +911,196 @@ def reach_gateway_or_dns(
     return False
 
 
+# ``ssl`` verify codes for a certificate the clock says is not valid yet,
+# or no longer valid. Either means the unit's clock may be wrong.
+_CERT_TIME_CODES = {9, 10}
+
+
+def _is_cert_time_error(err: BaseException | None) -> bool:
+    if isinstance(err, ssl.SSLCertVerificationError):
+        if getattr(err, "verify_code", None) in _CERT_TIME_CODES:
+            return True
+        text = str(getattr(err, "verify_message", "") or err).lower()
+        return "not yet valid" in text or "has expired" in text
+    return False
+
+
+def _https_status(url: str, timeout: float = HTTPS_TIMEOUT_S) -> str:
+    """``ok`` when the HTTPS server at ``url`` answered with any status,
+    ``time`` on a certificate-time error, else ``fail``.
+
+    Certificate verification stays on: an answer proves DNS, routing and TLS
+    through this network. The status code does not matter.
+    """
+    request = urllib.request.Request(url, method="HEAD")  # noqa: S310 - https only
+    try:
+        with urllib.request.urlopen(  # nosec B310 - fixed https URL, verified TLS
+            request, timeout=timeout, context=ssl.create_default_context()
+        ):
+            return "ok"
+    except urllib.error.HTTPError:
+        return "ok"
+    except urllib.error.URLError as e:
+        return "time" if _is_cert_time_error(e.reason) else "fail"
+    except ssl.SSLCertVerificationError as e:
+        return "time" if _is_cert_time_error(e) else "fail"
+    except (OSError, ValueError):
+        return "fail"
+
+
+def _http_date(url: str, timeout: float = HTTPS_TIMEOUT_S) -> datetime | None:
+    """The ``Date`` header from a plain-HTTP answer, or None. Unauthenticated."""
+    request = urllib.request.Request(url, method="HEAD")  # noqa: S310 - Date only
+    headers: Any = None
+    try:
+        with urllib.request.urlopen(  # nosec B310 - fixed URL; only the Date header is read
+            request, timeout=timeout
+        ) as resp:
+            headers = resp.headers
+    except urllib.error.HTTPError as e:
+        headers = e.headers
+    except (OSError, ValueError):
+        return None
+    raw = headers.get("Date") if headers is not None else None
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed is None or parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _add_years(when: datetime, years: int) -> datetime:
+    try:
+        return when.replace(year=when.year + years)
+    except ValueError:  # 29 February into a year without one
+        return when.replace(year=when.year + years, day=28)
+
+
+def clock_step_allowed(now: datetime, header: datetime) -> bool:
+    """True when ``header`` is ahead of ``now`` by at most CLOCK_STEP_MAX_YEARS
+    calendar years (inclusive). Never backwards.
+
+    The cap bounds a forged ``Date``; it does not make the header trusted. A
+    unit further behind recovers through GPS (``utils.clock.observe_gps``).
+    """
+    return now < header <= _add_years(now, CLOCK_STEP_MAX_YEARS)
+
+
+def _ntp_synced() -> bool:
+    from utils.clock import ClockDiscipline
+
+    return ClockDiscipline().ntp_synced()
+
+
+def _set_clock(when: datetime) -> bool:
+    from utils.clock import _set_system_time
+
+    return _set_system_time(when)
+
+
+def _repair_clock(
+    host: str,
+    *,
+    http_date: Callable[[str], datetime | None],
+    now: Callable[[], datetime],
+    set_time: Callable[[datetime], bool],
+    ntp_synced: Callable[[], bool],
+) -> dict[str, Any]:
+    """Move a stuck clock forward from the API host's ``Date`` header."""
+    if ntp_synced():
+        return {"action": "none", "reason": "ntp"}
+    header = http_date(f"http://{host}/")
+    current = now()
+    if header is None:
+        return {"action": "none", "reason": "no_date"}
+    if not clock_step_allowed(current, header):
+        logger.warning(
+            "Not moving the clock from %s to an HTTP Date of %s (outside the %d-year cap)",
+            current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            header.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            CLOCK_STEP_MAX_YEARS,
+        )
+        return {"action": "refused", "reason": "step"}
+    ok = False
+    try:
+        ok = bool(set_time(header))
+    except Exception as e:  # noqa: BLE001 - a failed correction is logged, never fatal
+        logger.error("clock correction from HTTP Date failed: %s", e)
+    if ok:
+        logger.warning(
+            "System clock set forward from the API host's Date header: %s -> %s",
+            current.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            header.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+    return {"action": "set" if ok else "set_failed", "reason": "cert_time"}
+
+
+def reach_bluesignal(
+    api_base: str,
+    *,
+    sleep: Callable[[float], Any] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    hold_s: float = BLUESIGNAL_HOLD_S,
+    poll_s: float = BLUESIGNAL_POLL_S,
+    probe: Callable[[str], str] | None = None,
+    http_date: Callable[[str], datetime | None] | None = None,
+    now: Callable[[], datetime] | None = None,
+    set_time: Callable[[datetime], bool] | None = None,
+    ntp_synced: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    """True only when BlueSignal answered over HTTPS through this network.
+
+    Tries every ``poll_s`` for ``hold_s``. On a certificate-time error with
+    timesyncd unsynced, moves the clock forward from the API host's ``Date``
+    header (bounded by ``clock_step_allowed``) and retries once.
+    Returns ``{"ok", "clock"}``.
+    """
+    probe = probe or _https_status
+    http_date = http_date or _http_date
+    now = now or (lambda: datetime.now(UTC))
+    set_time = set_time or _set_clock
+    ntp_synced = ntp_synced or _ntp_synced
+    host = urlparse(api_base or "").hostname
+    if not host:
+        logger.error("No BlueSignal API host configured; the join cannot be proven")
+        return {"ok": False, "clock": None}
+    url = f"https://{host}/"
+    deadline = clock() + hold_s
+    clock_record: dict[str, Any] | None = None
+    while True:
+        verdict = probe(url)
+        if verdict == "ok":
+            return {"ok": True, "clock": clock_record}
+        if verdict == "time" and clock_record is None:
+            clock_record = _repair_clock(
+                host,
+                http_date=http_date,
+                now=now,
+                set_time=set_time,
+                ntp_synced=ntp_synced,
+            )
+            if clock_record.get("action") == "set" and probe(url) == "ok":
+                return {"ok": True, "clock": clock_record}
+        if clock() >= deadline:
+            logger.warning("BlueSignal did not answer through this network in %.0f s", hold_s)
+            return {"ok": False, "clock": clock_record}
+        sleep(poll_s)
+
+
+def _default_api_base() -> str:
+    try:
+        from utils.config import get_settings
+
+        return str(get_settings().cloud_api_base or "")
+    except Exception as e:  # noqa: BLE001 - an unreadable config is a failed proof, not a crash
+        logger.error("Could not read cloud_api_base: %s", e)
+        return ""
+
+
 def _publish_station(**fields: Any) -> None:
     """Best-effort ``wqm1-status.txt`` update. A failed write must not decide
     whether the join, or the hotspot that follows it, succeeded."""
@@ -977,6 +1192,9 @@ def _connect(
     iface: str,
     sleep: Any,
     clock: Any,
+    *,
+    name: str | None = None,
+    hidden: bool = False,
 ) -> tuple[int, str, str]:
     """Scan, connect, and retry the one failure a slow scan causes.
 
@@ -987,17 +1205,26 @@ def _connect(
     3. Then try it as a hidden network (an active probe for this SSID),
        which does not need the network to be in the list at all.
 
+    A ``hidden`` network is never in a scan, so it goes straight to the
+    active probe. ``name`` is the temporary profile name; a failed attempt's
+    profile is deleted before the next one.
+
     Returns (rc, nmcli text with the password redacted, last stage).
     """
-    seen = wait_for_ssid(ssid, iface, sleep=sleep, clock=clock)
-    if not seen:
-        logger.warning("%s not seen in a scan yet; trying the join anyway", ssid)
-    base = wifi_connect_argv(ssid, password, iface)
-    attempts = [("scan", base), ("rescan", base), ("hidden", [*base, "hidden", "yes"])]
-    rc, nm_text, stage = 0, "", "scan"
+    base = wifi_connect_argv(ssid, password, iface, name=name)
+    if hidden:
+        attempts = [("hidden", [*base, "hidden", "yes"])]
+    else:
+        seen = wait_for_ssid(ssid, iface, sleep=sleep, clock=clock)
+        if not seen:
+            logger.warning("%s not seen in a scan yet; trying the join anyway", ssid)
+        attempts = [("scan", base), ("rescan", base), ("hidden", [*base, "hidden", "yes"])]
+    rc, nm_text, stage = 0, "", attempts[0][0]
     for i, (stage, argv) in enumerate(attempts):
         if i == 1:
             wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=SCAN_WAIT_S / 2)
+        if i and name:
+            _nmcli("connection", "delete", name)
         rc, out, err = _nmcli(*argv, timeout=float(JOIN_TIMEOUT_S))
         nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
         if rc == 0 or _classify_connect_error(nm_text) != "not_found":
@@ -1016,13 +1243,25 @@ def join_network(
     clock: Any = time.monotonic,
     address_wait_s: float = ADDRESS_WAIT_S,
     on_failure: Callable[[dict[str, Any]], None] | None = None,
+    *,
+    hidden: bool = False,
+    api_base: str | None = None,
+    reach: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Join ``ssid`` and report success only when the unit is actually on it.
+    """Join ``ssid`` and report success only when the unit reached BlueSignal.
 
-    Success requires all three, polled until ``address_wait_s`` (about a
-    minute): ``wlan0`` is associated to this SSID, it has a usable IPv4
-    address (a DHCP or static lease — not link-local ``169.254.x``), and
-    that network's gateway or a DNS server answers.
+    Success requires all four, the first three polled until
+    ``address_wait_s`` (about a minute): ``wlan0`` is associated to this
+    SSID, it has a usable IPv4 address (a DHCP or static lease — not
+    link-local ``169.254.x``), that network's gateway or a DNS server
+    answers, and then BlueSignal answers over HTTPS (``reach_bluesignal``,
+    up to ``BLUESIGNAL_HOLD_S``). The gateway/DNS step stays first, so
+    ``no_internet`` remains a distinct reason from ``no_bluesignal``.
+
+    The join runs under a temporary ``bs-try-`` profile. Success renames it
+    to the SSID and deletes older profiles for that SSID; failure deletes
+    only the temporary profile, so a proven network survives a wrong
+    password typed for it (I3).
 
     On any failure the setup hotspot is raised again when its name and
     passphrase were given, which also arms the port-80 portal. ``on_failure``
@@ -1073,9 +1312,12 @@ def join_network(
         # so a phone that is still associated is not kept on our portal,
         # and a successful join cannot leave the listener up (#136).
         _disarm_portal("joining")
+    try_name = f"{TRY_PROFILE_PREFIX}{secrets.token_hex(4)}"
     # One argv element for the password, so a space or a quote is the
     # password and not a shell metacharacter. Nothing here logs that element.
-    rc, nm_text, _stage = _connect(ssid, password, iface, sleep, clock)
+    rc, nm_text, _stage = _connect(
+        ssid, password, iface, sleep, clock, name=try_name, hidden=hidden
+    )
     # The address budget starts once NetworkManager has the network, so a
     # slow scan does not eat the DHCP wait.
     deadline = clock() + address_wait_s
@@ -1096,6 +1338,7 @@ def join_network(
                 iface=iface,
                 sleep=sleep,
                 on_failure=on_failure,
+                profile=try_name,
             )
     while True:
         snap = read_iface_net(iface)
@@ -1121,7 +1364,29 @@ def join_network(
                     iface=iface,
                     sleep=sleep,
                     on_failure=on_failure,
+                    profile=try_name,
                 )
+            proof = (reach or reach_bluesignal)(
+                api_base if api_base is not None else _default_api_base(),
+                sleep=sleep,
+                clock=clock,
+            )
+            if not proof.get("ok"):
+                return _fail_join(
+                    ssid=ssid,
+                    password=password,
+                    kind="no_bluesignal",
+                    nm_text=nm_text,
+                    link_local=list(snap.get("link_local") or []),
+                    had_ap=had_ap,
+                    ap_ssid=ap_ssid,
+                    ap_passphrase=ap_passphrase,
+                    iface=iface,
+                    sleep=sleep,
+                    on_failure=on_failure,
+                    profile=try_name,
+                )
+            _promote_try_profile(try_name, ssid, iface)
             ip = str(usable[0])
             rssi = read_station_rssi(iface)
             logger.info("Joined %s at %s", ssid, ip)
@@ -1158,6 +1423,7 @@ def join_network(
                 iface=iface,
                 sleep=sleep,
                 on_failure=on_failure,
+                profile=try_name,
             )
         sleep(ADDRESS_POLL_S)
 
@@ -1171,6 +1437,18 @@ def _failure_kind(ssid: str, snap: dict[str, Any], nm_text: str) -> str:
     if "ip configuration" in low or "no available address" in low:
         return "no_dhcp"
     return _classify_connect_error(nm_text) or "no_association"
+
+
+def _promote_try_profile(try_name: str, ssid: str, iface: str = DEFAULT_WIFI_IFACE) -> None:
+    """After a proven join: delete older profiles for ``ssid``, then rename
+    the temporary profile to the SSID. Renaming keeps the saved password;
+    re-creating the profile would drop it."""
+    for prof in saved_wifi(iface):
+        if prof["ssid"] == ssid and prof["name"] != try_name:
+            _nmcli("connection", "delete", prof["name"])
+    rc, out, err = _nmcli("connection", "modify", try_name, "connection.id", ssid)
+    if rc != 0:
+        logger.warning("Could not rename %s to %s: %s", try_name, ssid, err or out)
 
 
 def _notify_failure(
@@ -1197,15 +1475,21 @@ def _fail_join(
     iface: str,
     sleep: Any,
     on_failure: Callable[[dict[str, Any]], None] | None,
+    profile: str | None = None,
 ) -> dict[str, Any]:
     """Record the reason, then raise the hotspot. The hook runs first so the
-    setup page has the sentence before the phone can rejoin."""
+    setup page has the sentence before the phone can rejoin.
+
+    Only ``profile`` (the temporary ``bs-try-`` profile) is deleted. The
+    SSID's own profile, if one was proven earlier, is never deleted here.
+    """
     message = _join_message(kind, link_local)
     short = _STATION_FAIL.get(kind, "could not join")
     logger.warning("Join %s failed (%s): %s", ssid, kind, nm_text or message)
-    # Drop the failed profile so NM does not keep retrying a bad password
-    # and blocking the AP from coming back.
-    _nmcli("connection", "delete", ssid)
+    # Drop the failed attempt's profile so NM does not keep retrying a bad
+    # password and blocking the AP from coming back.
+    if profile:
+        _nmcli("connection", "delete", profile)
     pending = _join_result(
         ok=False,
         connected=False,

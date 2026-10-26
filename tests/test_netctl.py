@@ -628,8 +628,13 @@ class TestJoin:
         assert r["ap_restored"] is True
         assert "Secrets were required" in r["error"]
         assert nm.ap is True
-        # The failed profile is dropped so NM does not keep retrying it.
-        assert any(c[1:3] == ["connection", "delete"] and c[3] == "PondHouse" for c in nm.calls)
+        # The failed attempt's temporary profile is dropped so NM does not keep
+        # retrying it. The SSID's own profile is never deleted by a failure (I3).
+        deleted = [
+            c[3] for c in nm.calls if c[1:3] == ["connection", "delete"] and c[3] != "wqm1-setup-ap"
+        ]
+        assert deleted and all(name.startswith("bs-try-") for name in deleted)
+        assert "PondHouse" not in deleted
         # Stop (managed yes) happens before the join; the restore sets managed no
         # and starts hostapd again.
         connect = _at(nm.calls, lambda c: c[1:4] == ["device", "wifi", "connect"])

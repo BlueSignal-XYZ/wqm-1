@@ -528,12 +528,18 @@ def password_problem(password: str, *, secured: bool) -> str | None:
     return None
 
 
-def wifi_connect_argv(ssid: str, password: str | None, iface: str) -> list[str]:
+def wifi_connect_argv(
+    ssid: str, password: str | None, iface: str, name: str | None = None
+) -> list[str]:
     """nmcli argv. The password is one argument, never a shell string.
 
     Spaces, quotes, and ``$`` stay in that one argument. Nothing here logs it.
+    ``name`` sets the NetworkManager profile name; a join tries under a
+    ``bs-try-`` name so a wrong password never deletes a proven profile.
     """
     argv = ["device", "wifi", "connect", ssid, "ifname", iface]
+    if name:
+        argv.extend(["name", name])
     if password:
         argv.extend(["password", password])
     return argv
