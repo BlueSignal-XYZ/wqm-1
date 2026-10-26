@@ -107,10 +107,9 @@ HL-A250L-38 nameplate is still pending from Haolin.
 
 The digital probes hold their own calibration state on the probe. The
 owner adds, re-addresses, enables, and disables them from Cloud with
-`rs485_config`. Allowed models only: residual chlorine
-(`HondeChlorineSensor`), ORP RD-ORP-WE-01 (`HondeOrpSensor`), and 5-in-1
-RD-PETSTS-01 (`HondeMultiSensor`). Anything else is rejected. Addresses
-are 1–247.
+`rs485_config`. Cloud wire names only: `residual_chlorine`,
+`RD-ORP-WE-01`, and `RD-PETSTS-01`. Anything else is rejected with
+`sensor not allowed`. Addresses are 1–247.
 
 | Probe | Method | Cadence |
 |---|---|---|

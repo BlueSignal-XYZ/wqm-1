@@ -1,23 +1,30 @@
-"""Apply Cloud pending commands for pH calibration and RS485 sensor setup.
+"""Apply Cloud queued commands for pH calibration and RS485 sensor setup.
 
-Pending commands from ``GET .../commands/pending`` enter only through
+Commands from ``GET .../commands/pending`` enter only through
 ``DeviceCommandDispatcher``. The allowed types are ``ph_calibrate`` and
-``rs485_config``. Any other type, extra field, non-finite number, or expired
-``expiresAt`` is rejected with a short plain message. This module does not
-import actuation drivers and does not offer a path to them.
+``rs485_config``. Any other type, extra field, non-finite number, missing
+string ``id``, or expired ``expiresAt`` is rejected with a short plain
+message. This module does not import actuation drivers and does not offer a
+path to them.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import math
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from statistics import median
 from typing import Any, Protocol
 
 from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
+from utils.atomic import atomic_write_text
+
+logger = logging.getLogger("wqm1.device_commands")
 
 COMMAND_TYPES = frozenset({"ph_calibrate", "rs485_config"})
 COMMAND_KEYS = frozenset({"id", "type", "payload", "expiresAt"})
@@ -26,13 +33,13 @@ PH_STEPS = frozenset({"start", "point", "finish"})
 PH_PROBES = frozenset({"analog", "rs485_multi"})
 RS485_KEYS = frozenset({"op", "sensor", "address", "newAddress", "enabled"})
 RS485_OPS = frozenset({"add", "set_address", "enable", "disable"})
-ALLOWED_SENSORS = frozenset(
-    {
-        HondeChlorineSensor.__name__,
-        HondeOrpSensor.__name__,
-        HondeMultiSensor.__name__,
-    }
-)
+# Server #1479 wire names. Class names are internal only.
+WIRE_SENSORS: dict[str, type] = {
+    "residual_chlorine": HondeChlorineSensor,
+    "RD-ORP-WE-01": HondeOrpSensor,
+    "RD-PETSTS-01": HondeMultiSensor,
+}
+ALLOWED_SENSORS = frozenset(WIRE_SENSORS)
 ANALOG_BUFFERS = frozenset({4.0, 7.0})
 # Labels come from the probe driver so a rename there fails this import, not a string search.
 RS485_BUFFER_LABELS = {round(float(label), 2): label for label in HondeMultiSensor.PH_CAL_POINTS}
@@ -141,18 +148,24 @@ class DeviceCommandDispatcher:
         self,
         hardware: CommandHardware,
         now_ms: Callable[[], int] | None = None,
+        cache_path: Path | str | None = None,
     ) -> None:
         self._hardware = hardware
         self._now_ms = now_ms or (lambda: int(datetime.now(UTC).timestamp() * 1000))
         self._analog_volts: dict[float, float] = {}
         self._rs485_buffers: list[float] = []
-        self._handled: OrderedDict[str, CommandOutcome] = OrderedDict()
+        self._analog_started = False
+        self._rs485_started = False
+        self._cache_path = Path(cache_path) if cache_path is not None else None
+        self._handled: OrderedDict[str, CommandOutcome] = self._load_handled()
 
     def apply(self, command: dict[str, Any]) -> CommandOutcome:
         if not isinstance(command, dict):
             return _rejected("command must be an object")
         cmd_id = command.get("id")
-        if isinstance(cmd_id, str) and cmd_id in self._handled:
+        if not isinstance(cmd_id, str) or not cmd_id:
+            return _rejected("missing id")
+        if cmd_id in self._handled:
             self._handled.move_to_end(cmd_id)
             return self._handled[cmd_id]
         unexpected = _unexpected(set(command), COMMAND_KEYS)
@@ -191,7 +204,60 @@ class DeviceCommandDispatcher:
             while len(self._handled) >= HANDLED_COMMANDS_MAX:
                 self._handled.popitem(last=False)
         self._handled[cmd_id] = outcome
+        self._save_handled()
         return outcome
+
+    def _load_handled(self) -> OrderedDict[str, CommandOutcome]:
+        if self._cache_path is None or not self._cache_path.is_file():
+            return OrderedDict()
+        try:
+            raw = json.loads(self._cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning("Handled-command cache unreadable: %s", exc)
+            return OrderedDict()
+        if not isinstance(raw, list):
+            return OrderedDict()
+        handled: OrderedDict[str, CommandOutcome] = OrderedDict()
+        for item in raw[-HANDLED_COMMANDS_MAX:]:
+            if not (
+                isinstance(item, list)
+                and len(item) == 2
+                and isinstance(item[0], str)
+                and isinstance(item[1], dict)
+            ):
+                continue
+            body = item[1]
+            status = body.get("status")
+            if status not in ("applied", "rejected"):
+                continue
+            handled[item[0]] = CommandOutcome(
+                status=status,
+                result=body.get("result") if isinstance(body.get("result"), dict) else None,
+                message=str(body.get("message") or ""),
+            )
+        return handled
+
+    def _save_handled(self) -> None:
+        if self._cache_path is None:
+            return
+        payload = [
+            [
+                cmd_id,
+                {
+                    "status": outcome.status,
+                    "result": outcome.result,
+                    "message": outcome.message,
+                },
+            ]
+            for cmd_id, outcome in self._handled.items()
+        ]
+        try:
+            atomic_write_text(
+                self._cache_path,
+                json.dumps(payload, separators=(",", ":")),
+            )
+        except OSError as exc:
+            logger.warning("Handled-command cache not written: %s", exc)
 
     def _ph_calibrate(self, payload: dict[str, Any]) -> CommandOutcome:
         unexpected = _unexpected(set(payload), PH_KEYS)
@@ -208,13 +274,18 @@ class DeviceCommandDispatcher:
                 return _rejected("buffer is only valid for point")
             if probe == "analog":
                 self._analog_volts = {}
+                self._analog_started = True
             else:
                 self._rs485_buffers = []
+                self._rs485_started = True
             return _applied("calibration started", {"buffers": [], "measuredAt": _measured_at()})
         if step == "point":
             label = _buffer_label(probe, payload.get("buffer"))
             if isinstance(label, CommandOutcome):
                 return label
+            started = self._analog_started if probe == "analog" else self._rs485_started
+            if not started:
+                return _rejected("calibration has not started")
             if probe == "analog":
                 volts = self._read_analog_point()
                 if isinstance(volts, CommandOutcome):
@@ -234,6 +305,9 @@ class DeviceCommandDispatcher:
             )
         if "buffer" in payload:
             return _rejected("buffer is only valid for point")
+        started = self._analog_started if probe == "analog" else self._rs485_started
+        if not started:
+            return _rejected("calibration has not started")
         if probe == "analog":
             return self._finish_analog()
         return self._finish_rs485()
@@ -260,6 +334,8 @@ class DeviceCommandDispatcher:
         applied = self._hardware.apply_analog_ph(v4, v7)
         slope = float(applied["slope"])
         offset = float(applied["offset"])
+        self._analog_volts = {}
+        self._analog_started = False
         return _applied(
             "pH calibration applied",
             {
@@ -271,12 +347,17 @@ class DeviceCommandDispatcher:
         )
 
     def _finish_rs485(self) -> CommandOutcome:
+        if not self._rs485_buffers:
+            return _rejected("missing calibration points")
+        buffers = list(self._rs485_buffers)
+        self._rs485_buffers = []
+        self._rs485_started = False
         return _applied(
             "pH calibration applied",
             {
                 "slope": None,
                 "offset": None,
-                "buffers": list(self._rs485_buffers),
+                "buffers": buffers,
                 "measuredAt": _measured_at(),
             },
         )

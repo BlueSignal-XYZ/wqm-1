@@ -1,20 +1,34 @@
 # Device commands (firmware)
 
-Wire formats for Cloud commissioning commands. The unit pulls work on the
-existing `command_poll_s` tick and posts one result per command. Server and
-firmware tests must match this page.
+Wire formats for Cloud commissioning commands. Server marketplace #1479
+and this firmware must match this page. The server's names are canonical.
 
-The live unit `BS-WQM1-0000a92e4e7d` runs older firmware. These routes are
-additive: ingest, `GET .../config`, and the legacy `deviceCommands` poll are
-unchanged. Unverified on hardware.
+The unit pulls work on the existing `command_poll_s` tick:
+`GET {cloud_api_base}/v2/devices/{id}/commands/pending` with the device
+key, applies each command once, and `POST`s
+`{...}/commands/{cmdId}/result`.
+
+The live unit `BS-WQM1-0000a92e4e7d` runs older firmware. These routes
+are additive: ingest, `GET .../config`, and the legacy `deviceCommands`
+poll are unchanged. Unverified on hardware.
 
 Owner-only on the Cloud side. The unit authenticates with its device key.
 
-## Pending
+## Status: `queued` / `sent`
 
-`GET {cloud_api_base}/v2/devices/{id}/commands/pending`
+Cloud stores each command as **`queued`**, then **`sent`**.
 
-Header: `X-API-Key` (device key). No body.
+`GET .../commands/pending` returns commands that are `sent` (it marks
+`queued` ones `sent` as it returns them). The same `sent` command is
+returned on every poll until it expires or a result is accepted.
+
+Firmware **dedupes by `id`**. A string `id` is required. A command
+without one is rejected with `missing id` and is not applied. Handled
+ids are stored in a small file next to the readings database
+(`handled-commands.json`, written with `utils.atomic`) so a reboot does
+not re-run a calibration step. A second `POST .../result` for the same
+id is HTTP **409**; the unit treats 409 as already recorded (same as
+200) and does not retry.
 
 ```json
 {
@@ -22,38 +36,28 @@ Header: `X-API-Key` (device key). No body.
     {
       "id": "cmd-1",
       "type": "ph_calibrate",
-      "payload": {},
+      "payload": {
+        "step": "start",
+        "probe": "analog"
+      },
       "expiresAt": 1700000060000
     }
   ]
 }
 ```
 
-`expiresAt` is Unix time in milliseconds. The unit rejects an expired command
-and still posts `result`.
-
-The Cloud contract (marketplace #1479):
-
-- `GET .../pending` returns commands whose status is `pending` and marks each
-  one `sent`. A later poll does not see that command again.
-- `POST .../result` is accepted only for a `sent` command.
-- A second result for the same command is HTTP **409**. The unit treats 409 as
-  already recorded (same as 200): it does not retry and does not re-apply.
-
-The unit remembers handled command ids in memory (bounded). It never re-applies
-a calibration step for an id it has already applied. If the result POST fails
-(transport or any status other than 200/409), the next `command_poll_s` tick
-retries the stored result. It does not re-read the ADC or rewrite the probe.
+`expiresAt` is Unix time in milliseconds. The unit rejects an expired
+command and still posts `result`.
 
 Allowed `type` values: `ph_calibrate`, `rs485_config`. Anything else is
-`rejected` with message `unknown type`. Extra fields on the command or the
-payload, and non-finite numbers, are rejected with a plain message.
+`rejected` with message `unknown type`. Extra fields, non-finite
+numbers, and a missing string `id` are rejected with a plain message.
 
 ## `ph_calibrate`
 
 ```json
 {
-  "step": "start",
+  "step": "point",
   "probe": "analog",
   "buffer": 4.0
 }
@@ -73,52 +77,18 @@ Honde RD-PETSTS-01 (`calibrate_ph_point`): **4.01**, **6.86**, and **9.18** only
 
 `10.0` is rejected. A buffer from the other probe's set is rejected.
 
-`start` clears the in-memory session. Analog `point` takes the median of 5
+`start` opens the session and clears stored points. `point` and `finish`
+require a prior `start`. Analog `point` takes the median of 5
 converter-voltage samples. If the spread (max − min) is above 0.02 V the
-command is rejected with `voltage not stable` and the point is not stored.
-`rs485_multi` `point` writes the buffer register on the 5-in-1. `finish` on
-analog calls `CalibrationManager.calibrate_ph` and pushes the slope into the
-live pH driver.
+command is rejected with `voltage not stable`. A successful analog
+`finish` clears the session so a later `finish` cannot reuse the volts.
+RS485 `finish` with no points is rejected with `missing calibration points`.
 
-## `rs485_config`
+Only **`finish`** carries `slope` and `offset`. `start` and `point`
+results are `applied` with `buffers` and `measuredAt` only.
+`measuredAt` is an ISO-8601 UTC string (`YYYY-MM-DDTHH:MM:SSZ`).
 
-```json
-{
-  "op": "add",
-  "sensor": "HondeChlorineSensor",
-  "address": 5,
-  "newAddress": 7,
-  "enabled": true
-}
-```
-
-| Field | Used by |
-|---|---|
-| `op` | `add`, `set_address`, `enable`, `disable` |
-| `sensor` | always |
-| `address` | `add` and `set_address` (current); optional on enable/disable |
-| `newAddress` | `set_address` |
-| `enabled` | `enable` (`true`), `disable` (`false`) |
-
-`set_address` acts on the probe that is already at `address`. If a live
-probe of that model exists at a different address, the command is rejected
-with `no probe at that address`. The unit does not write the new address to
-a different probe and does not record a config change the command did not
-make.
-
-Addresses are 1–247. Allowed `sensor` values, imported from the drivers:
-
-- residual chlorine: `HondeChlorineSensor`
-- ORP RD-ORP-WE-01: `HondeOrpSensor`
-- 5-in-1 RD-PETSTS-01: `HondeMultiSensor`
-
-Any other model (including the flow meter) is rejected.
-
-## Result
-
-`POST {cloud_api_base}/v2/devices/{id}/commands/{cmdId}/result`
-
-Header: `X-API-Key` (device key).
+Analog `finish`:
 
 ```json
 {
@@ -133,33 +103,103 @@ Header: `X-API-Key` (device key).
 }
 ```
 
-| Field | Notes |
+Analog `offset` is the intercept so `pH = slope * V + offset`
+(`7.0 - slope * V@7`).
+
+RS485 multi-sensor `finish` sends the points and may have `slope` /
+`offset` null. The server accepts that as applied:
+
+```json
+{
+  "status": "applied",
+  "result": {
+    "slope": null,
+    "offset": null,
+    "buffers": [4.01, 6.86, 9.18],
+    "measuredAt": "2026-10-26T14:00:00Z"
+  },
+  "message": "pH calibration applied"
+}
+```
+
+## `rs485_config`
+
+Wire `sensor` names (canonical). Firmware maps them to the Honde
+drivers and rejects anything else with `sensor not allowed`:
+
+| Wire name | Driver |
 |---|---|
-| `status` | `applied` or `rejected` |
-| `result` | omitted on most rejections |
-| `message` | at most 200 characters, plain words |
+| `residual_chlorine` | `HondeChlorineSensor` |
+| `RD-ORP-WE-01` | `HondeOrpSensor` |
+| `RD-PETSTS-01` | `HondeMultiSensor` |
 
-HTTP 200: Cloud stored the result. HTTP 409: Cloud already recorded a result
-for this command; the unit treats that as success.
+```json
+{
+  "op": "add",
+  "sensor": "residual_chlorine",
+  "address": 5,
+  "newAddress": 7,
+  "enabled": true
+}
+```
 
-Analog pH `offset` is the intercept so `pH = slope * V + offset`
-(`7.0 - slope * V@7`). RS485 pH `finish` may send `slope` and `offset` as
-null; the coefficients live on the probe.
+| Field | Used by |
+|---|---|
+| `op` | `add`, `set_address`, `enable`, `disable` |
+| `sensor` | always (wire name above) |
+| `address` | `add` and `set_address` (current); optional on enable/disable |
+| `newAddress` | `set_address` |
+| `enabled` | `enable` (`true`), `disable` (`false`) |
 
-An RS485 result is:
+Addresses are 1–247.
+
+`set_address` acts on the live attached probe at `address`. If that
+probe is missing, disabled (detached), or at a different address, the
+command is rejected with `no probe at that address`. The unit does not
+attach a driver for a disabled sensor, does not write the new address
+to a different probe, and does not record a config change the command
+did not make.
+
+An RS485 result uses the same wire names:
 
 ```json
 {
   "status": "applied",
   "result": {
     "sensors": [
-      {"sensor": "HondeChlorineSensor", "address": 5, "enabled": true}
+      {"sensor": "residual_chlorine", "address": 5, "enabled": true}
     ]
   },
   "message": "RS485 sensor added"
 }
 ```
 
-The pending dispatcher has no path to a coil, a smart breaker, or a host
-pin. Legacy `deviceCommands` types (`relay`, `awg`, …) stay on the existing
+## Result
+
+`POST {cloud_api_base}/v2/devices/{id}/commands/{cmdId}/result`
+
+Header: `X-API-Key` (device key). Accepted only for a `sent` command.
+
+```json
+{
+  "status": "applied",
+  "result": {
+    "buffers": [4.0],
+    "measuredAt": "2026-10-26T14:00:00Z"
+  },
+  "message": "pH 4.0 point stored"
+}
+```
+
+| Field | Notes |
+|---|---|
+| `status` | `applied` or `rejected` |
+| `result` | omitted on most rejections |
+| `message` | at most 200 characters, plain words |
+
+HTTP 200: Cloud stored the result. HTTP 409: already recorded; the unit
+treats that as success.
+
+The dispatcher has no path to a coil, a smart breaker, or a host pin.
+Legacy `deviceCommands` types (`relay`, `awg`, …) stay on the existing
 poll and are unknown types on this route.

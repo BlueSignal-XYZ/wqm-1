@@ -10,16 +10,23 @@ from __future__ import annotations
 from typing import Any
 
 from calibration.calibrate import CalibrationManager
+from cloud.device_commands import WIRE_SENSORS
 from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
 from sensors.modbus import ModbusBus
 from service_window.config_editor import update_config
 from utils.config import ADC_CH_PH
 
-_SENSOR_BINDINGS: dict[str, tuple[str, str, type]] = {
-    HondeChlorineSensor.__name__: ("rs485_chlorine", "_chlorine", HondeChlorineSensor),
-    HondeOrpSensor.__name__: ("rs485_orp", "_orp", HondeOrpSensor),
-    HondeMultiSensor.__name__: ("rs485_multi", "_multi", HondeMultiSensor),
+_PREFIX_ATTR: dict[type, tuple[str, str]] = {
+    HondeChlorineSensor: ("rs485_chlorine", "_chlorine"),
+    HondeOrpSensor: ("rs485_orp", "_orp"),
+    HondeMultiSensor: ("rs485_multi", "_multi"),
 }
+
+
+def _binding(sensor: str) -> tuple[str, str, type]:
+    cls = WIRE_SENSORS[sensor]
+    prefix, attr = _PREFIX_ATTR[cls]
+    return prefix, attr, cls
 
 
 class Wqm1CommandHardware:
@@ -51,7 +58,7 @@ class Wqm1CommandHardware:
         probe.calibrate_ph_point(buffer)
 
     def rs485_add(self, sensor: str, address: int) -> list[dict[str, Any]]:
-        prefix, attr, cls = _SENSOR_BINDINGS[sensor]
+        prefix, attr, cls = _binding(sensor)
         self._write_local({f"{prefix}_enabled": True, f"{prefix}_addr": address})
         bus = self._ensure_bus()
         setattr(self._app, attr, cls(bus, address))
@@ -61,15 +68,13 @@ class Wqm1CommandHardware:
     def rs485_set_address(
         self, sensor: str, address: int, new_address: int
     ) -> list[dict[str, Any]]:
-        prefix, attr, cls = _SENSOR_BINDINGS[sensor]
+        prefix, attr, _cls = _binding(sensor)
         probe = getattr(self._app, attr, None)
-        if probe is not None:
-            live = getattr(probe, "address", None)
-            if live != address:
-                raise RuntimeError("no probe at that address")
-        else:
-            probe = cls(self._ensure_bus(), address)
-            setattr(self._app, attr, probe)
+        if probe is None:
+            raise RuntimeError("no probe at that address")
+        live = getattr(probe, "address", None)
+        if live != address:
+            raise RuntimeError("no probe at that address")
         probe.set_address(new_address)
         self._write_local({f"{prefix}_addr": new_address})
         self._sync()
@@ -78,7 +83,7 @@ class Wqm1CommandHardware:
     def rs485_set_enabled(
         self, sensor: str, address: int | None, enabled: bool
     ) -> list[dict[str, Any]]:
-        prefix, attr, cls = _SENSOR_BINDINGS[sensor]
+        prefix, attr, cls = _binding(sensor)
         updates: dict[str, Any] = {f"{prefix}_enabled": enabled}
         if address is not None:
             updates[f"{prefix}_addr"] = address
@@ -102,7 +107,8 @@ class Wqm1CommandHardware:
     def rs485_list(self) -> list[dict[str, Any]]:
         settings = self._live_settings()
         rows: list[dict[str, Any]] = []
-        for name, (prefix, _attr, _cls) in _SENSOR_BINDINGS.items():
+        for name, cls in WIRE_SENSORS.items():
+            prefix, _attr = _PREFIX_ATTR[cls]
             rows.append(
                 {
                     "sensor": name,
@@ -117,6 +123,10 @@ class Wqm1CommandHardware:
         path = str(config._base_path)
         update_config(path, updates)
         config.reload()
+        # Overlay wins on reload; pin this command's writes so they are not undone.
+        settings = config.settings
+        for key, value in updates.items():
+            setattr(settings, key, value)
 
     def _ensure_bus(self) -> ModbusBus:
         bus = self._app._modbus_bus

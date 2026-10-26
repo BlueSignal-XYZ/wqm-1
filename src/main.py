@@ -972,7 +972,8 @@ class WQM1App:
                     on_config_version=self._reconcile_remote_config,
                     on_ota_pending=self._nudge_ota_agent,
                     apply_device_command=DeviceCommandDispatcher(
-                        hardware=Wqm1CommandHardware(self)
+                        hardware=Wqm1CommandHardware(self),
+                        cache_path=Path(self._settings.db_path).with_name("handled-commands.json"),
                     ).apply,
                 )
             )

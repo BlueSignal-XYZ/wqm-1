@@ -11,6 +11,7 @@ import inspect
 import json
 import math
 import urllib.error
+from datetime import datetime
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from cloud.device_commands import (
     ANALOG_POINT_MAX_SPREAD_V,
     ANALOG_POINT_READS,
     RS485_BUFFER_LABELS,
+    WIRE_SENSORS,
     CommandHardware,
     DeviceCommandDispatcher,
 )
@@ -85,9 +87,8 @@ class FakeHardware:
         self.rs485_points: list[str] = []
         self.ops: list[tuple] = []
         self.sensors = [
-            {"sensor": HondeChlorineSensor.__name__, "address": 1, "enabled": False},
-            {"sensor": HondeOrpSensor.__name__, "address": 2, "enabled": False},
-            {"sensor": HondeMultiSensor.__name__, "address": 3, "enabled": False},
+            {"sensor": name, "address": addr, "enabled": False}
+            for addr, name in enumerate(WIRE_SENSORS, start=1)
         ]
 
     def read_ph_adc_volts(self) -> float:
@@ -197,7 +198,7 @@ class TestDispatcherRejects:
         out = _dispatch(
             _rs485(
                 op="add",
-                sensor=HondeOrpSensor.__name__,
+                sensor="RD-ORP-WE-01",
                 address=math.inf,
             )
         )
@@ -236,7 +237,7 @@ class TestDispatcherRejects:
 
     def test_address_bounds(self):
         for address in (0, 248):
-            out = _dispatch(_rs485(op="add", sensor=HondeChlorineSensor.__name__, address=address))
+            out = _dispatch(_rs485(op="add", sensor="residual_chlorine", address=address))
             assert out.status == "rejected"
 
 
@@ -262,11 +263,19 @@ class TestPhCalibrateAnalog:
     def test_start_point_finish_uses_calibrate_ph(self):
         hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS + [1.60] * ANALOG_POINT_READS)
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
-        assert d.apply(_ph(step="start", probe="analog")).status == "applied"
+        start = d.apply(_ph(step="start", probe="analog"))
+        assert start.status == "applied"
+        assert start.result is not None
+        assert "slope" not in start.result
+        assert "offset" not in start.result
         p4 = d.apply(_ph(step="point", probe="analog", buffer=4.0))
         assert p4.status == "applied"
+        assert p4.result is not None
+        assert "slope" not in p4.result
+        assert "offset" not in p4.result
         p7 = d.apply(_ph(step="point", probe="analog", buffer=7.0))
         assert p7.status == "applied"
+        assert "slope" not in (p7.result or {})
         done = d.apply(_ph(step="finish", probe="analog"))
         assert done.status == "applied"
         assert hw.analog_applied == [(1.00, 1.60)]
@@ -274,8 +283,14 @@ class TestPhCalibrateAnalog:
         assert done.result["slope"] == pytest.approx(5.0)
         assert done.result["offset"] == pytest.approx(7.0 - 5.0 * 1.60)
         assert done.result["buffers"] == [4.0, 7.0]
-        assert "measuredAt" in done.result
+        datetime.strptime(done.result["measuredAt"], "%Y-%m-%dT%H:%M:%SZ")
         assert len(done.message) <= 200
+
+        reuse = d.apply(_ph(step="finish", probe="analog"))
+        assert reuse.status == "rejected"
+        assert "start" in reuse.message.lower()
+        assert d._analog_volts == {}
+        assert hw.analog_applied == [(1.00, 1.60)]
 
     def test_finish_without_both_points_is_rejected(self):
         hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS)
@@ -291,23 +306,37 @@ class TestPhCalibrateRs485:
     def test_points_call_calibrate_ph_point(self):
         hw = FakeHardware()
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
-        assert d.apply(_ph(step="start", probe="rs485_multi")).status == "applied"
+        start = d.apply(_ph(step="start", probe="rs485_multi"))
+        assert start.status == "applied"
+        assert start.result is not None
+        assert "slope" not in start.result
+        assert "offset" not in start.result
         for buffer in (4.01, 6.86, 9.18):
             out = d.apply(_ph(step="point", probe="rs485_multi", buffer=buffer))
             assert out.status == "applied", out.message
+            assert "slope" not in (out.result or {})
         assert hw.rs485_points == ["4.01", "6.86", "9.18"]
         done = d.apply(_ph(step="finish", probe="rs485_multi"))
         assert done.status == "applied"
         assert done.result is not None
         assert done.result["buffers"] == [4.01, 6.86, 9.18]
-        assert "measuredAt" in done.result
+        assert done.result["slope"] is None
+        assert done.result["offset"] is None
+        datetime.strptime(done.result["measuredAt"], "%Y-%m-%dT%H:%M:%SZ")
+
+    def test_finish_without_points_is_rejected(self):
+        d = DeviceCommandDispatcher(hardware=FakeHardware(), now_ms=lambda: NOW_MS)
+        assert d.apply(_ph(step="start", probe="rs485_multi")).status == "applied"
+        out = d.apply(_ph(step="finish", probe="rs485_multi"))
+        assert out.status == "rejected"
+        assert "point" in out.message.lower()
 
 
 class TestRs485Config:
     def test_add_set_address_enable_disable(self):
         hw = FakeHardware()
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
-        name = HondeChlorineSensor.__name__
+        name = "residual_chlorine"
         added = d.apply(_rs485(op="add", sensor=name, address=5))
         assert added.status == "applied"
         assert added.result == {"sensors": hw.rs485_list()}
@@ -327,11 +356,12 @@ class TestRs485Config:
     def test_only_the_three_allowed_models(self):
         hw = FakeHardware()
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
-        for cls in (HondeChlorineSensor, HondeOrpSensor, HondeMultiSensor):
-            out = d.apply(_rs485(op="add", sensor=cls.__name__, address=11))
+        for name in WIRE_SENSORS:
+            out = d.apply(_rs485(op="add", sensor=name, address=11))
             assert out.status == "applied", out.message
         out = d.apply(_rs485(op="add", sensor="HondeWhatever", address=12))
         assert out.status == "rejected"
+        assert out.message == "sensor not allowed"
 
 
 class TestCloudClientPendingAndResult:
@@ -592,15 +622,15 @@ class TestAnalogCalibratePhIsTheRealFunction:
         )
         hw = Wqm1CommandHardware(app)
         listed = hw.rs485_list()
-        chlorine_row = next(r for r in listed if r["sensor"] == HondeChlorineSensor.__name__)
+        chlorine_row = next(r for r in listed if r["sensor"] == "residual_chlorine")
         assert chlorine_row == {
-            "sensor": HondeChlorineSensor.__name__,
+            "sensor": "residual_chlorine",
             "address": 5,
             "enabled": True,
         }
-        after = hw.rs485_set_enabled(HondeChlorineSensor.__name__, 5, False)
+        after = hw.rs485_set_enabled("residual_chlorine", 5, False)
         assert app._chlorine is None
-        row = next(r for r in after if r["sensor"] == HondeChlorineSensor.__name__)
+        row = next(r for r in after if r["sensor"] == "residual_chlorine")
         assert row["enabled"] is False
         assert config.settings.rs485_chlorine_enabled is False
 
@@ -640,7 +670,7 @@ class TestSetAddressUsesCommandAddress:
         out = d.apply(
             _rs485(
                 op="set_address",
-                sensor=HondeChlorineSensor.__name__,
+                sensor="residual_chlorine",
                 address=5,
                 newAddress=7,
             )
@@ -663,12 +693,12 @@ class TestSetAddressUsesCommandAddress:
         app._chlorine = probe
         hw = Wqm1CommandHardware(app)
 
-        rows = hw.rs485_set_address(HondeChlorineSensor.__name__, 5, 7)
+        rows = hw.rs485_set_address("residual_chlorine", 5, 7)
         bus.write_register.assert_called_once_with(5, HondeChlorineSensor.REG_ADDRESS, 7)
         assert probe.address == 7
         assert config.settings.rs485_chlorine_addr == 7
         sync.assert_called()
-        row = next(r for r in rows if r["sensor"] == HondeChlorineSensor.__name__)
+        row = next(r for r in rows if r["sensor"] == "residual_chlorine")
         assert row["address"] == 7
 
 
@@ -715,19 +745,19 @@ class TestRealRs485Adapter:
     def test_add_creates_driver_writes_config_and_syncs(self, tmp_path):
         app, config, sync = _real_app(tmp_path)
         hw = Wqm1CommandHardware(app)
-        rows = hw.rs485_add(HondeOrpSensor.__name__, 6)
+        rows = hw.rs485_add("RD-ORP-WE-01", 6)
         assert isinstance(app._orp, HondeOrpSensor)
         assert app._orp.address == 6
         assert config.settings.rs485_orp_enabled is True
         assert config.settings.rs485_orp_addr == 6
         sync.assert_called()
-        row = next(r for r in rows if r["sensor"] == HondeOrpSensor.__name__)
-        assert row == {"sensor": HondeOrpSensor.__name__, "address": 6, "enabled": True}
+        row = next(r for r in rows if r["sensor"] == "RD-ORP-WE-01")
+        assert row == {"sensor": "RD-ORP-WE-01", "address": 6, "enabled": True}
 
     def test_enable_builds_the_driver_and_syncs(self, tmp_path):
         app, config, sync = _real_app(tmp_path)
         hw = Wqm1CommandHardware(app)
-        hw.rs485_set_enabled(HondeMultiSensor.__name__, 8, True)
+        hw.rs485_set_enabled("RD-PETSTS-01", 8, True)
         assert isinstance(app._multi, HondeMultiSensor)
         assert app._multi.address == 8
         assert config.settings.rs485_multi_enabled is True
@@ -740,7 +770,7 @@ class TestRealRs485Adapter:
         )
         app._chlorine = HondeChlorineSensor(app._modbus_bus, address=5)
         hw = Wqm1CommandHardware(app)
-        hw.rs485_set_enabled(HondeChlorineSensor.__name__, 5, False)
+        hw.rs485_set_enabled("residual_chlorine", 5, False)
         assert app._chlorine is None
         assert config.settings.rs485_chlorine_enabled is False
         sync.assert_called()
@@ -826,6 +856,92 @@ class TestResultHttpStatus:
 
         monkeypatch.setattr("urllib.request.urlopen", conflict)
         assert c.post_command_result("c1", "applied") is True
+
+
+class TestMissingCommandId:
+    def test_missing_id_is_rejected_and_does_not_start_a_session(self):
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS)
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        body = _ph(step="start", probe="analog")
+        del body["id"]
+        out = d.apply(body)
+        assert out.status == "rejected"
+        assert "id" in out.message.lower()
+        point = d.apply(_ph(step="point", probe="analog", buffer=4.0))
+        assert point.status == "rejected"
+        assert hw.voltages == [1.00] * ANALOG_POINT_READS
+
+
+class TestWireSensorNames:
+    def test_server_names_are_accepted_and_class_names_are_not(self):
+        hw = FakeHardware()
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        for name in WIRE_SENSORS:
+            out = d.apply(_rs485(op="add", sensor=name, address=11))
+            assert out.status == "applied", out.message
+            assert out.result is not None
+            assert any(row["sensor"] == name for row in out.result["sensors"])
+        out = d.apply(_rs485(op="add", sensor=HondeChlorineSensor.__name__, address=12))
+        assert out.status == "rejected"
+        assert out.message == "sensor not allowed"
+
+
+class TestSetAddressLeavesDisabledDetached:
+    def test_disabled_sensor_is_not_attached(self, tmp_path):
+        app, config, sync = _real_app(tmp_path)
+        hw = Wqm1CommandHardware(app)
+        with pytest.raises(RuntimeError, match="no probe at that address"):
+            hw.rs485_set_address("residual_chlorine", 5, 7)
+        assert app._chlorine is None
+        assert config.settings.rs485_chlorine_addr == 1
+        sync.assert_not_called()
+
+
+class TestReloadDoesNotUndoRs485Writes:
+    def test_remote_overlay_cannot_clobber_command_writes(self, tmp_path):
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("rs485_port: /dev/ttyTEST\n")
+        (tmp_path / "remote.yaml").write_text(
+            "version: 1\nvalues:\n  rs485_orp_enabled: false\n  rs485_orp_addr: 2\n"
+        )
+        config = ConfigManager(str(cfg_path), str(tmp_path / "remote.yaml"))
+        assert config.settings.rs485_orp_enabled is False
+        assert config.settings.rs485_orp_addr == 2
+        sync = MagicMock()
+        app = SimpleNamespace(
+            _cal=None,
+            _ph=None,
+            _adc=None,
+            _adc_error=None,
+            _config=config,
+            _modbus_bus=MagicMock(),
+            _chlorine=None,
+            _orp=None,
+            _multi=None,
+            _sync_sampler=sync,
+        )
+        hw = Wqm1CommandHardware(app)
+        hw.rs485_add("RD-ORP-WE-01", 6)
+        assert config.settings.rs485_orp_enabled is True
+        assert config.settings.rs485_orp_addr == 6
+        assert isinstance(app._orp, HondeOrpSensor)
+
+
+class TestHandledIdsPersist:
+    def test_new_dispatcher_does_not_reapply_a_stored_id(self, tmp_path):
+        cache = tmp_path / "handled-commands.json"
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS * 3)
+        d1 = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS, cache_path=cache)
+        d1.apply(_ph(step="start", probe="analog"))
+        cmd = _ph(step="point", probe="analog", buffer=4.0)
+        first = d1.apply(cmd)
+        assert first.status == "applied"
+        remaining = len(hw.voltages)
+        d2 = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS, cache_path=cache)
+        second = d2.apply(cmd)
+        assert second.status == "applied"
+        assert second.result == first.result
+        assert len(hw.voltages) == remaining
 
 
 class TestCalibrationDocsImportValues:
