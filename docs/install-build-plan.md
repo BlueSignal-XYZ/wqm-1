@@ -1,8 +1,8 @@
 # Install v3: firmware build plan
 
-**PR:** this is #155. Base is `master`. Claude's review of #155
-(github-actions comment 6387319904, 24 Oct 2026) found the branch up
-to date with master.
+**PR:** stacked on #155 (`claude/loving-lamport-hq4t3a`) until that PR
+merges. This file is edited on #159 (`grok/build-155-review3`). #155
+itself is not edited here.
 
 **Status:** plan, 2026-10-24. Written by Claude for Grok under the `AGENTS.md`
 handoff. Revised the same day after the review on PR #155 to match the
@@ -13,10 +13,16 @@ QR and claim-token steps are obsolete. Revised again the same day after
 the Captain answered Decisions 2 and 3: the Service Window stays running
 but binds loopback only; no mutating route answers from the home
 network, so §11 is skipped. Revised again the same day after Claude's
-third review (comment 6387319904, changes needed): the 8080 block is
-§3, the port-80 page is §4, and the open-network switch is last as §5;
-the HTTP `Date` clock step is capped; bench units stay off home
-networks until §10. Nothing here is built yet.
+third review of #155 (comment 6387319904, changes needed): the 8080
+block is §3, the port-80 page is §4, and the open-network switch is last
+as §5; the HTTP `Date` clock step is capped; bench units stay off home
+networks until §10. Revised 26 Oct 2026 after Claude's review of #159
+(comment 6406650067, changes needed) and the Captain's ruling of 25 Oct
+2026, 9:18 PM CT: keep the two-year inclusive cap on an unauthenticated
+HTTP `Date` step forward, and keep the HTTP `Date` fix. A unit more
+than two years behind does not recover over that header; the recovery
+path is GPS clock discipline in `utils.clock` (see §2). Nothing here is
+built yet.
 
 **What it builds:** the firmware half of the install spec,
 `marketplace/docs/operations/wqm1-install-spec.md` (marketplace PR #1457).
@@ -164,15 +170,44 @@ keeps working in the meantime" on BlueSignal Setup: it does not, once
    read the `Date` header, and set the clock forward only, through the
    existing `utils/clock.py` path (`sudo -n date -u -s`, one sudoers line
    from `setup.sh`). Then retry the HTTPS request once. Never move the
-   clock backwards. **Bound:** accept the `Date` only when the step
-   forward is at most two years. Why a step cap, not "only if the clock
-   is before `utils.clock.EARLIEST_PLAUSIBLE_UTC`": this path runs when
-   the clock is behind (the implausible case). A floor on the current
-   clock would still accept a `Date` of 2099 and break TLS to Cloud.
-   Two years is the largest lag this section already treats as a
-   legitimate stuck clock. A 1970 epoch clock is a 50+ year step and
-   is refused here; `utils.clock` already corrects that from GPS or
-   NTP, not from an unauthenticated HTTP header.
+   clock backwards. **Bound (inclusive):** accept the `Date` only when
+   the step forward is at most two years (`<=` two years). A step of
+   exactly two years is accepted; a step of two years and one day is
+   refused. Why a step cap, not "only if the clock is before
+   `utils.clock.EARLIEST_PLAUSIBLE_UTC`": this path runs when the clock
+   is behind (the implausible case). A floor on the current clock would
+   still accept a `Date` of 2099 and break TLS to Cloud. Two years is
+   the largest lag this section treats as a legitimate stuck clock that
+   HTTP `Date` may repair. A 1970 epoch clock is a 50+ year step and is
+   refused here.
+
+   **Far-behind recovery (Captain, 25 Oct 2026, 9:18 PM CT):** keep this
+   two-year cap and keep the HTTP `Date` fix. A unit more than two years
+   behind does not recover over this unauthenticated header. The Captain
+   says every WQM-1 has GPS, so those units recover through GPS. Repo
+   evidence that GPS can set the clock:
+
+   - `ClockDiscipline.observe_gps` in `src/utils/clock.py` sets the
+     system clock from a GPS RMC date+time when the clock is implausible
+     (before `EARLIEST_PLAUSIBLE_UTC`) or disagrees by more than
+     `MAX_GPS_SKEW_S` (300 s). NTP does not set the clock in this
+     module: `ntp_synced()` only reads `timedatectl NTPSynchronized`.
+   - `GpsWorker` (`src/app/workers.py`) feeds `fix.timestamp` to
+     `observe_gps`. `src/main.py` wires `on_time=self._clock.observe_gps`.
+   - Tests that pin it: `tests/test_clock.py`
+     `test_implausible_clock_is_set_from_gps_and_recorded` and
+     `test_large_skew_is_corrected`.
+   - Hardware: the WQM-1 HAT BOM lists a u-blox GPS on UART0
+     (`docs/hardware-overview.md`). The host matrix lists GPS on every
+     supported board (`docs/platforms.md`). `gps_enabled` defaults to
+     True.
+
+   What that does not prove: a unit with `gps_enabled: false`
+   (`src/main.py` skips GPS entirely), no valid RMC (`A` status), or no
+   sky (install-day notes say GPS may warn indoors) will not get this
+   correction. Those stay on a bad clock until timesyncd reports
+   synchronized or someone sets the clock on the bench. This plan does
+   not add an HTTP path for a lag larger than two years.
 5. **Forget older networks only after success** (rule 7 of the spec). The
    existing `forget_saved_wifi(keep=ssid)` moves from `_finish_setup` in
    `routes/setup.py` into the success path of the worker, after
@@ -195,9 +230,12 @@ keeps working in the meantime" on BlueSignal Setup: it does not, once
   exists afterwards (I3). This test fails on master.
 - Address but BlueSignal blocked for 120 s, then reachable: joined, no
   failure written. Blocked for 200 s: `no_bluesignal` after 180 s.
-- Clock 2 years behind, TLS time error: clock set forward from the Date
-  header, retry succeeds. Clock ahead of the header: clock not moved.
-  A `Date` of year 2099 is refused: clock not moved.
+- Clock 1 year 11 months behind, TLS time error: clock set forward
+  from the Date header, retry succeeds. Clock exactly two years
+  behind: clock set forward (the cap is inclusive). Clock two years
+  and one day behind: refused, clock not moved. Clock ahead of the
+  header: clock not moved. A `Date` of year 2099 is refused: clock
+  not moved.
 - Two `start_join` calls 100 ms apart: the second returns `busy` with the
   first SSID (I4).
 - The password string appears in no log record (caplog), no file under the
@@ -220,6 +258,10 @@ intended. After §4 it cannot open it through port 80 either.
 - `nmcli connection modify <id> connection.id <ssid>` renames; do not
   re-create the profile (that drops the saved password).
 - Hidden networks (C3): the `bs-try-` profile needs `wifi.hidden yes`.
+- The HTTP `Date` header is unauthenticated. The two-year inclusive cap
+  still accepts a forged `Date` that is at most two years ahead of the
+  unit's clock. Do not call this path safe; it is a bounded repair for
+  a stuck clock, not a trusted time source.
 
 ---
 
@@ -1026,6 +1068,13 @@ half's §2 (Add unit) needs this plan's §13.
   and pycryptodome (the method is in the precondition; no fixture has been
   generated).
 - The repro numbers in §1 came from this session's scratch test, not CI.
+- A bench unit more than two years behind recovering through GPS. The
+  code path is in `utils.clock.observe_gps` and is pinned by
+  `tests/test_clock.py`; no hardware run of that recovery is recorded
+  here.
+- That a unit with `gps_enabled: false`, or with no valid RMC, recovers
+  a clock more than two years behind. The repo has no other setter
+  besides GPS in `utils.clock`.
 
 ## Decisions from the Captain
 
