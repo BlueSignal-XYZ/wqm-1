@@ -73,7 +73,7 @@ numbers, and a missing string `id` are rejected with a plain message.
 
 Analog (BNC / `calibrate_ph`): **4.0** and **7.0** only.
 
-Honde RD-PETSTS-01 (`calibrate_ph_point`): **4.01**, **6.86**, and **9.18** only.
+RD-PETSTS-01 (`calibrate_ph_point`): **4.01**, **6.86**, and **9.18** only.
 
 `10.0` is rejected. A buffer from the other probe's set is rejected.
 
@@ -124,8 +124,8 @@ RS485 multi-sensor `finish` sends the points and may have `slope` /
 
 ## `rs485_config`
 
-Wire `sensor` names (canonical). Firmware maps them to the Honde
-drivers and rejects anything else with `sensor not allowed`:
+Wire `sensor` names (canonical). Firmware maps them to the existing
+probe drivers and rejects anything else with `sensor not allowed`:
 
 | Wire name | Driver |
 |---|---|

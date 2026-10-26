@@ -22,12 +22,13 @@ import pytest
 from app.state import StateStore
 from app.workers import CommandWorker
 from calibration.calibrate import CalibrationManager
-from cloud.client import CloudClient
+from cloud.client import RESULT_POST_DROP, CloudClient
 from cloud.device_commands import (
     ALLOWED_SENSORS,
     ANALOG_BUFFERS,
     ANALOG_POINT_MAX_SPREAD_V,
     ANALOG_POINT_READS,
+    HANDLED_COMMANDS_MAX,
     RS485_BUFFER_LABELS,
     WIRE_SENSORS,
     CommandHardware,
@@ -856,6 +857,104 @@ class TestResultHttpStatus:
 
         monkeypatch.setattr("urllib.request.urlopen", conflict)
         assert c.post_command_result("c1", "applied") is True
+
+    def test_404_and_422_are_terminal(self, monkeypatch):
+        c = CloudClient(
+            device_id="BS-WQM1-00aabbccddee",
+            ingest_url="https://example.test/ingestReading",
+            command_url="https://example.test/deviceCommands",
+            api_key="device-key",
+            fw_version="2.4.0",
+            api_base="https://example.test/app",
+        )
+        c._sleep = lambda *_: None
+        c._max_retries = 1
+
+        def not_found(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", not_found)
+        assert c.post_command_result("missing", "applied") == RESULT_POST_DROP
+
+        def unprocessable(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 422, "Unprocessable", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", unprocessable)
+        assert c.post_command_result("bad", "applied") == RESULT_POST_DROP
+
+
+class TestTerminalResultNotRetried:
+    def test_404_is_dropped_and_not_reposted(self, mock_hardware):
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS * 3)
+        dispatcher = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        posts = []
+        point = _ph(step="point", probe="analog", buffer=4.0)
+
+        def post(*a, **k):
+            posts.append(a)
+            return RESULT_POST_DROP
+
+        cloud = SimpleNamespace(
+            poll=lambda: {"commands": [], "configVersion": None},
+            fetch_pending_commands=lambda: [point] if not posts else [],
+            post_command_result=post,
+            send_event=lambda *a, **k: None,
+        )
+        worker = CommandWorker(
+            lambda: SimpleNamespace(command_poll_s=5, cloud_enabled=True),
+            cloud,
+            StateStore(),
+            apply_command=lambda _c: None,
+            apply_device_command=dispatcher.apply,
+        )
+        dispatcher.apply(_ph(step="start", probe="analog"))
+        worker.step()
+        worker.step()
+        assert len(posts) == 1
+        assert point["id"] not in worker._unposted_device_results
+
+
+class TestHandledIdExpiryWindow:
+    def test_unexpired_id_is_not_evicted_by_later_commands(self):
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS * 2)
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        d.apply(_ph(step="start", probe="analog"))
+        cmd = _ph(step="point", probe="analog", buffer=4.0)
+        first = d.apply(cmd)
+        assert first.status == "applied"
+        remaining = len(hw.voltages)
+        for _ in range(HANDLED_COMMANDS_MAX):
+            assert d.apply(_ph(step="start", probe="analog")).status == "applied"
+        second = d.apply(cmd)
+        assert second.status == "applied"
+        assert second.result == first.result
+        assert len(hw.voltages) == remaining
+
+
+class TestSetAddressConfigWriteFailure:
+    def test_yaml_failure_after_readdress_names_the_new_address(self, tmp_path, monkeypatch):
+        app, config, sync = _real_app(
+            tmp_path, "rs485_chlorine_enabled: true\nrs485_chlorine_addr: 5\n"
+        )
+        bus = MagicMock()
+        probe = HondeChlorineSensor(bus, address=5)
+        app._modbus_bus = bus
+        app._chlorine = probe
+        hw = Wqm1CommandHardware(app)
+        writes = []
+
+        def boom(path, updates):
+            writes.append(updates)
+            raise OSError("disk full")
+
+        monkeypatch.setattr("cloud.device_hardware.update_config", boom)
+        with pytest.raises(RuntimeError, match="7") as err:
+            hw.rs485_set_address("residual_chlorine", 5, 7)
+        assert probe.address == 7
+        assert config.settings.rs485_chlorine_addr == 5
+        assert len(writes) == 2
+        assert "7" in str(err.value)
+        sync.assert_not_called()
 
 
 class TestMissingCommandId:

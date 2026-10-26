@@ -34,7 +34,7 @@ tracking can nag when a probe is due.
 ## Analog pH (Raspberry Pi hosts)
 
 Two-point only: **4.0** then **7.0**. Cloud `ph_calibrate` with
-`probe: analog`. The unit rejects **10.0** and the Honde buffer set
+`probe: analog`. The unit rejects **10.0** and the RD-PETSTS-01 buffer set
 (4.01 / 6.86 / 9.18).
 
 1. Rinse in distilled water. Put the electrode in pH 4.0 buffer. Queue

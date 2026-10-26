@@ -76,7 +76,16 @@ class Wqm1CommandHardware:
         if live != address:
             raise RuntimeError("no probe at that address")
         probe.set_address(new_address)
-        self._write_local({f"{prefix}_addr": new_address})
+        updates = {f"{prefix}_addr": new_address}
+        try:
+            self._write_local(updates)
+        except Exception:
+            try:
+                self._write_local(updates)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"probe is at address {new_address}; config write failed"
+                ) from exc
         self._sync()
         return self.rs485_list()
 

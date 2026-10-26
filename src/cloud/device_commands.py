@@ -48,6 +48,9 @@ MESSAGE_MAX = 200
 ANALOG_POINT_READS = 5
 ANALOG_POINT_MAX_SPREAD_V = 0.02
 HANDLED_COMMANDS_MAX = 64
+# When Cloud omits a usable expiresAt, keep the id this long so a reboot
+# or a flood of later commands cannot re-apply it.
+HANDLED_WITHOUT_EXPIRES_MS = 24 * 60 * 60 * 1000
 
 
 class CommandHardware(Protocol):
@@ -77,6 +80,12 @@ class CommandOutcome:
     status: str
     result: dict[str, Any] | None = None
     message: str = ""
+
+
+@dataclass(frozen=True)
+class _Handled:
+    outcome: CommandOutcome
+    expires_at_ms: int
 
 
 def _clip(message: str) -> str:
@@ -157,7 +166,7 @@ class DeviceCommandDispatcher:
         self._analog_started = False
         self._rs485_started = False
         self._cache_path = Path(cache_path) if cache_path is not None else None
-        self._handled: OrderedDict[str, CommandOutcome] = self._load_handled()
+        self._handled: OrderedDict[str, _Handled] = self._load_handled()
 
     def apply(self, command: dict[str, Any]) -> CommandOutcome:
         if not isinstance(command, dict):
@@ -165,27 +174,29 @@ class DeviceCommandDispatcher:
         cmd_id = command.get("id")
         if not isinstance(cmd_id, str) or not cmd_id:
             return _rejected("missing id")
+        self._evict_expired()
         if cmd_id in self._handled:
             self._handled.move_to_end(cmd_id)
-            return self._handled[cmd_id]
+            return self._handled[cmd_id].outcome
+        keep_until = self._keep_until_ms(command.get("expiresAt"))
         unexpected = _unexpected(set(command), COMMAND_KEYS)
         if unexpected:
-            return self._store(cmd_id, _rejected(unexpected))
+            return self._store(cmd_id, _rejected(unexpected), keep_until)
         cmd_type = command.get("type")
         if not isinstance(cmd_type, str) or not cmd_type:
-            return self._store(cmd_id, _rejected("missing type"))
+            return self._store(cmd_id, _rejected("missing type"), keep_until)
         if cmd_type not in COMMAND_TYPES:
-            return self._store(cmd_id, _rejected("unknown type"))
+            return self._store(cmd_id, _rejected("unknown type"), keep_until)
         expires_at = command.get("expiresAt")
         if expires_at is None:
-            return self._store(cmd_id, _rejected("missing expiresAt"))
+            return self._store(cmd_id, _rejected("missing expiresAt"), keep_until)
         if not _finite(expires_at):
-            return self._store(cmd_id, _rejected("non-finite number"))
+            return self._store(cmd_id, _rejected("non-finite number"), keep_until)
         if self._now_ms() >= int(expires_at):
-            return self._store(cmd_id, _rejected("expired"))
+            return self._store(cmd_id, _rejected("expired"), keep_until)
         payload = command.get("payload")
         if not isinstance(payload, dict):
-            return self._store(cmd_id, _rejected("payload must be an object"))
+            return self._store(cmd_id, _rejected("payload must be an object"), keep_until)
         try:
             if cmd_type == "ph_calibrate":
                 outcome = self._ph_calibrate(payload)
@@ -193,21 +204,28 @@ class DeviceCommandDispatcher:
                 outcome = self._rs485_config(payload)
         except Exception as exc:  # noqa: BLE001 — one failed command must post rejected
             outcome = _rejected(str(exc) or "command failed")
-        return self._store(cmd_id, outcome)
+        return self._store(cmd_id, outcome, keep_until)
 
-    def _store(self, cmd_id: Any, outcome: CommandOutcome) -> CommandOutcome:
+    def _keep_until_ms(self, raw: Any) -> int:
+        if _finite(raw):
+            return int(raw)
+        return self._now_ms() + HANDLED_WITHOUT_EXPIRES_MS
+
+    def _evict_expired(self) -> None:
+        now = self._now_ms()
+        for cmd_id in [key for key, row in self._handled.items() if now >= row.expires_at_ms]:
+            del self._handled[cmd_id]
+
+    def _store(self, cmd_id: Any, outcome: CommandOutcome, keep_until: int) -> CommandOutcome:
         if not isinstance(cmd_id, str) or not cmd_id:
             return outcome
-        if cmd_id in self._handled:
-            self._handled.move_to_end(cmd_id)
-        else:
-            while len(self._handled) >= HANDLED_COMMANDS_MAX:
-                self._handled.popitem(last=False)
-        self._handled[cmd_id] = outcome
+        self._evict_expired()
+        self._handled[cmd_id] = _Handled(outcome=outcome, expires_at_ms=keep_until)
+        self._handled.move_to_end(cmd_id)
         self._save_handled()
         return outcome
 
-    def _load_handled(self) -> OrderedDict[str, CommandOutcome]:
+    def _load_handled(self) -> OrderedDict[str, _Handled]:
         if self._cache_path is None or not self._cache_path.is_file():
             return OrderedDict()
         try:
@@ -217,8 +235,9 @@ class DeviceCommandDispatcher:
             return OrderedDict()
         if not isinstance(raw, list):
             return OrderedDict()
-        handled: OrderedDict[str, CommandOutcome] = OrderedDict()
-        for item in raw[-HANDLED_COMMANDS_MAX:]:
+        handled: OrderedDict[str, _Handled] = OrderedDict()
+        fallback = self._now_ms() + HANDLED_WITHOUT_EXPIRES_MS
+        for item in raw:
             if not (
                 isinstance(item, list)
                 and len(item) == 2
@@ -230,10 +249,15 @@ class DeviceCommandDispatcher:
             status = body.get("status")
             if status not in ("applied", "rejected"):
                 continue
-            handled[item[0]] = CommandOutcome(
-                status=status,
-                result=body.get("result") if isinstance(body.get("result"), dict) else None,
-                message=str(body.get("message") or ""),
+            expires = body.get("expiresAt")
+            keep_until = int(expires) if _finite(expires) else fallback
+            handled[item[0]] = _Handled(
+                outcome=CommandOutcome(
+                    status=status,
+                    result=body.get("result") if isinstance(body.get("result"), dict) else None,
+                    message=str(body.get("message") or ""),
+                ),
+                expires_at_ms=keep_until,
             )
         return handled
 
@@ -244,12 +268,13 @@ class DeviceCommandDispatcher:
             [
                 cmd_id,
                 {
-                    "status": outcome.status,
-                    "result": outcome.result,
-                    "message": outcome.message,
+                    "status": row.outcome.status,
+                    "result": row.outcome.result,
+                    "message": row.outcome.message,
+                    "expiresAt": row.expires_at_ms,
                 },
             ]
-            for cmd_id, outcome in self._handled.items()
+            for cmd_id, row in self._handled.items()
         ]
         try:
             atomic_write_text(

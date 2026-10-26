@@ -37,6 +37,10 @@ from cloud.register import note_http_key_revoked
 
 logger = logging.getLogger("wqm1.cloud")
 
+# post_command_result: 4xx other than 408/429 are permanent; do not retry.
+RESULT_POST_DROP = "drop"
+_RESULT_RETRY_HTTP = frozenset({0, 408, 429})
+
 # DB column -> cloud sensor name. Cloud SENSOR_RANGES keys (functions/readings.js).
 _SENSOR_MAP = {
     "ph": "ph",
@@ -421,12 +425,13 @@ class CloudClient:
         status: str,
         result: dict[str, Any] | None = None,
         message: str | None = None,
-    ) -> bool:
+    ) -> bool | str:
         """POST ``/v2/devices/{id}/commands/{cmdId}/result``.
 
         Returns True when Cloud accepted the result (HTTP 200) or already
-        recorded it (HTTP 409). False on transport / other errors so the
-        worker can retry the stored result without re-running the command.
+        recorded it (HTTP 409). False on transport errors, 5xx, 408, or 429
+        so the worker can retry the stored result. Returns RESULT_POST_DROP
+        for other 4xx (the command is gone; retrying will not help).
         """
         if not command_id or not self._api_base:
             return False
@@ -436,7 +441,18 @@ class CloudClient:
         if message:
             body["message"] = str(message)[:200]
         http, _ = self._post(self._device_url(f"commands/{command_id}/result"), body)
-        return http in (200, 409)
+        if http in (200, 409):
+            return True
+        if http >= 500 or http in _RESULT_RETRY_HTTP:
+            return False
+        if 400 <= http < 500:
+            logger.warning(
+                "Result POST for %s is terminal HTTP %s; will not retry",
+                command_id,
+                http,
+            )
+            return RESULT_POST_DROP
+        return False
 
     # -- v2 telemetry -----------------------------------------------------------
 

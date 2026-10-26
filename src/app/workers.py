@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from app.state import StateStore
+from cloud.client import RESULT_POST_DROP
 from cloud.device_commands import HANDLED_COMMANDS_MAX
 from cloud.register import STOP_BACKOFF_S, attempt_register, set_config_path
 from utils.config import FIRMWARE_VERSION
@@ -803,6 +804,11 @@ class CommandWorker(Worker):
             )
             return
         self._unposted_device_results.pop(cmd_id, None)
+        if posted == RESULT_POST_DROP:
+            logger.warning(
+                "Result POST for %s dropped (terminal); will not retry",
+                cmd_id,
+            )
 
 
 class HeartbeatWorker(Worker):
