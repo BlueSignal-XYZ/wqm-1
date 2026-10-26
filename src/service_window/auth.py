@@ -87,7 +87,7 @@ def _wifi_setup_on_hotspot() -> bool:
     try:
         from service_window.captive import from_hotspot
 
-        return request.endpoint in _HOTSPOT_OPEN and from_hotspot()
+        return request.endpoint in _HOTSPOT_OPEN and from_hotspot() and _same_origin_write()
     except Exception:
         return False
 
@@ -113,9 +113,8 @@ def _bench_request_is_ours() -> bool:
 
     * Host must name loopback. A DNS-rebinding page arrives with its own
       name as Host, and could otherwise read every page.
-    * A request that changes something must be same-origin. ``Sec-Fetch-Site``,
-      when sent, is ``same-origin`` or ``none``, and ``Origin``, when sent,
-      is this host.
+    * A request that changes something must be same-origin
+      (``_same_origin_write``).
 
     curl and scripts on the bench send neither header, so they pass.
     """
@@ -123,12 +122,25 @@ def _bench_request_is_ours() -> bool:
     name = host.split("]", 1)[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
     if name not in _LOOPBACK_HOSTS:
         return False
+    return _same_origin_write()
+
+
+def _same_origin_write() -> bool:
+    """A request that changes something came from this page, not another site.
+
+    The hotspot needs it as much as the tunnel does: a phone on the setup
+    hotspot often keeps cellular, so a page it loads elsewhere can POST to
+    http://192.168.4.1/setup/network. The port-80 relay passes the phone's
+    Host header through, so Origin is compared with the Host the browser
+    used. A client that sends neither header (curl) passes.
+    """
     if request.method in _SAFE_METHODS:
         return True
     site = request.headers.get("Sec-Fetch-Site")
     if site is not None and site not in {"same-origin", "none"}:
         return False
     origin = request.headers.get("Origin")
+    host = (request.host or "").lower()
     return origin is None or origin.lower() in {f"http://{host}", f"https://{host}"}
 
 

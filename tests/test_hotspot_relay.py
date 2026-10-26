@@ -84,6 +84,45 @@ class TestRelayedSetupRequests:
         app = make_app(tmp_path, mock_hardware)
         assert _get(app, "/setup/network", "127.0.0.1", RELAYED).status_code == 403
 
+    # Cursor security review on #153 (b35f319): a phone on the hotspot that
+    # keeps cellular can be made to POST from a page on another site.
+
+    def test_a_cross_site_post_from_a_hotspot_phone_is_refused(
+        self, tmp_path, mock_hardware, real_hotspot
+    ):
+        app = make_app(tmp_path, mock_hardware)
+        form = {"action": "join", "ssid": "Evil", "password": "hunter22"}
+        for remote, extra in (("127.0.0.1", RELAYED), ("192.168.4.23", {})):
+            for headers in (
+                {"Origin": "https://evil.example"},
+                {"Sec-Fetch-Site": "cross-site"},
+            ):
+                with app.test_client() as c:
+                    r = c.post(
+                        "/setup/network",
+                        data=form,
+                        headers={"Host": "192.168.4.1", **extra, **headers},
+                        environ_base={"REMOTE_ADDR": remote},
+                    )
+                assert r.status_code == 403, (remote, headers)
+
+    def test_the_setup_page_itself_still_posts(self, tmp_path, mock_hardware, real_hotspot):
+        app = make_app(tmp_path, mock_hardware)
+        same_origin = {
+            "Host": "192.168.4.1",
+            "Origin": "http://192.168.4.1",
+            "Sec-Fetch-Site": "same-origin",
+        }
+        with app.test_client() as c:
+            r = c.post(
+                "/setup/network",
+                data={"action": "rescan"},
+                headers={**RELAYED, **same_origin},
+                environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            )
+        assert r.status_code != 403
+        assert b"no local sign-in" not in r.data
+
 
 class TestBenchTunnel:
     """Decision 2 (24 Oct 2026): staff reach the Service Window at the bench
