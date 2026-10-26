@@ -288,6 +288,28 @@ class TestOrangePiPins:
         )
         assert pins.source == "profile"
 
+    def test_writing_overrides_leaves_a_sibling_temp_file_alone(self, tmp_path):
+        """host-pins.yaml must not write through host-pins.tmp, the temp name a
+        sibling file with the same stem would also use."""
+        import importlib.util
+        from pathlib import Path
+
+        import yaml
+
+        script = Path(__file__).resolve().parent.parent / "scripts" / "host-pins.py"
+        spec = importlib.util.spec_from_file_location("host_pins_script", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        path = tmp_path / "host-pins.yaml"
+        sibling_tmp = tmp_path / "host-pins.tmp"
+        sibling_tmp.write_text("another writer's temp file")
+        module._write_overrides(path, {12: "PD5"}, {"spi_bus": 1})
+        assert sibling_tmp.read_text() == "another writer's temp file"
+        assert not (tmp_path / "host-pins.yaml.tmp").exists()
+        data = yaml.safe_load(path.read_text())
+        assert data["pins"] == {12: "PD5"} and data["spi_bus"] == 1
+
     def test_hostpins_is_frozen(self):
         pins = rpi_pins()
         with pytest.raises(AttributeError):

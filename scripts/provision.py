@@ -74,12 +74,11 @@ def _write_config(updates: dict[str, Any]) -> None:
 
     config = _read_config()
     config.update(updates)
-    p = Path(_CONFIG_PATH)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
-    tmp.replace(p)
+    from utils.atomic import atomic_write_text
+
+    atomic_write_text(
+        _CONFIG_PATH, yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
+    )
 
 
 def _run_diagnostics() -> bool:

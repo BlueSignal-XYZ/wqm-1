@@ -72,3 +72,16 @@ class TestConfigReadWrite:
             _write_config({"app_key": "A" * 32})
             cfg = _read_config()
             assert cfg["app_key"] == "A" * 32
+
+    def test_write_leaves_a_sibling_temp_file_alone(self, tmp_path):
+        """config.yaml must not write through config.tmp: config.json would use
+        the same temp name, and one write would replace the other's file."""
+        from provision import _write_config
+
+        config_path = tmp_path / "config.yaml"
+        sibling_tmp = tmp_path / "config.tmp"
+        sibling_tmp.write_text("another writer's temp file")
+        with patch("provision._CONFIG_PATH", str(config_path)):
+            _write_config({"app_key": "A" * 32})
+        assert sibling_tmp.read_text() == "another writer's temp file"
+        assert not (tmp_path / "config.yaml.tmp").exists()
