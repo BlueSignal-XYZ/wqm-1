@@ -1520,8 +1520,12 @@ def _sigterm_held() -> Any:
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    held: list[tuple[int, Any]] = []
     previous = signal.getsignal(signal.SIGTERM)
+    if previous is None:
+        # Installed from C: Python cannot put it back, so leave it alone.
+        yield
+        return
+    held: list[tuple[int, Any]] = []
     signal.signal(signal.SIGTERM, lambda signum, frame: held.append((signum, frame)))
     try:
         yield

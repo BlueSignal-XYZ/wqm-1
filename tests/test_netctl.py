@@ -1363,6 +1363,23 @@ def test_a_sigterm_during_the_restore_waits_for_the_hotspot(nm, monkeypatch, tmp
     assert "hotspot: up" in (tmp_path / "wqm1-status.txt").read_text()
 
 
+def test_the_sigterm_hold_leaves_a_c_handler_alone(monkeypatch):
+    """Claude review on #153 (5e946a4): getsignal returns None for a handler
+    installed from C, and signal.signal(SIGTERM, None) raises TypeError."""
+    import signal
+
+    from utils import netctl
+
+    set_calls = []
+    monkeypatch.setattr(signal, "getsignal", lambda _signum: None)
+    monkeypatch.setattr(signal, "signal", lambda *a: set_calls.append(a))
+    ran = []
+    with netctl._sigterm_held():
+        ran.append(True)
+    assert ran == [True]
+    assert set_calls == []
+
+
 def test_the_retry_timer_is_installed_and_enabled():
     from pathlib import Path
 
