@@ -1,8 +1,6 @@
 # Install v3: firmware build plan
 
-**PR:** stacked on #155 (`claude/loving-lamport-hq4t3a`) until that PR
-merges. This file is edited on #159 (`grok/build-155-review3`). #155
-itself is not edited here.
+#155 is based on master; #159 (review fixes) and #153 (with #157, no PIN anywhere, bench SSH tunnel) have merged.
 
 **Status:** plan, 2026-10-24. Written by Claude for Grok under the `AGENTS.md`
 handoff. Revised the same day after the review on PR #155 to match the
@@ -720,6 +718,8 @@ join does not see the password. The two fixtures in the precondition pass.
 ---
 
 ## §9. Delete the wizard and the PIN (W6)
+
+Merge only after section 10; see Order and dependencies.
 
 Decision 1 is answered (24 Oct 2026) and does not hold this PR. This PR
 deletes the setup wizard and the PIN only. It does not turn the local
