@@ -23,11 +23,9 @@ def _client(tmp_path, mock_hardware, monkeypatch, status_text="firmware: 2.4.0\n
     status = tmp_path / "wqm1-status.txt"
     status.write_text(status_text, encoding="utf-8")
     monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
-    app = make_app(tmp_path, mock_hardware)
+    app = make_app(tmp_path, mock_hardware, open_window=True)
     assert not Path(app.config["CMD_SOCK"]).exists()
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
     return client, app
 
 
@@ -38,7 +36,6 @@ class TestSetupWhenFirmwareIsAbsent:
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
         assert client.get("/setup/").headers["Location"].endswith("/setup/network")
         for path in (
-            "/setup/pin",
             "/setup/identity",
             "/setup/cloud",
             "/setup/sensors",
@@ -98,11 +95,9 @@ class TestSetupWhenFirmwareIsAbsent:
         status = tmp_path / "wqm1-status.txt"
         status.write_text("firmware: 2.4.0\n", encoding="utf-8")
         monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
-        app = make_app(tmp_path, mock_hardware)
+        app = make_app(tmp_path, mock_hardware, open_window=True)
         app.config["DB_PATH"] = str(tmp_path / "missing" / "wqm1.db")
         with app.test_client() as client:
-            with client.session_transaction() as sess:
-                sess["pin_verified"] = True
             sensors = client.get("/setup/sensors")
             done = client.get("/setup/done")
         assert sensors.status_code == 200
@@ -116,7 +111,6 @@ class TestSetupWhenFirmwareIsAbsent:
         self, tmp_path, mock_hardware, monkeypatch
     ):
         client, app = _client(tmp_path, mock_hardware, monkeypatch)
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post("/setup/done", data={}, follow_redirects=False)
         assert resp.status_code == 302
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
@@ -135,7 +129,6 @@ class TestMissingProbeFromStatusFile:
             monkeypatch,
             status_text="adc: faulted\nonewire: ok\n",
         )
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         page = client.get("/setup/done").data.decode()
         assert "Finish without probe ADC" in page
         assert "not detected" in page
@@ -162,9 +155,9 @@ class TestStartingRefreshNeverEatsTyping:
     Wi-Fi password while the installer was typing them. The refresh still
     runs on an untouched page, and stops once a field is touched."""
 
-    def test_pin_and_network_pages_guard_the_refresh(self, tmp_path, mock_hardware, monkeypatch):
+    def test_sensor_page_guards_the_refresh(self, tmp_path, mock_hardware, monkeypatch):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
-        for path in ("/setup/pin", "/setup/sensors"):
+        for path in ("/setup/sensors",):
             page = client.get(path).data.decode()
             assert "window.location.reload()" in page, path
             assert "if (touched) { return; }" in page, path
@@ -187,5 +180,5 @@ class TestComingBackMidSetup:
     def test_the_landing_page_is_the_wifi_page(self, tmp_path, mock_hardware, monkeypatch):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
         assert client.get("/setup/").headers["Location"].endswith("/setup/network")
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
+        client.get("/setup/sensors")
         assert client.get("/setup/").headers["Location"].endswith("/setup/network")

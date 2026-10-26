@@ -61,7 +61,7 @@ echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 # card cut from an image that holds them would upload unit 1's bench samples
 # under its own label the moment its key is consumed), the cached water
 # profile, the OTA/reboot request flags, the first-boot marker and the
-# journal. Config (probes, variant, the factory PIN, setup not finished) and
+# journal. Config (probes, variant, setup not finished) and
 # the Wi-Fi the run checks in over stay. Mirrors ops -> Units -> "Bench a
 # WQM-1 run" -> Capture the master image.
 if [ "${1:-}" = "--golden" ]; then
@@ -475,7 +475,7 @@ echo "  current -> $RELEASE_DIR"
 
 # /etc/bluesignal must be writable by the service user, not just readable.
 # The service window provisions the device by rewriting config.yaml (AppKey,
-# cloud_enabled, api_key, PIN). It runs as $INSTALL_USER, so a root-owned
+# cloud_enabled, api_key). It runs as $INSTALL_USER, so a root-owned
 # /etc/bluesignal makes every save fail with a 500 and the provisioning page
 # is read-only in practice — which is the one thing it exists to do.
 sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal /etc/bluesignal
@@ -621,12 +621,13 @@ echo "  6. Start service:    sudo systemctl start bluesignal-wqm"
 echo "  7. View logs:        journalctl -u bluesignal-wqm -f"
 echo ""
 echo "Service Window:"
-echo "  Web UI:              http://$(hostname).local:8080"
-echo "  Default PIN:         1234 (change in /etc/bluesignal/config.yaml)"
+echo "  Bench access:        ssh -L 8080:127.0.0.1:8080 $INSTALL_USER@$(hostname).local"
+echo "                       then open http://localhost:8080"
+echo "  Local page:          hotspot setup only; owners use BlueSignal Cloud. There is no PIN."
 echo ""
 echo "Provisioning:"
 echo "  CLI wizard:          sudo python3 /opt/bluesignal/current/scripts/provision.py"
-echo "  Web wizard:          http://$(hostname).local:8080/provision"
+echo "  Web wizard:          http://localhost:8080/provision (through the bench tunnel)"
 echo ""
 echo "OTA updates:"
 echo "  Layout:              releases in $INSTALL_DIR/releases/, active = $CURRENT_LINK"

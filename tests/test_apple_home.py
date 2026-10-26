@@ -30,6 +30,7 @@ from integrations.apple_home.accessory import (
     accessory_name,
 )
 from integrations.apple_home.bridge import STATE_FILENAME
+from tests.remote import HOME_NETWORK, from_addr
 from utils.config import SETTINGS_SCHEMA, Settings, validate_values
 from utils.health import HealthReporter
 
@@ -384,11 +385,12 @@ def sw_client(tmp_path, monkeypatch):
     )
     conn.close()
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump({"apple_home_enabled": False}))
+    config_path.write_text(
+        yaml.safe_dump({"apple_home_enabled": False, "service_window": {"setup_completed": True}})
+    )
     app = create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
             "config_path": str(config_path),
             "cal_path": str(tmp_path / "cal.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
@@ -396,8 +398,8 @@ def sw_client(tmp_path, monkeypatch):
         }
     )
     app.config["TESTING"] = True
+    app.config["TEST_OPEN_WINDOW"] = True
     client = app.test_client()
-    client.post("/login", data={"pin": "9999"})
     sent: list[tuple[str, dict]] = []
     answer: dict[str, Any] = {
         "ok": True,
@@ -471,5 +473,7 @@ class TestServiceWindow:
 
     def test_page_requires_login(self, sw_client):
         client, _, _, _ = sw_client
+        client.application.config["TEST_OPEN_WINDOW"] = False
         client.get("/logout")
-        assert client.get("/apple-home/").status_code in (302, 401)
+        from_addr(client, HOME_NETWORK)
+        assert client.get("/apple-home/").status_code == 403

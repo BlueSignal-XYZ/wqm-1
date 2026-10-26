@@ -262,22 +262,21 @@ it with before/after state, a config and database backup, and a diagnostics run
 ### Step 3b — Commission from a phone (no SSH)
 
 Everything in Step 4 can be done from a phone browser instead, and on a new
-unit that is the intended path. Power the unit, join its network, and open
-`http://<hostname>.local:8080` (on the setup hotspot the page opens by itself).
-Until setup is finished the unit serves only the
-wizard:
+unit that is the intended path. Power the unit and join its setup hotspot
+`WQM1-xxxx`; the setup page opens by itself (or open
+`http://192.168.4.1/setup/`). Until setup is finished the unit serves only
+the wizard:
 
 | Step | What it settles |
 |------|-----------------|
-| PIN | Replaces the factory PIN (1234 is refused) |
+| Network | Join the site Wi-Fi **at the final mounting position, enclosure closed**. That finishes setup. There is no PIN. |
 | Identity | Device ID + DevEUI, with a QR code for your install records |
-| Network | WiFi signal **at the final mounting position, enclosure closed** |
-| Cloud | The device API key, verified against the cloud before you leave |
+| Cloud | The unit registers itself; the installer path has no key paste |
 | Sensors | **Which probes are physically fitted** — nothing is sampled until declared |
 | Finish | Go/no-go over sensors, cloud, LoRa, GPS and storage |
 
-The wizard gates the UI only while the PIN is still `1234` and setup has never
-been completed. After that the same pages are reachable individually.
+Until setup is finished the unit serves only the wizard, and only on its own
+hotspot. After that the local page stays off; owners use BlueSignal Cloud.
 
 > **WiFi credentials can only be set when the card is imaged.** The Service
 > Window is served over the unit's own network connection, so it cannot join a
@@ -554,20 +553,23 @@ sudo systemctl status bluesignal-service-window
 sudo systemctl enable --now bluesignal-service-window   # if not running
 ```
 
-Then from another machine on the same network:
+The Service Window answers nobody on the network. At the bench, open an SSH
+tunnel from your machine and use `localhost`:
 
 ```
-http://<pi-ip>:8080/                   # dashboard (or the first-boot wizard)
-http://<pi-ip>:8080/setup/             # first-boot wizard, if not yet completed
-http://<pi-ip>:8080/sensors/           # live sensor readings
-http://<pi-ip>:8080/sensors/data.json  # raw JSON
-http://<pi-ip>:8080/lora/              # set AppKey, view join state
-http://<pi-ip>:8080/relays/            # manual relay control
-http://<pi-ip>:8080/calibration/       # pH/TDS/turbidity calibration
-http://<pi-ip>:8080/rs485/             # add and address RS485 digital probes
-http://<pi-ip>:8080/awg/               # bind / switch the AWG smart-breaker circuit (optional)
-http://<pi-ip>:8080/settings/          # config, PIN, remote reboot
-http://<pi-ip>:8080/diagnostics/       # run hardware probe
+ssh -L 8080:127.0.0.1:8080 pi@<pi-ip>
+
+http://localhost:8080/                   # dashboard (or the first-boot wizard)
+http://localhost:8080/setup/             # first-boot wizard, if not yet completed
+http://localhost:8080/sensors/           # live sensor readings
+http://localhost:8080/sensors/data.json  # raw JSON
+http://localhost:8080/lora/              # set AppKey, view join state
+http://localhost:8080/relays/            # manual relay control
+http://localhost:8080/calibration/       # pH/TDS/turbidity calibration
+http://localhost:8080/rs485/             # add and address RS485 digital probes
+http://localhost:8080/awg/               # bind / switch the AWG smart-breaker circuit (optional)
+http://localhost:8080/settings/          # config, remote reboot
+http://localhost:8080/diagnostics/       # run hardware probe
 ```
 
 #### Configuration

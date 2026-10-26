@@ -11,9 +11,9 @@ import yaml
 def _setup_done_config(tmp_path):
     """A config.yaml with the setup wizard marked complete.
 
-    v2's before_request funnel redirects EVERY route into /setup while the
-    factory PIN is in place and setup_completed is unset — these tests are
-    about diagnostics/provisioning/relays, not the wizard, so they must opt
+    v2's before_request funnel redirects EVERY route into /setup while
+    setup_completed is unset — these tests are about
+    diagnostics/provisioning/relays, not the wizard, so they must opt
     out or every request under test lands on the wizard instead.
     """
     import yaml as _yaml
@@ -73,61 +73,6 @@ class TestAppConfigLoading:
 
 
 # ---------------------------------------------------------------------------
-# auth.py:53 — _record_attempt() creates new IP entry
-# ---------------------------------------------------------------------------
-class TestAuthRecordAttempt:
-    def test_record_attempt_creates_new_ip_entry(self, mock_hardware):
-        from service_window.auth import _attempts, _record_attempt
-
-        _attempts.clear()
-        _record_attempt("192.168.1.99")
-        assert "192.168.1.99" in _attempts
-        assert len(_attempts["192.168.1.99"]) == 1
-        _attempts.clear()
-
-
-# ---------------------------------------------------------------------------
-# auth.py — _prune_stale_ips() removes old entries
-# ---------------------------------------------------------------------------
-class TestAuthPruneStaleIps:
-    def test_prune_removes_stale_ips(self, mock_hardware):
-        import time
-
-        from service_window.auth import _attempts, _prune_stale_ips
-
-        _attempts.clear()
-        _attempts["10.0.0.1"] = [time.time() - 120]
-        _attempts["10.0.0.2"] = [time.time()]
-        _prune_stale_ips(time.time())
-        assert "10.0.0.1" not in _attempts
-        assert "10.0.0.2" in _attempts
-        _attempts.clear()
-
-    def test_prune_removes_empty_lists(self, mock_hardware):
-        import time
-
-        from service_window.auth import _attempts, _prune_stale_ips
-
-        _attempts.clear()
-        _attempts["10.0.0.3"] = []
-        _prune_stale_ips(time.time())
-        assert "10.0.0.3" not in _attempts
-        _attempts.clear()
-
-    def test_rate_limited_prunes_on_check(self, mock_hardware):
-        """_is_rate_limited triggers pruning of stale IPs."""
-        import time
-
-        from service_window.auth import _attempts, _is_rate_limited
-
-        _attempts.clear()
-        _attempts["stale.ip"] = [time.time() - 120]
-        _is_rate_limited("fresh.ip")
-        assert "stale.ip" not in _attempts
-        _attempts.clear()
-
-
-# ---------------------------------------------------------------------------
 # diagnostics.py:34,48-51,68-69
 # ---------------------------------------------------------------------------
 class TestDiagnosticsEdgeCases:
@@ -160,31 +105,32 @@ class TestDiagnosticsEdgeCases:
         conn.close()
         app = create_app(
             {
-                # Non-factory PIN: units on 1234 are force-redirected to /setup.
-                "PIN": "9999",
                 "db_path": db_path,
-                # Non-factory PIN: needs_setup() short-circuits on it WITHOUT reading
-                # config.yaml — several tests here patch Path.exists globally, which
-                # would otherwise re-engage the setup funnel mid-test.
-                "pin": "9999",
+                # setup_completed in config.yaml is the only funnel gate.
+                # Several tests here patch Path.exists globally.
                 "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }
         )
         app.config["TESTING"] = True
+        app.config["TEST_OPEN_WINDOW"] = True
         return app
 
     @pytest.fixture
     def authed(self, diag_app):
-        client = diag_app.test_client()
-        with client.session_transaction() as sess:
-            sess["pin_verified"] = True
-        return client
+        return diag_app.test_client()
 
     def test_diagnostics_run_script_not_found(self, authed, mock_hardware):
         """When diagnostics.sh doesn't exist, render 'not found' message."""
-        with patch.object(Path, "exists", return_value=False):
+        original = Path.exists
+
+        def exists(self):
+            if str(self).endswith("diagnostics.sh"):
+                return False
+            return original(self)
+
+        with patch.object(Path, "exists", exists):
             resp = authed.get("/diagnostics/run")
         assert resp.status_code == 200
         assert b"not found" in resp.data
@@ -261,27 +207,21 @@ class TestProvisionEdgeCases:
         conn.close()
         app = create_app(
             {
-                # Non-factory PIN: units on 1234 are force-redirected to /setup.
-                "PIN": "9999",
                 "db_path": db_path,
-                # Non-factory PIN: needs_setup() short-circuits on it WITHOUT reading
-                # config.yaml — several tests here patch Path.exists globally, which
-                # would otherwise re-engage the setup funnel mid-test.
-                "pin": "9999",
+                # setup_completed in config.yaml is the only funnel gate.
+                # Several tests here patch Path.exists globally.
                 "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }
         )
         app.config["TESTING"] = True
+        app.config["TEST_OPEN_WINDOW"] = True
         return app
 
     @pytest.fixture
     def authed(self, prov_app):
-        client = prov_app.test_client()
-        with client.session_transaction() as sess:
-            sess["pin_verified"] = True
-        return client
+        return prov_app.test_client()
 
     def test_get_identity_fallback_on_import_error(self, authed, mock_hardware):
         """When utils.identity import fails, use fallback identity."""
@@ -322,7 +262,14 @@ class TestProvisionEdgeCases:
 
     def test_verify_script_not_found(self, authed, mock_hardware):
         """verify() reports not found when diagnostics.sh does not exist."""
-        with patch.object(Path, "exists", return_value=False):
+        original = Path.exists
+
+        def exists(self):
+            if str(self).endswith("diagnostics.sh"):
+                return False
+            return original(self)
+
+        with patch.object(Path, "exists", exists):
             resp = authed.get("/provision/verify")
         assert resp.status_code == 200
         assert b"not found" in resp.data
@@ -384,26 +331,21 @@ class TestRelaySuccessFlash:
         conn.close()
         app = create_app(
             {
-                # Non-factory PIN: units on 1234 are force-redirected to /setup.
-                "PIN": "9999",
                 "db_path": db_path,
-                # Non-factory PIN: needs_setup() short-circuits on it WITHOUT reading
-                # config.yaml — several tests here patch Path.exists globally, which
-                # would otherwise re-engage the setup funnel mid-test.
-                "pin": "9999",
+                # setup_completed in config.yaml is the only funnel gate.
+                # Several tests here patch Path.exists globally.
                 "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
             }
         )
         app.config["TESTING"] = True
+        app.config["TEST_OPEN_WINDOW"] = True
         return app
 
     def test_relay_form_success_flash(self, relay_app, mock_hardware):
         """Successful relay command produces success flash."""
         client = relay_app.test_client()
-        with client.session_transaction() as sess:
-            sess["pin_verified"] = True
 
         with patch(
             "service_window.routes.relays.send_command",

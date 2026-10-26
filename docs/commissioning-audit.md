@@ -366,8 +366,8 @@ commissioning because the bench is indoors.
   brings the hotspot and the portal back.
 - The station grace period is 45 s only when a Wi-Fi profile is already
   saved. An unconfigured unit does not wait.
-- The factory PIN is rejected before the radio is touched, so a join
-  cannot finish on the factory PIN and then strand the phone.
+- There is no PIN. A successful join finishes setup; a failed join
+  brings the hotspot back so the phone can try again.
 - Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) is in the
   dedicated dnsmasq bound to `wlan0`. That process is stopped before the
   join, so it does not hijack DNS on the site. The port-80 listener

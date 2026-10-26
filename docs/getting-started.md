@@ -353,17 +353,20 @@ New units are commissioned entirely from a phone browser — no SSH, no config
 files. Power the unit. If it cannot see a known Wi-Fi network it raises
 `WQM1-xxxx`; join that hotspot and the phone's captive-portal sheet opens
 `http://192.168.4.1/setup/` on its own. `http://192.168.4.1:8080/setup/` is
-the same wizard if the sheet does not appear. Once the unit is on the site
-network, use `http://<unit-ip>:8080`. Until setup is completed the unit
-shows only the guided wizard:
+the same wizard if the sheet does not appear. After the unit joins the site
+network, owners use BlueSignal Cloud; the local page stays off. Until setup
+is completed the unit shows only the guided wizard, on its own hotspot:
 
-1. **PIN** — replace the factory PIN (1234 is refused).
-2. **Identity** — device ID + DevEUI with a QR code for your install records.
-3. **Cloud** — paste the device API key from cloud.bluesignal.xyz.
+1. **Wi-Fi** — join the site network from this unit's own hotspot. That
+   finishes setup. There is no PIN.
+2. **Identity** — device ID + DevEUI with a QR code for your install records
+   (carded units skip this).
+3. **Cloud** — the unit registers itself; the installer path has no key paste.
 4. **Sensor check** — live traffic-light cards; each problem card says what to
    check in plain language.
 5. **Go / no-go** — a final checklist covering sensors, cloud, LoRa, GPS and
-   storage. Finish restarts monitoring with everything applied.
+   storage. Finish restarts monitoring with everything applied. After setup,
+   owners use BlueSignal Cloud; the local page stays off.
 
 The dashboard home page keeps the same traffic-light language afterwards:
 green = fine, amber = worth a look, red = needs attention — every card carries

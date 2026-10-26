@@ -16,6 +16,7 @@ from service_window.app import create_app
 from service_window.health import smart_breaker_card
 from service_window.routes import awg as awg_routes
 from service_window.routes import status as status_routes
+from tests.remote import HOME_NETWORK, from_addr
 
 DEVICE_UUID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 SITE_UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -49,7 +50,9 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def config_path(tmp_path):
-    return str(tmp_path / "config.yaml")
+    p = tmp_path / "config.yaml"
+    p.write_text("service_window:\n  setup_completed: true\n")
+    return str(p)
 
 
 @pytest.fixture
@@ -66,7 +69,6 @@ def app(db_path, tmp_path, config_path, secrets_dir, monkeypatch):
     return create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
             "config_path": config_path,
             "cal_path": str(tmp_path / "calibration.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
@@ -78,10 +80,8 @@ def app(db_path, tmp_path, config_path, secrets_dir, monkeypatch):
 @pytest.fixture
 def client(app):
     app.config["TESTING"] = True
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client
+    app.config["TEST_OPEN_WINDOW"] = True
+    return app.test_client()
 
 
 @pytest.fixture
@@ -103,6 +103,10 @@ def commands(monkeypatch):
 
 
 def write_config(path: str, **values) -> None:
+    values = dict(values)
+    sw = dict(values.get("service_window") or {})
+    sw.setdefault("setup_completed", True)
+    values["service_window"] = sw
     with open(path, "w") as f:
         yaml.safe_dump(values, f)
 
@@ -118,6 +122,11 @@ def read_config(path: str) -> dict:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
         return {}
+
+
+def no_binding(path: str) -> bool:
+    """A refused bind must not write breaker keys. setup_completed may stay."""
+    return {k: v for k, v in read_config(path).items() if k != "service_window"} == {}
 
 
 def live_status(**overrides) -> dict:
@@ -188,10 +197,10 @@ class TestNavigation:
 
     def test_page_requires_login(self, app, commands):
         app.config["TESTING"] = True
-        anon = app.test_client()
+        anon = from_addr(app.test_client(), HOME_NETWORK)
         resp = anon.get("/awg/")
-        assert resp.status_code == 302
-        assert "/login" in resp.headers["Location"]
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
 
 
 # --------------------------------------------------------------------------
@@ -416,7 +425,7 @@ class TestBinding:
         assert b"Eaton client ID is required" in resp.data
         assert b"Eaton client secret is required" in resp.data
         assert b"Eaton subscription key is required" in resp.data
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_credentials_installed_as_files_satisfy_the_binding(
         self, client, commands, config_path, secrets_dir
@@ -451,14 +460,14 @@ class TestBinding:
             follow_redirects=True,
         )
         assert b"does not look like a UUID" in resp.data
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_device_uuid_required_for_ableedge(self, client, commands, config_path):
         resp = client.post(
             "/awg/bind", data=bind_form(smart_breaker_device_id=""), follow_redirects=True
         )
         assert b"Device UUID is required" in resp.data
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_site_uuid_is_optional_but_validated(self, client, commands, config_path):
         resp = client.post(
@@ -473,27 +482,27 @@ class TestBinding:
             "/awg/bind", data=bind_form(smart_breaker_circuit_amps=""), follow_redirects=True
         )
         assert b"Circuit ampacity is required" in resp.data
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_schema_bounds_are_enforced(self, client, commands, config_path):
         resp = client.post(
             "/awg/bind", data=bind_form(smart_breaker_circuit_amps="999"), follow_redirects=True
         )
         assert resp.status_code == 200
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_unknown_fail_safe_is_refused(self, client, commands, config_path):
         client.post(
             "/awg/bind", data=bind_form(smart_breaker_fail_safe="maybe"), follow_redirects=True
         )
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_non_numeric_number_is_a_friendly_error(self, client, commands, config_path):
         resp = client.post(
             "/awg/bind", data=bind_form(smart_breaker_poll_s="soon"), follow_redirects=True
         )
         assert b"Poll interval: not a whole number" in resp.data
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_relay_only_needs_a_channel(self, client, commands, config_path):
         resp = client.post(
@@ -508,7 +517,7 @@ class TestBinding:
             follow_redirects=True,
         )
         assert b"Relay-only mode needs an interlock relay" in resp.data
-        assert read_config(config_path) == {}
+        assert no_binding(config_path)
 
     def test_relay_only_binding_needs_no_eaton_fields(self, client, commands, config_path):
         client.post(

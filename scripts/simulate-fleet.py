@@ -11,7 +11,7 @@ Two tiers (commissioning plan, Track B):
         firmware processes with simulate_enabled, each with its own Service
         Window on its own port. Proves the commissioning wizard. With
         --commission the setup wizard is driven the way an installer's phone
-        drives it (site flow v2: PIN → probes → join the owner's Wi-Fi).
+        drives it (site flow v2: probes → join the owner's Wi-Fi).
 
 Every full-tier unit gets a VIRTUAL Wi-Fi radio (``utils/netsim.py``,
 ``WQM1_VIRTUAL_NET``): its setup hotspot is up, the bench network is saved,
@@ -76,8 +76,6 @@ from sensors.sim.unit import (  # noqa: E402
 from utils.config import Settings  # noqa: E402
 
 PLACEHOLDER_KEY = "simulatedapikeyplaceholder00000000"
-FACTORY_PIN = "1234"
-SIM_PIN = "2468"
 
 
 def _args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -232,7 +230,6 @@ def _unit_files(
         "cmd_sock": str(d / "cmd.sock"),
         "service_window": {
             "port": port,
-            "pin": FACTORY_PIN,
             "db_path": str(d / "wqm1.db"),
             "cal_path": str(d / "calibration.yaml"),
             "cmd_sock": str(d / "cmd.sock"),
@@ -275,13 +272,13 @@ class _Http:
             return r.status, r.read().decode()
 
 
-def commission_over_http(base: str, api_key: str, pin: str = SIM_PIN) -> list[str]:
+def commission_over_http(base: str, api_key: str) -> list[str]:
     """Walk the setup wizard the way an installer's phone does (site flow v2).
 
     A full-tier unit is carded (identity file + cloud key in its config), so
-    the walk is welcome → pin → sensors → network, and the JOIN finishes
-    setup. Returns the step list completed, in order. ``api_key`` is kept for
-    the uncarded case: if the wizard asks for a key, it is given.
+    the walk is welcome → sensors → network, and the JOIN finishes setup.
+    There is no PIN. Returns the step list completed, in order. ``api_key``
+    is kept for the uncarded case: if the wizard asks for a key, it is given.
     """
     import urllib.parse  # noqa: F401 — used by _Http.post
 
@@ -289,15 +286,11 @@ def commission_over_http(base: str, api_key: str, pin: str = SIM_PIN) -> list[st
 
     c = _Http(base)
     done: list[str] = []
-    # On a virtual unit the browser counts as "on the hotspot", so first setup
-    # needs no PIN; logging in with the factory PIN still works and is what a
-    # LAN visit does.
-    c.post("/login", {"pin": FACTORY_PIN})
+    # Virtual unit: the browser counts as on the hotspot. Setup is Wi-Fi
+    # only; /login and /setup/pin are closed (Captain, 2026-10-24).
     _, welcome = c.get("/setup/")
     done.append("welcome")
     carded = "already knows who it" in welcome
-    c.post("/setup/pin", {"pin": pin, "pin_confirm": pin})
-    done.append("pin")
     if not carded:
         c.get("/setup/identity")
         done.append("identity")
@@ -388,7 +381,6 @@ def run_full(args: argparse.Namespace, workdir: Path, keys: dict[str, str]) -> d
     for u in units:
         cfg = yaml.safe_load(Path(u["dir"], "config.yaml").read_text()) or {}
         u["setup_completed"] = bool((cfg.get("service_window") or {}).get("setup_completed"))
-        u["pin_changed"] = str((cfg.get("service_window") or {}).get("pin")) != FACTORY_PIN
         net = json.loads(Path(u["dir"], "netsim.json").read_text())
         u["wifi"] = net.get("station")
         u["saved_wifi"] = net.get("saved")

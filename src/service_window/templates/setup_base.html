@@ -19,7 +19,7 @@
     <main class="setup-shell">
         {% if steps|length > 1 %}
         <ol class="steps-track" aria-label="Setup progress">
-            {% set labels = {'welcome': 'Welcome', 'pin': 'PIN', 'identity': 'Identity',
+            {% set labels = {'welcome': 'Welcome', 'identity': 'Identity',
                              'network': 'Network', 'cloud': 'Cloud', 'sensors': 'Sensors',
                              'done': 'Finish'} %}
             {% for s in steps %}
@@ -55,7 +55,7 @@
     {% if firmware_starting %}
     <script>
     // Refresh while the unit starts, but never under someone typing: a
-    // reload wiped the PIN and the Wi-Fi password mid-entry in the field
+    // reload wiped the Wi-Fi password mid-entry in the field
     // (WQM-10001, 2026-10-21). Once a field is touched the page stops
     // refreshing; submitting the form loads the next page anyway.
     (function () {

@@ -321,11 +321,8 @@ class TestProbes:
 
 
 def _client(tmp_path, mock_hardware, pin="8642"):
-    app = make_app(tmp_path, mock_hardware, pin=pin)
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client, app
+    app = make_app(tmp_path, mock_hardware, pin=pin, open_window=True)
+    return app.test_client(), app
 
 
 class TestSetupPage:

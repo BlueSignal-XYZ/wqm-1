@@ -226,8 +226,8 @@ class TestProbeResponses:
 
     def test_location_rewrite_strips_the_service_window_port(self):
         assert rewrite_location("http://192.168.4.1:8080/setup/", 8080) == PORTAL_URL
-        assert rewrite_location("http://127.0.0.1:8080/setup/pin", 8080) == (
-            "http://192.168.4.1/setup/pin"
+        assert rewrite_location("http://127.0.0.1:8080/setup/network", 8080) == (
+            "http://192.168.4.1/setup/network"
         )
         assert rewrite_location("/setup/", 8080) == "/setup/"
 
