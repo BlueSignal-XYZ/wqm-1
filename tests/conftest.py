@@ -101,6 +101,8 @@ def _no_real_bluesignal_probe(monkeypatch, tmp_path):
     from utils import join
 
     monkeypatch.setattr(join, "START_DELAY_S", 0.0)
+    # One clock step per boot is recorded under /run; never the real one.
+    monkeypatch.setenv("WQM1_CLOCK_STEP_MARKER", str(tmp_path / "clock-stepped"))
     # The port-80 page (§4): no test reaches the root join socket, writes
     # the real /run/bluesignal/scan.json, or kicks a real registration.
     from utils import captive_portal, join_service

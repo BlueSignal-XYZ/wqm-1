@@ -173,6 +173,19 @@ def read_state() -> dict[str, Any]:
     return state
 
 
+def wait_for_follow_up(timeout_s: float = 8.0, poll_s: float = 0.02) -> bool:
+    """Wait for the running join's worker, follow-up included, to finish.
+
+    True when no join holds the lock within ``timeout_s``.
+    """
+    deadline = time.monotonic() + timeout_s
+    while _lock_held():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll_s)
+    return True
+
+
 def start_join(
     ssid: str,
     password: str | None,
@@ -187,8 +200,9 @@ def start_join(
 
     Returns ``{"state": "joining", "ssid": ssid}``, or ``{"state": "busy",
     "ssid": <the running one>}`` when a join is already running.
-    ``on_joined`` runs in the worker after a proven join (the Service Window
-    records setup and restarts the firmware there).
+    ``on_joined`` runs in the worker after a proven join, after the state
+    says joined (the Service Window records setup and restarts the firmware
+    there).
     """
     with _THREAD_LOCK:
         fd = _try_lock()
@@ -290,14 +304,10 @@ def _run(
             joined = True
             forgotten = netctl.forget_saved_wifi(ssid).get("forgotten", [])
             joined_result = {**result, "forgotten": forgotten}
-            # The follow-up (record setup, restart the firmware) runs before
-            # the state says joined, so a page that reads "joined" finds
-            # setup already recorded.
-            if on_joined is not None:
-                try:
-                    on_joined(joined_result)
-                except Exception:  # noqa: BLE001 - joined is joined; log the follow-up
-                    logger.exception("Joined %s, but the follow-up failed", ssid)
+            # The truth first: if the follow-up hangs or this process dies in
+            # it, the record still says joined, not joining or interrupted.
+            # The lock stays held until the follow-up is done, so a page that
+            # needs setup recorded waits for the lock (``wait_for_follow_up``).
             _write_state(
                 {
                     "state": "joined",
@@ -310,6 +320,11 @@ def _run(
                 }
             )
             _record_attempt(ssid, "joined", password)
+            if on_joined is not None:
+                try:
+                    on_joined(joined_result)
+                except Exception:  # noqa: BLE001 - joined is joined; log the follow-up
+                    logger.exception("Joined %s, but the follow-up failed", ssid)
         else:
             failed = _failed(ssid, result, password)
             _write_state(failed)
