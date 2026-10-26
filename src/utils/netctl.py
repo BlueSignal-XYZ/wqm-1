@@ -63,6 +63,7 @@ cannot scan or reconnect that laptop's own Wi-Fi.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import ipaddress
@@ -70,6 +71,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess  # nosec B404 - fixed argv, no shell, resolved binaries only
 import time
@@ -1476,29 +1478,60 @@ def retry_saved_station(
     joined: dict[str, Any] | None = None
     last_error = ""
     restored = False
+    failure = "could not join"
     try:
         joined, last_error = _retry_profiles(profiles, iface, sleep, clock, wait_s)
     finally:
         # Also on an exception: the hotspot is down from here on, and the
-        # timer's next run skips a unit whose hotspot is not up.
+        # timer's next run skips a unit whose hotspot is not up. SIGTERM is
+        # held until the hotspot is back, so systemd's stop cannot cut the
+        # restore short; the held signal is delivered right after.
         if joined is None:
-            if station_connected(iface):
-                _nmcli("device", "disconnect", iface)
-            restored = _restore_ap(True, ap_ssid, ap_passphrase, iface, sleep)
+            with _sigterm_held():
+                if station_connected(iface):
+                    _nmcli("device", "disconnect", iface)
+                restored = _restore_ap(True, ap_ssid, ap_passphrase, iface, sleep)
+                kind = (
+                    "no_dhcp"
+                    if last_error == "no address"
+                    else (_classify_connect_error(last_error) or "no_association")
+                )
+                failure = _STATION_FAIL.get(kind, "could not join")
+                _publish_station(
+                    station=f"fail: {failure}",
+                    hotspot="up" if restored else "down",
+                    portal="up (80)" if restored else "down: hotspot down",
+                )
     if joined is not None:
         return joined
-    kind = (
-        "no_dhcp"
-        if last_error == "no address"
-        else (_classify_connect_error(last_error) or "no_association")
-    )
-    failure = _STATION_FAIL.get(kind, "could not join")
-    _publish_station(
-        station=f"fail: {failure}",
-        hotspot="up" if restored else "down",
-        portal="up (80)" if restored else "down: hotspot down",
-    )
     return {"ok": restored, "mode": "ap", "ap": restored, "station_failure": failure}
+
+
+@contextlib.contextmanager
+def _sigterm_held() -> Any:
+    """Hold SIGTERM for the block, then deliver it.
+
+    The handler is swapped rather than the signal masked: a mask covers one
+    thread, and a process-directed signal can land on another. Python runs
+    signal handlers on the main thread only, so off it this does nothing.
+    """
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held: list[tuple[int, Any]] = []
+    previous = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, lambda signum, frame: held.append((signum, frame)))
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        if held:
+            if callable(previous):
+                previous(*held[0])
+            elif previous == signal.SIG_DFL:
+                os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _retry_profiles(

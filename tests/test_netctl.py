@@ -1323,6 +1323,46 @@ def test_systemds_sigterm_lets_the_retry_bring_the_hotspot_back(monkeypatch):
     assert cleaned == [True]
 
 
+def test_a_sigterm_during_the_restore_waits_for_the_hotspot(nm, monkeypatch, tmp_path):
+    """Claude review on #153 (2910740): a SIGTERM that lands while the retry
+    is already restoring the hotspot must not cut the restore short."""
+    import os
+    import signal
+
+    from utils import netctl
+    from utils.netctl import retry_saved_station
+
+    monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "portal-mode"))
+    monkeypatch.setenv("WQM1_STATUS_FILE", str(tmp_path / "wqm1-status.txt"))
+    nm.ap = True
+    nm.saved = ["Batcave"]
+    nm.visible = []
+    nm.realistic_scan = True
+    finished = []
+    real_restore = netctl._restore_ap
+
+    def restore_then_finish(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)  # systemd's stop, mid-restore
+        result = real_restore(*args, **kwargs)
+        finished.append(result)
+        return result
+
+    def stop(_signum, _frame):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(netctl, "_restore_ap", restore_then_finish)
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        t, clock, sleep = _clock()
+        with pytest.raises(SystemExit):
+            retry_saved_station("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert finished == [True]
+    assert nm.ap is True
+    assert "hotspot: up" in (tmp_path / "wqm1-status.txt").read_text()
+
+
 def test_the_retry_timer_is_installed_and_enabled():
     from pathlib import Path
 
