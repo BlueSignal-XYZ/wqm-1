@@ -587,7 +587,13 @@ the page needs its own crypto library.
 
 **Change:**
 - At each boot the listener creates an X25519 key pair in memory (never on
-  disk) and puts the public key and a random 16-byte page nonce in the page.
+  disk) and puts the public key in the page.
+- **The nonce is per attempt, not per page.** Each `/api/state` response
+  carries a fresh random 16-byte nonce, and the page uses the latest one it
+  has seen. The listener keeps the last few unspent nonces for 10 minutes
+  and spends one on any decrypted join, right or wrong. So a wrong
+  password is retyped and sent again from the same page with no reload
+  (I5, C1), and a captured request still cannot be replayed.
 - The page encrypts `{password, nonce}` with X25519 + HKDF-SHA256 +
   XChaCha20-Poly1305 and posts the ciphertext to `/api/join`.
 - JS: vendor `@noble/curves` (x25519) and `@noble/ciphers`
@@ -607,7 +613,10 @@ the page needs its own crypto library.
 library under Node and committed) decrypts in Python; a Python-produced
 ciphertext decrypts under Node with the same vendored files; a replayed
 nonce is refused; a captured `/api/join` request body does not contain the
-password; the key changes across a simulated restart.
+password; the key changes across a simulated restart; a wrong-password
+join followed by a second submit from the same page (new nonce from the
+next `/api/state`, no reload) reaches the join; a nonce older than 10
+minutes is refused.
 
 **Done:** spec bench step 10d: a second phone capturing traffic during a
 join does not see the password. The two fixtures in the precondition pass.
