@@ -1354,6 +1354,12 @@ def ensure_reachable(
             # for NetworkManager's own autoconnect was the passive half of the
             # field failure.
             for prof in profiles:
+                # Each attempt can block 6 s + JOIN_TIMEOUT_S. One that would
+                # end past the grace deadline is not started, so the oneshot
+                # stays inside bluesignal-ap-fallback.service's
+                # TimeoutStartSec and still raises the hotspot.
+                if clock() - started + 6.0 + JOIN_TIMEOUT_S > grace:
+                    break
                 wait_for_ssid(prof["ssid"], iface, sleep=sleep, clock=clock, wait_s=6.0)
                 rc, out, err = _nmcli(
                     "connection", "up", prof["name"], "ifname", iface, timeout=float(JOIN_TIMEOUT_S)
@@ -1415,6 +1421,11 @@ def ensure_reachable(
 # after an outage and the Pi boots faster than the router; without a retry the
 # unit sat on its hotspot until someone power-cycled it.
 RETRY_STATION_WAIT_S = 40.0
+# bluesignal-wifi-retry.service is killed at TimeoutStartSec=150. The retry
+# starts no saved profile that could run past this, which leaves time to
+# bring the hotspot back.
+RETRY_BUDGET_S = 110.0
+_RETRY_SSID_WAIT_S = 8.0
 
 
 def ap_clients(iface: str = DEFAULT_WIFI_IFACE) -> int | None:
@@ -1451,11 +1462,62 @@ def retry_saved_station(
     profiles = _list_saved_wifi(iface) or []
     if not profiles:
         return {"skipped": "no saved network"}
+    # A card that moved onto another Pi holds its saved site network until
+    # setup confirms it (see ensure_reachable). The retry must hold it too,
+    # or the unit joins the previous site's Wi-Fi six minutes after boot.
+    try:
+        if wifi_reconfirm_required():
+            return {"skipped": "card moved; setup must confirm the site network"}
+    except Exception:
+        logger.exception("card move check failed")
+        return {"skipped": "card move check failed"}
     stop_ap(iface)
     _disarm_portal("joining")
+    joined: dict[str, Any] | None = None
     last_error = ""
-    for prof in profiles:
-        wait_for_ssid(prof["ssid"], iface, sleep=sleep, clock=clock, wait_s=8.0)
+    restored = False
+    try:
+        joined, last_error = _retry_profiles(profiles, iface, sleep, clock, wait_s)
+    finally:
+        # Also on an exception: the hotspot is down from here on, and the
+        # timer's next run skips a unit whose hotspot is not up.
+        if joined is None:
+            if station_connected(iface):
+                _nmcli("device", "disconnect", iface)
+            restored = _restore_ap(True, ap_ssid, ap_passphrase, iface, sleep)
+    if joined is not None:
+        return joined
+    kind = (
+        "no_dhcp"
+        if last_error == "no address"
+        else (_classify_connect_error(last_error) or "no_association")
+    )
+    failure = _STATION_FAIL.get(kind, "could not join")
+    _publish_station(
+        station=f"fail: {failure}",
+        hotspot="up" if restored else "down",
+        portal="up (80)" if restored else "down: hotspot down",
+    )
+    return {"ok": restored, "mode": "ap", "ap": restored, "station_failure": failure}
+
+
+def _retry_profiles(
+    profiles: list[dict[str, str]],
+    iface: str,
+    sleep: Any,
+    clock: Any,
+    wait_s: float,
+) -> tuple[dict[str, Any] | None, str]:
+    """Bring each saved profile up in turn, inside ``RETRY_BUDGET_S``.
+    Returns the station result on a join, else None and the last error."""
+    started = clock()
+    per_profile = _RETRY_SSID_WAIT_S + JOIN_TIMEOUT_S + wait_s
+    last_error = ""
+    for i, prof in enumerate(profiles):
+        # The first profile is always tried; a later one only if it fits.
+        if i and clock() - started + per_profile > RETRY_BUDGET_S:
+            break
+        wait_for_ssid(prof["ssid"], iface, sleep=sleep, clock=clock, wait_s=_RETRY_SSID_WAIT_S)
         rc, out, err = _nmcli(
             "connection", "up", prof["name"], "ifname", iface, timeout=float(JOIN_TIMEOUT_S)
         )
@@ -1475,26 +1537,12 @@ def retry_saved_station(
                     station_rssi=format_station_rssi(read_station_rssi(iface)),
                 )
                 logger.info("Saved network %s joined on retry at %s", prof["ssid"], ip)
-                return {"ok": True, "mode": "station", "ip": ip}
+                return {"ok": True, "mode": "station", "ip": ip}, ""
             if clock() >= deadline:
                 last_error = "no address"
                 break
             sleep(ADDRESS_POLL_S)
-    if station_connected(iface):
-        _nmcli("device", "disconnect", iface)
-    restored = _restore_ap(True, ap_ssid, ap_passphrase, iface, sleep)
-    kind = (
-        "no_dhcp"
-        if last_error == "no address"
-        else (_classify_connect_error(last_error) or "no_association")
-    )
-    failure = _STATION_FAIL.get(kind, "could not join")
-    _publish_station(
-        station=f"fail: {failure}",
-        hotspot="up" if restored else "down",
-        portal="up (80)" if restored else "down: hotspot down",
-    )
-    return {"ok": restored, "mode": "ap", "ap": restored, "station_failure": failure}
+    return None, last_error
 
 
 def saved_wifi(iface: str = DEFAULT_WIFI_IFACE) -> list[dict[str, str]]:

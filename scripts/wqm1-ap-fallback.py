@@ -27,6 +27,7 @@ written on the enclosure. Never a shared default.
 from __future__ import annotations
 
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -110,6 +111,13 @@ def retry() -> int:
     stops being scheduled."""
     from utils.netctl import retry_saved_station
 
+    def _stop(_signum: int, _frame: object) -> None:
+        # systemd's SIGTERM at TimeoutStartSec would otherwise end the
+        # process mid-retry with the hotspot down. SystemExit runs the
+        # retry's own restore on the way out.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
     ssid, passphrase = resolve_credentials()
     try:
         result = retry_saved_station(ssid, passphrase)

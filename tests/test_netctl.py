@@ -1146,6 +1146,31 @@ class TestBootUsesTheSavedNetwork:
         assert r["station_failure"] == "network not found"
         assert t[0] < 170  # inside the oneshot's TimeoutStartSec=180
 
+    def test_no_attempt_runs_past_the_grace_deadline(self, nm, tmp_path, monkeypatch):
+        """Bugbot on #153 (110f345): an attempt started late in the grace
+        could block JOIN_TIMEOUT_S past it, against TimeoutStartSec=180."""
+        from utils import netctl
+        from utils.netctl import ensure_reachable
+
+        t, clock, sleep = _clock()
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.station_up_rc = 4  # every attempt fails, slowly
+        starts: list[float] = []
+        real_run = nm.run
+
+        def slow_run(argv, timeout=15.0):
+            if argv[1:4] == ["connection", "up", "Batcave"]:
+                starts.append(t[0])
+                t[0] += netctl.JOIN_TIMEOUT_S
+            return real_run(argv, timeout)
+
+        monkeypatch.setattr(netctl, "_run", slow_run)
+        r = ensure_reachable("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert starts
+        assert max(starts) - min(starts) + netctl.JOIN_TIMEOUT_S <= netctl.AP_GRACE_S
+
 
 class TestRetryTheSavedNetwork:
     """bluesignal-wifi-retry.timer: the router came back after the Pi did.
@@ -1197,6 +1222,105 @@ class TestRetryTheSavedNetwork:
         assert nm.ap is True
         assert t[0] < 150  # inside the unit's TimeoutStartSec
         assert "station: fail: network not found" in (tmp_path / "wqm1-status.txt").read_text()
+
+    def test_a_moved_card_does_not_take_the_old_sites_wifi(self, nm, monkeypatch, tmp_path):
+        """Bugbot on #153 (110f345): boot held the old site's profile on a
+        moved card, and the retry timer joined it anyway."""
+        from utils import netctl
+
+        monkeypatch.setattr(netctl, "wifi_reconfirm_required", lambda: True)
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.station_up_rc = 0
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r == {"skipped": "card moved; setup must confirm the site network"}
+        assert nm.ap is True
+        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
+
+    def test_the_retry_stays_inside_its_unit_timeout(self, nm, monkeypatch, tmp_path):
+        """Bugbot on #153 (110f345): two saved networks that associate and
+        never get an address ran past TimeoutStartSec=150, and systemd killed
+        the retry with the hotspot down."""
+        from utils import netctl
+        from utils.netctl import retry_saved_station
+
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "portal-mode"))
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(tmp_path / "wqm1-status.txt"))
+        t, clock, sleep = _clock()
+        nm.ap = True
+        nm.saved = ["Batcave", "Batcave-5G"]
+        nm.visible = ["Batcave", "Batcave-5G"]
+        nm.station_up_rc = 0
+        nm.ipv4 = "169.254.7.7"  # associated, no lease
+        ups = []
+        real_run = nm.run
+
+        def slow_run(argv, timeout=15.0):
+            if argv[1:3] == ["connection", "up"] and argv[3] in nm.saved:
+                ups.append(argv[3])
+                t[0] += netctl.JOIN_TIMEOUT_S
+            return real_run(argv, timeout)
+
+        monkeypatch.setattr(netctl, "_run", slow_run)
+        r = retry_saved_station("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert ups == ["Batcave"]
+        assert t[0] < 150
+        assert nm.ap is True
+
+    def test_an_error_mid_retry_still_brings_the_hotspot_back(self, nm, monkeypatch, tmp_path):
+        """Bugbot on #153 (110f345): an exception after stop_ap left the unit
+        with no hotspot until a reboot."""
+        from utils import netctl
+
+        def broken_wait(*_a, **_k):
+            raise RuntimeError("iw went away")
+
+        monkeypatch.setattr(netctl, "wait_for_ssid", broken_wait)
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        with pytest.raises(RuntimeError):
+            self._retry(nm, monkeypatch, tmp_path)
+        assert nm.ap is True
+
+
+def test_systemds_sigterm_lets_the_retry_bring_the_hotspot_back(monkeypatch):
+    """Bugbot on #153 (110f345): systemd's SIGTERM at TimeoutStartSec ended
+    the retry with no cleanup. The script turns it into SystemExit, which
+    runs the retry's own restore."""
+    import importlib.util
+    import os
+    import signal
+    from pathlib import Path
+
+    from utils import netctl
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "wqm1-ap-fallback.py"
+    spec = importlib.util.spec_from_file_location("wqm1_ap_fallback_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    cleaned = []
+
+    def killed_mid_retry(*_a, **_k):
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        finally:
+            cleaned.append(True)
+
+    monkeypatch.setattr(module, "resolve_credentials", lambda: ("WQM1-0001", "rain-delta-29"))
+    monkeypatch.setattr(netctl, "retry_saved_station", killed_mid_retry)
+    previous = signal.getsignal(signal.SIGTERM)
+    # Without the script's handler this one gets the signal and nothing is
+    # raised, so the test fails instead of killing the test run.
+    signal.signal(signal.SIGTERM, lambda *_: None)
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            module.retry()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert stopped.value.code == 0
+    assert cleaned == [True]
 
 
 def test_the_retry_timer_is_installed_and_enabled():
