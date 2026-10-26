@@ -1473,6 +1473,13 @@ def retry_saved_station(
     except Exception:
         logger.exception("card move check failed")
         return {"skipped": "card move check failed"}
+    # Count again just before the hotspot goes down: a phone may have joined
+    # while the saved profiles were being listed.
+    clients = ap_clients(iface)
+    if clients is None:
+        return {"skipped": "could not read hotspot clients"}
+    if clients > 0:
+        return {"skipped": "a phone is on the hotspot"}
     stop_ap(iface)
     _disarm_portal("joining")
     joined: dict[str, Any] | None = None

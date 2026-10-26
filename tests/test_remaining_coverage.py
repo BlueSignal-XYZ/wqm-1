@@ -36,7 +36,7 @@ class TestCalibrationSaveFailure:
         with patch("pathlib.Path.replace", side_effect=OSError("disk full")):
             mgr.calibrate_ph(1.0, 1.5)
 
-        assert not (tmp_path / "cal.tmp").exists()
+        assert not (tmp_path / "cal.yaml.tmp").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -387,4 +387,4 @@ class TestAtomicJsonWriteFailure:
         ):
             atomic_json_write(target, {"key": "value"})
 
-        assert not (tmp_path / "data.tmp").exists()
+        assert not (tmp_path / "data.json.tmp").exists()

@@ -118,10 +118,28 @@ def test_atomic_write_fsyncs_then_renames(tmp_path, monkeypatch):
     dest = tmp_path / "data.json"
     atomic_write_text(dest, '{"ok": true}\n', mode=0o640)
     assert dest.read_text(encoding="utf-8") == '{"ok": true}\n'
-    assert not (tmp_path / "data.tmp").exists()
-    assert replaced == [("data.tmp", "data.json")]
+    assert not (tmp_path / "data.json.tmp").exists()
+    assert replaced == [("data.json.tmp", "data.json")]
     assert len(synced) >= 2
     assert dest.stat().st_mode & 0o777 == 0o640
+
+
+def test_two_files_with_one_stem_never_share_a_temp_file(tmp_path, monkeypatch):
+    """Claude review on #153 (1baf59c): with_suffix(".tmp") gave config.yaml
+    and config.json the same temp file."""
+    from utils.atomic import atomic_write_text
+
+    temps: list[str] = []
+    real_replace = Path.replace
+
+    def spy_replace(self: Path, target: Path) -> Path:
+        temps.append(self.name)
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", spy_replace)
+    atomic_write_text(tmp_path / "config.yaml", "a: 1\n")
+    atomic_write_text(tmp_path / "config.json", "{}\n")
+    assert len(set(temps)) == 2, temps
 
 
 def test_atomic_write_drops_the_temp_file_when_rename_fails(tmp_path, monkeypatch):
@@ -136,7 +154,7 @@ def test_atomic_write_drops_the_temp_file_when_rename_fails(tmp_path, monkeypatc
     with pytest.raises(OSError, match="cross-device"):
         atomic_write_text(dest, "new")
     assert dest.read_text(encoding="utf-8") == "old"
-    assert not (tmp_path / "identity.tmp").exists()
+    assert not (tmp_path / "identity.json.tmp").exists()
 
 
 def test_atomic_write_refuses_a_missing_parent_when_told_not_to_create(tmp_path):

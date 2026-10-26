@@ -43,7 +43,8 @@ def atomic_write_bytes(
         dest.parent.mkdir(parents=True, exist_ok=True)
     elif not dest.parent.is_dir():
         raise FileNotFoundError(dest.parent)
-    tmp = dest.with_suffix(".tmp")
+    # The whole name, so config.yaml and config.json never share a temp file.
+    tmp = dest.with_name(dest.name + ".tmp")
     try:
         # builtins.open, so a test that patches it still sees the write fail.
         with open(tmp, "wb") as handle:

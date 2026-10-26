@@ -1223,6 +1223,24 @@ class TestRetryTheSavedNetwork:
         assert t[0] < 150  # inside the unit's TimeoutStartSec
         assert "station: fail: network not found" in (tmp_path / "wqm1-status.txt").read_text()
 
+    def test_a_phone_that_joins_during_the_checks_is_not_cut_off(self, nm, monkeypatch, tmp_path):
+        """Claude review on #153 (1baf59c): a phone that joined between the
+        client count and stop_ap lost the hotspot."""
+        from utils import netctl
+
+        counts = iter([0, 1])
+        monkeypatch.setattr(netctl, "ap_clients", lambda iface="wlan0": next(counts))
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.station_up_rc = 0
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r == {"skipped": "a phone is on the hotspot"}
+        assert nm.ap is True
+        assert not any(
+            c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls
+        )
+
     def test_a_moved_card_does_not_take_the_old_sites_wifi(self, nm, monkeypatch, tmp_path):
         """Bugbot on #153 (110f345): boot held the old site's profile on a
         moved card, and the retry timer joined it anyway."""

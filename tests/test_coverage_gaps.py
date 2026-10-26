@@ -124,7 +124,7 @@ class TestConfigEditorErrorPath:
             _atomic_yaml_write(target, {"key": "val"})
 
         # .tmp file should have been cleaned up
-        tmp_file = tmp_path / "config.tmp"
+        tmp_file = tmp_path / "config.yaml.tmp"
         assert not tmp_file.exists()
 
 
