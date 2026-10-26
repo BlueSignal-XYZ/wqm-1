@@ -1241,6 +1241,21 @@ class TestRetryTheSavedNetwork:
             c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls
         )
 
+    def test_an_error_right_after_stop_ap_still_restores(self, nm, monkeypatch, tmp_path):
+        """Claude review on #153 (209d29a): stop_ap ran before the try, so a
+        SIGTERM or error just after it skipped the restore."""
+        from utils import netctl
+
+        def broken_disarm(*_a, **_k):
+            raise SystemExit(0)  # what the script's SIGTERM handler raises
+
+        monkeypatch.setattr(netctl, "_disarm_portal", broken_disarm)
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        with pytest.raises(SystemExit):
+            self._retry(nm, monkeypatch, tmp_path)
+        assert nm.ap is True
+
     def test_a_moved_card_does_not_take_the_old_sites_wifi(self, nm, monkeypatch, tmp_path):
         """Bugbot on #153 (110f345): boot held the old site's profile on a
         moved card, and the retry timer joined it anyway."""

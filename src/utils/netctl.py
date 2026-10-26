@@ -1480,13 +1480,15 @@ def retry_saved_station(
         return {"skipped": "could not read hotspot clients"}
     if clients > 0:
         return {"skipped": "a phone is on the hotspot"}
-    stop_ap(iface)
-    _disarm_portal("joining")
     joined: dict[str, Any] | None = None
     last_error = ""
     restored = False
     failure = "could not join"
     try:
+        # Inside the try: a SIGTERM or an error from here on must still
+        # bring the hotspot back.
+        stop_ap(iface)
+        _disarm_portal("joining")
         joined, last_error = _retry_profiles(profiles, iface, sleep, clock, wait_s)
     finally:
         # Also on an exception: the hotspot is down from here on, and the
