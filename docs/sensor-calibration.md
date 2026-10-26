@@ -1,7 +1,9 @@
 # Sensor Calibration
 
-All calibration is done from the **Service Window** (the on-device web UI at
-`http://<unit-ip>:8080`, under **Calibration**) with guided wizards. Each wizard
+All calibration is done from the **Service Window** (the on-device web UI,
+under **Calibration**) with guided wizards. It answers nobody on the network:
+open `ssh -L 8080:127.0.0.1:8080 pi@<unit-ip>` and use
+`http://localhost:8080`. Each wizard
 shows a **live voltage** for its channel, refreshed every two seconds, with a
 *Use this value* button that fills the form. Save applies the calibration and
 stamps `calibrated_at`, so the firmware's drift tracking can nag you when a

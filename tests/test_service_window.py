@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from service_window.app import create_app
+from tests.remote import HOME_NETWORK, from_addr
 
 
 @pytest.fixture
@@ -77,7 +78,7 @@ class TestAuth:
         assert b"BlueSignal Cloud" in resp.data
 
     def test_unauthenticated_lan_is_refused(self, client):
-        resp = client.get("/")
+        resp = from_addr(client, HOME_NETWORK).get("/")
         assert resp.status_code == 403
         assert b'name="pin"' not in resp.data
 
@@ -93,7 +94,7 @@ class TestAuth:
         with authed_client.session_transaction() as sess:
             assert not sess.get("pin_verified")
         app.config["TEST_OPEN_WINDOW"] = False
-        resp = authed_client.get("/")
+        resp = from_addr(authed_client, HOME_NETWORK).get("/")
         assert resp.status_code == 403
 
 

@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.remote import HOME_NETWORK, HOTSPOT, clients_from
 from tests.test_service_window_setup import make_app
 
 
@@ -154,7 +155,8 @@ class TestHotspotSkipsTheFactoryPin:
         from service_window import captive
 
         monkeypatch.setattr(captive, "from_hotspot", lambda: on_hotspot)
-        return make_app(tmp_path, mock_hardware, **kw)
+        app = make_app(tmp_path, mock_hardware, **kw)
+        return clients_from(app, HOTSPOT if on_hotspot else HOME_NETWORK)
 
     def test_first_setup_on_the_hotspot_opens_without_a_pin(
         self, tmp_path, mock_hardware, monkeypatch

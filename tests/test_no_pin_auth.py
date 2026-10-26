@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 from service_window.app import create_app
+from tests.remote import HOME_NETWORK, HOTSPOT, from_addr
 from tests.test_service_window_setup import make_app
 
 # Setup routes a phone on the unit's own hotspot may hit with no PIN.
@@ -41,7 +42,7 @@ def _client(tmp_path, mock_hardware, monkeypatch, *, on_hotspot, setup_completed
 
     monkeypatch.setattr(captive, "from_hotspot", lambda: on_hotspot)
     app = make_app(tmp_path, mock_hardware, pin="1234", setup_completed=setup_completed)
-    client = app.test_client()
+    client = from_addr(app.test_client(), HOTSPOT if on_hotspot else HOME_NETWORK)
     with client.session_transaction() as sess:
         sess.clear()
     return client, app

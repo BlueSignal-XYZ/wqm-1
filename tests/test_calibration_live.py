@@ -31,6 +31,7 @@ import pytest
 
 from sensors.tds import compensated_voltage, k_from_reference, ppm_from_adc
 from service_window.app import create_app
+from tests.remote import HOME_NETWORK, from_addr
 from utils.config import TDS_DIVIDER_RATIO
 
 # ---------------------------------------------------------------------------
@@ -220,7 +221,7 @@ class TestLiveVoltageEndpoint:
         """The readout drives the bus. It is not a public page."""
         app, _ = make_client()
         app.config["TEST_OPEN_WINDOW"] = False
-        anon = app.test_client()
+        anon = from_addr(app.test_client(), HOME_NETWORK)
         assert anon.get("/calibrate/live.json").status_code == 403
 
 

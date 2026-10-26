@@ -1072,10 +1072,11 @@ class WQM1App:
             self._state.request_restart()
             return {"ok": True, "restarting": True}
         if action == "reboot":
-            # Whole-host reboot, not just this service — the Service Window's
-            # break-glass path when a unit is reachable on :8080 but its sshd
-            # is not. We hold no privilege to do it ourselves: relays go to
-            # fail-safe here, the root OTA agent does the reboot.
+            # Whole-host reboot, not just this service, from the Service
+            # Window's Settings page. That page answers only on the unit
+            # itself now (the bench SSH tunnel), so this is no longer a way
+            # in when sshd is dead. We hold no privilege to do it ourselves:
+            # relays go to fail-safe here, the root OTA agent does the reboot.
             return request_host_reboot(self._relays, REBOOT_REQUEST_FLAG)
         if action == "config_reload":
             self._config.reload()

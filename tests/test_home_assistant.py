@@ -34,6 +34,7 @@ from integrations.home_assistant import (
     topics_for,
 )
 from integrations.home_assistant.discovery import BANNED_NAME_WORDS, device_name
+from tests.remote import HOME_NETWORK, from_addr
 from utils.config import SETTINGS_SCHEMA, Settings, validate_values
 from utils.health import HealthReporter
 
@@ -558,4 +559,5 @@ class TestServiceWindow:
         client, _, _, _ = sw_client
         client.application.config["TEST_OPEN_WINDOW"] = False
         client.get("/logout")
+        from_addr(client, HOME_NETWORK)
         assert client.get("/home-assistant/").status_code == 403

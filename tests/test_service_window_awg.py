@@ -16,6 +16,7 @@ from service_window.app import create_app
 from service_window.health import smart_breaker_card
 from service_window.routes import awg as awg_routes
 from service_window.routes import status as status_routes
+from tests.remote import HOME_NETWORK, from_addr
 
 DEVICE_UUID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 SITE_UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -197,7 +198,7 @@ class TestNavigation:
 
     def test_page_requires_login(self, app, commands):
         app.config["TESTING"] = True
-        anon = app.test_client()
+        anon = from_addr(app.test_client(), HOME_NETWORK)
         resp = anon.get("/awg/")
         assert resp.status_code == 403
         assert b'name="pin"' not in resp.data

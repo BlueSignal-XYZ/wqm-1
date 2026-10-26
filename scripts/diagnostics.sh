@@ -119,7 +119,7 @@ API_KEY_SET="$(cfg api_key '')"
 if [ -n "$API_KEY_SET" ]; then
     info "Cloud key: set in $CONFIG_FILE (…${API_KEY_SET: -4})"
 else
-    info "Cloud key: not set yet — claim in Cloud, then paste it at http://$(hostname).local:8080"
+    info "Cloud key: not set yet — claim in Cloud, or run scripts/provision.py on this unit"
 fi
 echo ""
 

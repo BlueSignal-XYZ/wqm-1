@@ -31,7 +31,7 @@ import time
 from flask import Blueprint, redirect, request
 from werkzeug.wrappers import Response
 
-from utils.captive_portal import PORTAL_URL, PROBE_PATHS
+from utils.captive_portal import PORTAL_URL, PROBE_PATHS, RELAY_HEADER, RELAY_VALUE
 
 # app.py imports PROBE_PATHS so a captive check is allowed through the
 # setup gate. The tuple itself lives in utils.captive_portal.
@@ -41,6 +41,7 @@ __all__ = [
     "foreign_host_redirect",
     "from_hotspot",
     "hotspot_up",
+    "on_the_unit",
     "reset_cache",
     "setup_url",
 ]
@@ -85,11 +86,46 @@ def setup_url() -> str:
     return PORTAL_URL
 
 
+def _from_loopback() -> bool:
+    try:
+        return ipaddress.ip_address(request.remote_addr or "").is_loopback
+    except ValueError:
+        return False
+
+
+def _relayed_from_hotspot() -> bool:
+    """The port-80 relay passed this request on for a phone on the hotspot.
+
+    The relay connects from 127.0.0.1 and marks every request; it strips the
+    mark from anything a phone sends. A loopback request without the mark
+    did not come through the relay.
+    """
+    return _from_loopback() and request.headers.get(RELAY_HEADER) == RELAY_VALUE
+
+
+def on_the_unit() -> bool:
+    """The request was made on the unit itself, not relayed for a phone.
+
+    That is the bench SSH tunnel (``ssh -L 8080:127.0.0.1:8080 pi@<unit>``,
+    Decision 2 in docs/install-build-plan.md) or a process on the unit. The
+    port-80 relay also connects from loopback, but it marks every request it
+    passes on, so a phone on the hotspot never counts as on the unit.
+
+    Nothing else on the unit may proxy the network to this port: anything
+    that did would get the whole Service Window.
+    """
+    return _from_loopback() and RELAY_HEADER not in request.headers
+
+
 def from_hotspot() -> bool:
-    """The request came from a phone on this unit's own setup hotspot."""
+    """The request came from a phone on this unit's own setup hotspot:
+    directly on 8080 from the hotspot subnet, or through the port-80 relay
+    (which is how the phone's captive sheet loads the setup page)."""
     if not hotspot_up():
         return False
     if _virtual():
+        return True
+    if _relayed_from_hotspot():
         return True
     from utils.netctl import AP_NETWORK
 

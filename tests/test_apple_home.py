@@ -30,6 +30,7 @@ from integrations.apple_home.accessory import (
     accessory_name,
 )
 from integrations.apple_home.bridge import STATE_FILENAME
+from tests.remote import HOME_NETWORK, from_addr
 from utils.config import SETTINGS_SCHEMA, Settings, validate_values
 from utils.health import HealthReporter
 
@@ -475,4 +476,5 @@ class TestServiceWindow:
         client, _, _, _ = sw_client
         client.application.config["TEST_OPEN_WINDOW"] = False
         client.get("/logout")
+        from_addr(client, HOME_NETWORK)
         assert client.get("/apple-home/").status_code == 403

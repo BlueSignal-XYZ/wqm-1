@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from service_window.app import create_app
+from tests.remote import HOME_NETWORK, from_addr
 
 
 @pytest.fixture
@@ -165,7 +166,7 @@ class TestIndexAndScan:
         assert b"Nothing answered" in resp.data
 
     def test_requires_login(self, app):
-        client = app.test_client()
+        client = from_addr(app.test_client(), HOME_NETWORK)
         resp = client.get("/rs485/")
         assert resp.status_code == 403
 

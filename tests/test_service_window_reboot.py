@@ -12,6 +12,7 @@ import pytest
 
 from service_window.app import create_app
 from service_window.routes import settings as settings_routes
+from tests.remote import HOME_NETWORK, from_addr
 
 
 @pytest.fixture
@@ -91,7 +92,7 @@ class TestRebootControl:
 
     def test_login_required(self, app):
         app.config["TESTING"] = True
-        resp = reboot(app.test_client())
+        resp = reboot(from_addr(app.test_client(), HOME_NETWORK))
         assert resp.status_code == 403
         assert b'name="pin"' not in resp.data
         assert b"BlueSignal Cloud" in resp.data

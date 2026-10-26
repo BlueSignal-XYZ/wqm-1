@@ -30,7 +30,6 @@ from service_window.config_editor import ConfigWriteError
 # live config. Accept both spellings rather than picking a winner.
 _SETTING_ALIASES = {
     "SERVICE_PORT": "port",
-    "PIN": "pin",
     # nosec B105 - a setting-name mapping, not a credential. The value is the
     # YAML key to read; the secret itself comes from SW_SECRET_KEY or a fresh
     # token_hex(32) below.
