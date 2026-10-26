@@ -882,7 +882,7 @@ class TestResultHttpStatus:
         monkeypatch.setattr("urllib.request.urlopen", unprocessable)
         assert c.post_command_result("bad", "applied") == RESULT_POST_DROP
 
-    def test_401_and_403_are_retried(self, monkeypatch):
+    def test_401_and_403_are_terminal(self, monkeypatch):
         c = CloudClient(
             device_id="BS-WQM1-00aabbccddee",
             ingest_url="https://example.test/ingestReading",
@@ -898,7 +898,7 @@ class TestResultHttpStatus:
             raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
 
         monkeypatch.setattr("urllib.request.urlopen", unauthorized)
-        assert c.post_command_result("rotating", "applied") is False
+        assert c.post_command_result("rotating", "applied") == RESULT_POST_DROP
 
         c._api_key = "device-key"
 
@@ -906,7 +906,7 @@ class TestResultHttpStatus:
             raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
 
         monkeypatch.setattr("urllib.request.urlopen", forbidden)
-        assert c.post_command_result("forbidden", "applied") is False
+        assert c.post_command_result("forbidden", "applied") == RESULT_POST_DROP
 
 
 class TestTerminalResultNotRetried:
