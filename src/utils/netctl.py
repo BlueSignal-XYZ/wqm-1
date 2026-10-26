@@ -11,8 +11,8 @@ without the page first saying what is about to happen to the connection.
 Two jobs (commissioning plan, PR 4):
 
 * **The access point.** At boot, if no known Wi-Fi network associates within
-  ``AP_GRACE_S``, raise a WPA2 hotspot named after the unit (``WQM1-0001``)
-  with the per-unit passphrase from the identity file. It is a FALLBACK,
+  ``AP_GRACE_S``, raise the open setup network ``BlueSignal Setup`` (install
+  plan §5; the same name on every unit, no password). It is a FALLBACK,
   never concurrent with a station link — AP+STA on ``brcmfmac`` is fragile, so
   the rule avoids the question. Zero W, Zero 2 W, Pi 3 and Pi 4 all expose
   the onboard radio as ``wlan0`` under that driver (the chip differs; this
@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import contextlib
 import errno
-import hashlib
 import ipaddress
 import json
 import logging
@@ -246,29 +245,17 @@ def _nmcli(*args: str, timeout: float = 15.0) -> tuple[int, str, str]:
     return _run(["nmcli", *args], timeout=timeout)
 
 
-def derived_passphrase(pi_serial: str) -> str:
-    """AP passphrase for a unit with no identity file: 12 hex from a hash of
-    its Pi serial. Printed by scripts/diagnostics.sh so it can be written on
-    the enclosure. Never a fleet-wide default — an open or shared AP is
-    still an open AP."""
-    return hashlib.sha256(f"wqm1-ap:{pi_serial}".encode()).hexdigest()[:12]
+def ap_credentials() -> tuple[str, str | None]:
+    """(SSID, passphrase) for the setup network: ``("BlueSignal Setup", None)``.
 
-
-def ap_credentials() -> tuple[str, str]:
-    """(SSID, passphrase) for this unit's setup AP.
-
-    SSID is ``WQM1-`` + the last four characters of the device id; the
-    passphrase is the bench-provisioned ``ap_passphrase`` from the identity
-    file, else derived from the Pi serial.
+    Install plan §5: the setup network is open. The page on it sets only the
+    unit's Wi-Fi (spec decision 1) and the Service Window is closed to it
+    (§3, §4), so a passphrase protected nothing a phone could reach there.
+    An ``ap_passphrase`` a bench card still carries is ignored.
     """
-    from utils.identity import ap_name, get_device_id, get_pi_serial, read_provisioned_identity
+    from utils.identity import SETUP_SSID
 
-    ssid = ap_name(get_device_id())
-    prov = read_provisioned_identity() or {}
-    passphrase = str(prov.get("ap_passphrase") or "")
-    if len(passphrase) < 8:
-        passphrase = derived_passphrase(get_pi_serial())
-    return ssid, passphrase
+    return SETUP_SSID, None
 
 
 def _regdom(text: str) -> str:
@@ -386,16 +373,18 @@ def wifi_country() -> str:
 
 def hostapd_config(
     ssid: str,
-    passphrase: str,
+    passphrase: str | None = None,
     iface: str = DEFAULT_WIFI_IFACE,
     country: str = "US",
     channel: int = AP_CHANNEL,
 ) -> str:
     """hostapd configuration for the setup AP.
 
-    ``wpa_key_mgmt`` is ``WPA-PSK`` and nothing else. No SHA256 AKM, no SAE.
-    ``ieee80211w=0`` and ``rsn_pairwise=CCMP``. The country code is the one
-    ``prepare_wifi_radio`` leaves set.
+    With no passphrase the network is open: no ``wpa``, ``wpa_key_mgmt``,
+    ``wpa_passphrase`` or ``rsn_pairwise`` line (install plan §5). With one,
+    ``wpa_key_mgmt`` is ``WPA-PSK`` and nothing else (no SHA256 AKM, no SAE)
+    with ``rsn_pairwise=CCMP``. ``ieee80211w=0`` either way. The country code
+    is the one ``prepare_wifi_radio`` leaves set.
     """
     code = (country or "").strip().upper()
     if len(code) != 2 or not code.isalpha():
@@ -410,10 +399,15 @@ def hostapd_config(
         f"country_code={code}",
         "ieee80211d=1",
         "auth_algs=1",
-        "wpa=2",
-        "wpa_key_mgmt=WPA-PSK",
-        f"wpa_passphrase={passphrase}",
-        "rsn_pairwise=CCMP",
+    ]
+    if passphrase:
+        lines += [
+            "wpa=2",
+            "wpa_key_mgmt=WPA-PSK",
+            f"wpa_passphrase={passphrase}",
+            "rsn_pairwise=CCMP",
+        ]
+    lines += [
         "ieee80211w=0",
         f"ctrl_interface={HOSTAPD_CTRL}",
         "ctrl_interface_group=0",
@@ -548,11 +542,15 @@ def _release_ap_iface(iface: str) -> None:
     _set_managed(iface, True)
 
 
-def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dict[str, Any]:
-    """Raise the setup hotspot with hostapd. WPA2-PSK, 192.168.4.1/24.
+def start_ap(
+    ssid: str, passphrase: str | None = None, iface: str = DEFAULT_WIFI_IFACE
+) -> dict[str, Any]:
+    """Raise the setup hotspot with hostapd on 192.168.4.1/24.
 
-    Refuses a passphrase under 8 characters (WPA2 minimum) rather than
-    raising an open network — an open AP is still an open AP.
+    No passphrase is an open network, which is what the unit raises (install
+    plan §5): the page on it sets only Wi-Fi, and nothing else on the unit
+    answers there. A passphrase that is given must be 8 characters or more
+    (the WPA2 minimum); a shorter one is refused, never silently opened.
 
     NetworkManager is told to leave ``wlan0`` alone, then hostapd beacons
     and dnsmasq serves DHCP and the captive DNS. A leftover
@@ -561,10 +559,13 @@ def start_ap(ssid: str, passphrase: str, iface: str = DEFAULT_WIFI_IFACE) -> dic
     """
     if not _SSID_RE.match(ssid or ""):
         return {"ok": False, "error": "invalid ssid"}
-    if not passphrase or len(passphrase) < 8:
-        return {"ok": False, "error": "passphrase must be at least 8 characters"}
-    if any(ord(ch) < 32 for ch in passphrase):
-        return {"ok": False, "error": "invalid passphrase"}
+    if passphrase:
+        if len(passphrase) < 8:
+            return {"ok": False, "error": "passphrase must be at least 8 characters"}
+        if any(ord(ch) < 32 for ch in passphrase):
+            return {"ok": False, "error": "invalid passphrase"}
+    else:
+        passphrase = None
     if netsim.is_virtual():
         if not netsim.ap_active():
             _cache_scan_before_ap(iface)
@@ -1255,7 +1256,7 @@ def _restore_ap(
     sleep: Any,
 ) -> bool:
     """Bring the setup hotspot back. ``start_ap`` arms the portal."""
-    if not (had_ap and ap_ssid and ap_passphrase):
+    if not (had_ap and ap_ssid):
         return False
     restored = False
     for attempt in range(max(1, AP_ATTEMPTS)):
@@ -1382,8 +1383,8 @@ def join_network(
     only the temporary profile, so a proven network survives a wrong
     password typed for it (I3).
 
-    On any failure the setup hotspot is raised again when its name and
-    passphrase were given, which also arms the port-80 portal. ``on_failure``
+    On any failure the setup hotspot is raised again when its name was
+    given, which also arms the port-80 portal. ``on_failure``
     runs after the reason is known and before that raise, so the setup page
     can store the sentence the phone will show the moment the hotspot is back.
 
@@ -1660,7 +1661,7 @@ def _hold_site_wifi(iface: str) -> None:
 
 def ensure_reachable(
     ap_ssid: str,
-    ap_passphrase: str,
+    ap_passphrase: str | None = None,
     grace_s: float = AP_GRACE_S,
     iface: str = DEFAULT_WIFI_IFACE,
     sleep: Any = time.sleep,
@@ -1843,7 +1844,7 @@ def ap_clients(iface: str = DEFAULT_WIFI_IFACE) -> int | None:
 
 def retry_saved_station(
     ap_ssid: str,
-    ap_passphrase: str,
+    ap_passphrase: str | None = None,
     iface: str = DEFAULT_WIFI_IFACE,
     sleep: Any = time.sleep,
     clock: Any = time.monotonic,
@@ -1853,7 +1854,7 @@ def retry_saved_station(
 
     Does nothing unless the hotspot is up, NO phone is associated to it (an
     installer mid-setup is never cut off), and a site network is saved. On
-    failure the hotspot comes back with the same name and password.
+    failure the hotspot comes back with the same name.
     """
     if netsim.is_virtual():
         return {"skipped": "virtual radio"}

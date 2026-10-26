@@ -184,7 +184,7 @@ def _ap_ssid() -> str:
     try:
         return ap_name()
     except Exception:  # noqa: BLE001 — the landing note still has to render
-        return "WQM1-xxxx"
+        return "BlueSignal Setup"
 
 
 def _live_probe_rows() -> list[dict[str, str]]:
@@ -603,9 +603,9 @@ def cloud() -> ResponseReturnValue:
     if request.method == "POST":
         if request.form.get("continue") or request.form.get("skip"):
             return redirect(url_for("setup.done"))
-        # Writing keys is the bench override only. The hotspot comes back
-        # whenever the unit loses its Wi-Fi, and its passphrase is on the
-        # card, so a phone on it must not replace the cloud or LoRa keys.
+        # Writing keys is the bench override only. The setup network comes
+        # back whenever the unit loses its Wi-Fi, and it is open (install
+        # plan §5), so a phone on it must not replace the cloud or LoRa keys.
         from service_window.auth import _on_the_unit, service_window_closed
 
         if not _on_the_unit():

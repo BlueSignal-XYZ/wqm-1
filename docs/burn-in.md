@@ -49,26 +49,25 @@ BURN-IN: PASS
 
 The same boot also writes `wqm1-status.txt`. Its first line is
 `COMMISSION: READY` or `COMMISSION: FAIL: <reason>`, including the last
-hotspot error when the AP did not come up. Neither file contains the
-hotspot passphrase.
+hotspot error when the AP did not come up. The setup network is open
+(install plan §5), so there is no passphrase to leak.
 
-## Hotspot label
+## Setup-network label
 
-Print the setup-hotspot label on the bench computer, from the Pi serial,
-before the unit ships. The installer scans it to join `WQM1-xxxx`.
+Print the setup-network label on the bench computer, from the Pi serial,
+before the unit ships. The installer scans it to join **BlueSignal Setup**.
 
 ```bash
 python3 scripts/make-unit-label.py <pi-serial> --out-dir ./labels
 ```
 
 The serial is the `Serial` line in `/proc/cpuinfo` (16 hex digits). The
-script writes `<SSID>-hotspot-label.svg` and `<SSID>-hotspot-label.pdf`:
-the SSID, the derived passphrase, and a Wi-Fi QR code
-(`WIFI:T:WPA;S:<ssid>;P:<pass>;;`).
+script writes `<hostname>-setup-label.svg` and `<hostname>-setup-label.pdf`
+(for example `wqm1-4fd8-setup-label.pdf`): **BlueSignal Setup**, "No
+password", and a Wi-Fi QR code (`WIFI:T:nopass;S:BlueSignal Setup;;`).
 
-It prints the two file paths and nothing else. It does not write the
-passphrase into `wqm1-status.txt` or any firmware log. Do not run it on a
-field unit as part of boot. Details for the installer are in
+It prints the two file paths and nothing else. Do not run it on a field
+unit as part of boot. Details for the installer are in
 [`installer-mistakes.md`](installer-mistakes.md).
 
 ## Where it is installed

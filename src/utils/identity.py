@@ -309,13 +309,26 @@ def get_ble_name(device_id: str | None = None) -> str:
     return f"BlueSignal-{suffix}"
 
 
-def ap_name(device_id: str | None = None) -> str:
-    """The Wi-Fi access-point SSID the unit raises when it cannot associate.
+SETUP_SSID = "BlueSignal Setup"
 
-    ``WQM1-0001`` for label ``WQM-10001`` (the last four digits, which is what
-    is printed large on the enclosure); ``WQM1-`` + last four hex for a derived
-    id; the same rule for a virtual unit.
+
+def ap_name(device_id: str | None = None) -> str:
+    """The setup network's name: ``BlueSignal Setup``, for every unit.
+
+    Install plan §5. One name, open, with no password and no PIN: the page on
+    it sets only Wi-Fi, and BlueSignal Cloud finds the unit by its label.
+    ``device_id`` is accepted and ignored so older callers keep working; the
+    per-unit name is ``host_name``.
+    """
+    return SETUP_SSID
+
+
+def host_name(device_id: str | None = None) -> str:
+    """The unit's hostname: ``wqm1-0001`` for label ``WQM-10001``.
+
+    The last four characters of the device id, lowercase; the same rule for
+    a derived id and a virtual unit. ``wqm1-firstboot`` writes this.
     """
     if device_id is None:
         device_id = get_device_id()
-    return f"WQM1-{device_id[-4:].upper()}"
+    return f"wqm1-{device_id[-4:].lower()}"

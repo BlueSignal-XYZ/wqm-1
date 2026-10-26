@@ -351,9 +351,10 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 
 New units are commissioned entirely from a phone browser — no SSH, no config
 files. Power the unit. If it cannot see a known Wi-Fi network it raises
-`WQM1-xxxx`; join that hotspot and the phone's captive-portal sheet opens
-`http://192.168.4.1/setup/` on its own. `http://192.168.4.1:8080/setup/` is
-the same wizard if the sheet does not appear. After the unit joins the site
+the open network **BlueSignal Setup** (no password); join it and the
+phone's captive-portal sheet opens the Wi-Fi page at
+`http://192.168.4.1/setup/` on its own. Type that address if the sheet does
+not appear. Port 8080 does not answer on the setup network. After the unit joins the site
 network, owners use BlueSignal Cloud; the local page stays off. Until setup
 is completed the unit shows only the guided wizard, on its own hotspot:
 

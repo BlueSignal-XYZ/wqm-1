@@ -125,8 +125,8 @@ def ap_active() -> bool:
     return bool(read_state().get("ap"))
 
 
-def start_ap(ssid: str, passphrase: str) -> dict[str, Any]:
-    if not passphrase or len(passphrase) < 8:
+def start_ap(ssid: str, passphrase: str | None = None) -> dict[str, Any]:
+    if passphrase and len(passphrase) < 8:
         return {"ok": False, "error": "passphrase must be at least 8 characters"}
     st = read_state()
     already = bool(st["ap"])
@@ -181,7 +181,7 @@ def join_network(
         # The password was accepted and an address was handed out, but a
         # sign-in page is blocking the internet. Put the hotspot back.
         restored = False
-        if had_ap and ap_ssid and ap_passphrase:
+        if had_ap and ap_ssid:
             st["ap"] = True
             st["ap_ssid"] = ap_ssid
             restored = True
@@ -220,7 +220,7 @@ def join_network(
         )
         kind = "wrong_password"
     restored = False
-    if had_ap and ap_ssid and ap_passphrase:
+    if had_ap and ap_ssid:
         st["ap"] = True
         st["ap_ssid"] = ap_ssid
         restored = True

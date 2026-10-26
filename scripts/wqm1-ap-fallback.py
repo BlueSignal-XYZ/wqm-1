@@ -16,12 +16,9 @@ stays up for a unit already on the site LAN. At a well head with no Wi-Fi,
 or with a card flashed for a network that does not exist here, the hotspot
 is how the phone reaches the unit.
 
-The SSID is ``WQM1-`` + the last four characters of the device id
-(utils.identity.ap_name) and the passphrase comes from the provisioned
-identity file the bench wrote (``ap_passphrase``). A unit with no identity
-file (a Pi-serial unit from before the label) uses a passphrase derived from
-its own Pi serial, which is printed by ``scripts/diagnostics.sh`` so it can be
-written on the enclosure. Never a shared default.
+The setup network is ``BlueSignal Setup`` on every unit, and it is open
+(install plan §5, ``utils.netctl.ap_credentials``). The page on it sets
+only the unit's Wi-Fi; nothing else on the unit answers there.
 """
 
 from __future__ import annotations
@@ -40,15 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger("wqm1.ap_fallback")
 
 
-def derived_passphrase(pi_serial: str) -> str:
-    """See utils.netctl.derived_passphrase — one definition, used by the
-    Service Window's join path and by this boot-time script alike."""
-    from utils.netctl import derived_passphrase as _derived
-
-    return _derived(pi_serial)
-
-
-def resolve_credentials() -> tuple[str, str]:
+def resolve_credentials() -> tuple[str, str | None]:
     from utils.netctl import ap_credentials
 
     return ap_credentials()
@@ -66,7 +55,7 @@ def service_window_port(config_path: str = "/etc/bluesignal/config.yaml") -> int
         return 8080
 
 
-def hotspot_failure_status(detail: object, passphrase: str) -> str:
+def hotspot_failure_status(detail: object, passphrase: str | None) -> str:
     """``failed: <reason>`` for wqm1-status.txt.
 
     The reason is the line hostapd or dnsmasq returned when the AP did not

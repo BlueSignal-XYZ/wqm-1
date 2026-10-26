@@ -687,11 +687,12 @@ def missing_probe_message(pending: list[dict[str, str]]) -> str:
     return f"Tick {joined} to finish. Those probes were not detected."
 
 
-def wifi_qr_payload(ssid: str, password: str) -> str:
+def wifi_qr_payload(ssid: str, password: str | None) -> str:
     """The WIFI: QR text a phone camera joins with.
 
     Backslash, semicolon, comma, colon, and quote are escaped. The payload
-    ends with ``;;`` as the Wi-Fi QR spec requires.
+    ends with ``;;`` as the Wi-Fi QR spec requires. No password is an open
+    network (``T:nopass``).
     """
 
     def esc(value: str) -> str:
@@ -703,4 +704,6 @@ def wifi_qr_payload(ssid: str, password: str) -> str:
                 out.append(ch)
         return "".join(out)
 
+    if not password:
+        return f"WIFI:T:nopass;S:{esc(ssid)};;"
     return f"WIFI:T:WPA;S:{esc(ssid)};P:{esc(password)};;"

@@ -14,9 +14,10 @@ job on a real unit). The Wi-Fi page is what a phone on the setup network
 sees; the Service Window is the bench page. The unit boots the way a unit
 does at a well head:
 
-* its identity came from the bench card (serial, DevEUI, hotspot passphrase),
+* its identity came from the bench card (serial, DevEUI),
   so the wizard is the short, carded one: probes → join the owner's Wi-Fi;
-* no known network is in range, so its setup hotspot ``WQM1-0001`` is up;
+* no known network is in range, so its open setup network ``BlueSignal Setup``
+  is up;
 * the bench network ``BlueSignal-Shop`` is still saved from the shop;
 * the homeowner's network ``Smith-Home`` is in range (password printed below).
 
@@ -53,7 +54,6 @@ from utils.identity import ap_name  # noqa: E402
 
 # A closed loopback port: every upload fails fast and the unit buffers.
 DEAD_CLOUD = "http://127.0.0.1:9"
-DEMO_AP_PASSPHRASE = "cedar-river-42"  # nosec B105 — a virtual hotspot
 CLOUD_CLAIM_BASE = "https://cloud.bluesignal.xyz/claim/"
 
 
@@ -79,10 +79,9 @@ def build_unit(workdir: Path, port: int, seed: int) -> dict[str, Any]:
     config = workdir / "config.yaml"
     net = workdir / "netsim.json"
     if not identity.exists():
-        # A realistic WPA2 passphrase (8+ characters) so the printed demo card
-        # and the unit agree; the simulator's placeholder is shorter than WPA2
-        # allows, and the AP code would fall back to a derived one.
-        ident = sim_identity(1, ap_passphrase=DEMO_AP_PASSPHRASE)
+        # The setup network is open (install plan §5); the identity file's
+        # ap_passphrase is a bench-card field the unit no longer reads.
+        ident = sim_identity(1)
         # A claim token, as the bench script writes one — what the box label's
         # QR carries. Demo only: the reserved serial never exists in production.
         ident["claim_token"] = "demo" + "0" * 28
@@ -127,7 +126,6 @@ def build_unit(workdir: Path, port: int, seed: int) -> dict[str, Any]:
         "config": config,
         "netsim": net,
         "ap_ssid": ap_name(serial),
-        "ap_passphrase": ident.get("ap_passphrase"),
         "claim_token": ident.get("claim_token"),
     }
 
@@ -191,7 +189,7 @@ Virtual WQM-1 {unit["serial"]} is up (factory state).
 
   Wi-Fi page        http://localhost:{args.portal_port}/setup/   (the phone on the setup network)
   Bench page        http://localhost:{args.port}/setup/   (the Service Window)
-  Setup hotspot     {unit["ap_ssid"]}   passphrase {unit["ap_passphrase"]}   (virtual)
+  Setup network     {unit["ap_ssid"]}   open, no password   (virtual)
   Owner's Wi-Fi     {netsim.DEMO_HOME_SSID}   password {netsim.DEMO_HOME_PASSWORD}   (virtual)
   Bench network     {netsim.BENCH_SSID} — saved now, forgotten when setup finishes
   Box label link    {demo_claim_url(unit["serial"], unit["claim_token"])}

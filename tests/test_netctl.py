@@ -293,6 +293,67 @@ class TestAccessPoint:
         assert "SAE" not in text
         assert "sae" not in text.lower()
 
+    def test_no_passphrase_is_an_open_network(self):
+        """Install plan §5: the setup network is open."""
+        from utils.netctl import hostapd_config
+
+        text = hostapd_config("BlueSignal Setup", None, country="US", channel=6)
+        conf = _conf(text)
+        assert conf["ssid"] == "BlueSignal Setup"
+        assert conf["auth_algs"] == "1"
+        assert conf["ieee80211w"] == "0"
+        for key in ("wpa", "wpa_key_mgmt", "wpa_passphrase", "rsn_pairwise"):
+            assert key not in conf, key
+        assert "wpa" not in text.replace("ctrl_interface", "")
+        assert hostapd_config("BlueSignal Setup", "", country="US") == text
+
+    def test_an_eight_character_passphrase_is_unchanged(self):
+        from utils.netctl import HOSTAPD_CTRL, hostapd_config
+
+        text = hostapd_config("WQM1-4FD8", "12345678", country="US", channel=6)
+        assert text.splitlines() == [
+            "interface=wlan0",
+            "driver=nl80211",
+            "ssid=WQM1-4FD8",
+            "hw_mode=g",
+            "channel=6",
+            "country_code=US",
+            "ieee80211d=1",
+            "auth_algs=1",
+            "wpa=2",
+            "wpa_key_mgmt=WPA-PSK",
+            "wpa_passphrase=12345678",
+            "rsn_pairwise=CCMP",
+            "ieee80211w=0",
+            f"ctrl_interface={HOSTAPD_CTRL}",
+            "ctrl_interface_group=0",
+        ]
+
+    def test_start_ap_raises_the_open_setup_network(self, nm):
+        import os
+        from pathlib import Path
+
+        from utils.netctl import ap_credentials, start_ap
+
+        ssid, passphrase = ap_credentials()
+        assert (ssid, passphrase) == ("BlueSignal Setup", None)
+        assert start_ap(ssid, passphrase)["ok"] is True
+        conf = _conf(Path(os.environ["WQM1_HOSTAPD_CONF"]).read_text())
+        assert conf["ssid"] == "BlueSignal Setup"
+        assert "wpa" not in conf and "wpa_passphrase" not in conf
+
+    def test_a_failed_join_brings_the_open_network_back(self, nm):
+        from utils.netctl import join_network, start_ap
+
+        assert start_ap("BlueSignal Setup")["ok"] is True
+        nm.join_rc = 4
+        result = join_network(
+            "PondHouse", "wrong-pass", ap_ssid="BlueSignal Setup", sleep=lambda _s: None
+        )
+        assert result["connected"] is False
+        assert result["ap_restored"] is True
+        assert nm.ap is True
+
     def test_country_follows_the_regulatory_domain(self, nm):
         from utils.netctl import hostapd_config, wifi_country
 
@@ -934,29 +995,22 @@ class TestJoinWaitsForAnAddress:
 
 
 class TestApFallbackScript:
-    def test_passphrase_is_never_a_shared_default(self):
+    def test_no_passphrase_is_derived_any_more(self):
+        """Install plan §5 deleted derived_passphrase with its callers."""
         import importlib.util
         from pathlib import Path
+
+        from utils import netctl
 
         spec = importlib.util.spec_from_file_location(
             "ap_fallback", Path(__file__).parent.parent / "scripts" / "wqm1-ap-fallback.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        a = mod.derived_passphrase("10000000abcdef01")
-        b = mod.derived_passphrase("10000000abcdef02")
-        assert a != b and len(a) == 12 and len(b) == 12
+        assert not hasattr(mod, "derived_passphrase")
+        assert not hasattr(netctl, "derived_passphrase")
 
-    def test_derived_passphrase_is_the_sha256_prefix(self):
-        import hashlib
-
-        from utils.netctl import derived_passphrase
-
-        serial = "1000000086544fd8"
-        expected = hashlib.sha256(f"wqm1-ap:{serial}".encode()).hexdigest()[:12]
-        assert derived_passphrase(serial) == expected
-
-    def test_credentials_come_from_the_identity_file_when_present(self, tmp_path, monkeypatch):
+    def test_the_setup_network_is_open_whatever_the_card_says(self, tmp_path, monkeypatch):
         import importlib.util
         import json
         from pathlib import Path
@@ -971,7 +1025,8 @@ class TestApFallbackScript:
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        assert mod.resolve_credentials() == ("WQM1-0001", "river-cedar-42")
+        # A bench card that still carries ap_passphrase does not close it.
+        assert mod.resolve_credentials() == ("BlueSignal Setup", None)
 
     def test_unit_file_runs_after_networkmanager_as_a_oneshot(self):
         from pathlib import Path

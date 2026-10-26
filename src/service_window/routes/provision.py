@@ -57,7 +57,7 @@ def _get_identity() -> dict[str, str]:
         dev_eui = "0000000000000000"
         ble_name = "BlueSignal-0000"
         hardware = {"identitySource": "derived"}
-        ap_ssid = "WQM1-0000"
+        ap_ssid = "BlueSignal Setup"
     return {
         "device_id": device_id,
         "dev_eui": dev_eui,

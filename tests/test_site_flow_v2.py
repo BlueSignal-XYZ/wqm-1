@@ -422,7 +422,8 @@ class TestDemoUnit:
         net = json.loads(unit["netsim"].read_text())
         assert net["ap"] is True and net["station"] is None
         assert "BlueSignal-Shop" in net["saved"]
-        assert len(unit["ap_passphrase"]) >= 8  # WPA2 minimum, so card and unit agree
+        assert unit["ap_ssid"] == "BlueSignal Setup"
+        assert "ap_passphrase" not in unit  # the setup network is open (§5)
         cfg = yaml.safe_load(unit["config"].read_text())
         assert "pin" not in (cfg.get("service_window") or {})
         assert cfg["cloud_api_base"].startswith("http://127.0.0.1")

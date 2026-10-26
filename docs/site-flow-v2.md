@@ -8,10 +8,14 @@ the firmware half and what still has to be proved on a real Pi.
 
 ## What the installer does
 
-1. Scan the **Wi-Fi QR on the setup card** in the box with the iPhone camera,
-   then tap "Join WQM1-xxxx".
-2. The setup page **opens by itself** (captive portal). No address, and no
-   PIN. The hotspot passphrase on the card is the proof of presence.
+1. Join the open network **BlueSignal Setup** (install plan §5: the same
+   name on every unit, no password). A setup card printed before §5 has a
+   QR for the old per-unit network and passphrase; it no longer joins
+   anything. Reprint it from the marketplace bench script once that script
+   writes `WIFI:T:nopass;S:BlueSignal Setup;;`.
+2. The Wi-Fi page **opens by itself** (captive portal). No address, no
+   password, no PIN. The page sets only the unit's Wi-Fi; nothing else on
+   the unit answers on the setup network.
 3. Watch the probes if you need to. A carded unit skips the identity and
    cloud-key steps because the bench card supplied both.
 4. **Network, last:** the owner picks their Wi-Fi and types the password.
@@ -89,7 +93,7 @@ networks.
 
 ## Not yet proved on hardware: the bench checklist for unit #1
 
-- [ ] **iPhone opens the page by itself** after joining `WQM1-xxxx`, and one
+- [ ] **iPhone opens the page by itself** after joining **BlueSignal Setup**, and one
       Android phone does the same. The sheet should load
       `http://192.168.4.1/setup/` with no `:8080`. If it does not, confirm
       `wqm1-status.txt` says `portal: up (80)`, that

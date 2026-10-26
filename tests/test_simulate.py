@@ -350,7 +350,7 @@ class TestManyUnits:
         # Site flow v2: every full-tier unit has a VIRTUAL radio with its
         # setup hotspot up — the wizard must never touch the host's Wi-Fi.
         net = json.loads(files["netsim"].read_text())
-        assert net["ap"] is True and net["ap_ssid"] == "WQM1-0002"
+        assert net["ap"] is True and net["ap_ssid"] == "BlueSignal Setup"
         assert net["station"] is None and "BlueSignal-Shop" in net["saved"]
 
     def test_full_tier_processes_run_on_the_virtual_radio(self):

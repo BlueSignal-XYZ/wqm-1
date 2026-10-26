@@ -160,7 +160,7 @@ write_hosts_line() {
 step_hostname() {
   # Recomputed every boot from the board this card is in.
   local name ser current
-  name="$(cd "$SRC" 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import ap_name; print(ap_name().lower())' 2>/dev/null || true)"
+  name="$(cd "$SRC" 2>/dev/null && PYTHONPATH=. python3 -c 'from utils.identity import host_name; print(host_name())' 2>/dev/null || true)"
   if ! printf '%s' "$name" | grep -Eq '^wqm1-[a-z0-9]{4}$'; then
     ser="$(read_pi_serial)"
     ser="${ser: -4}"
