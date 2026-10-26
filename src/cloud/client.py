@@ -37,6 +37,11 @@ from cloud.register import note_http_key_revoked
 
 logger = logging.getLogger("wqm1.cloud")
 
+# post_command_result: retry transport, 5xx, 401, 403, 408, 429.
+# Other 4xx (404, 422, ...) are terminal; Cloud has dropped the command.
+RESULT_POST_DROP = "drop"
+_RESULT_RETRY_HTTP = frozenset({0, 401, 403, 408, 429})
+
 # DB column -> cloud sensor name. Cloud SENSOR_RANGES keys (functions/readings.js).
 _SENSOR_MAP = {
     "ph": "ph",
@@ -400,6 +405,56 @@ class CloudClient:
         if error:
             body["error"] = str(error)[:200]
         self._post(self._command_url, body)
+
+    def fetch_pending_commands(self) -> list[dict[str, Any]]:
+        """GET ``/v2/devices/{id}/commands/pending`` with the device key.
+
+        Empty list when ``api_base`` is unset or the request fails, so an
+        older Cloud that does not serve this route cannot stall the unit.
+        """
+        if not self._api_base:
+            return []
+        status, resp = self._request(self._device_url("commands/pending"), method="GET")
+        if status == 200 and resp:
+            cmds = resp.get("commands", [])
+            return cmds if isinstance(cmds, list) else []
+        return []
+
+    def post_command_result(
+        self,
+        command_id: str,
+        status: str,
+        result: dict[str, Any] | None = None,
+        message: str | None = None,
+    ) -> bool | str:
+        """POST ``/v2/devices/{id}/commands/{cmdId}/result``.
+
+        Returns True when Cloud accepted the result (HTTP 200) or already
+        recorded it (HTTP 409). False on transport errors, 5xx, 401, 403,
+        408, or 429 so the worker can retry the stored result (a rotating
+        or revoked device key is transient). Returns RESULT_POST_DROP for
+        other 4xx (the command is gone; retrying will not help).
+        """
+        if not command_id or not self._api_base:
+            return False
+        body: dict[str, Any] = {"status": status}
+        if result is not None:
+            body["result"] = result
+        if message:
+            body["message"] = str(message)[:200]
+        http, _ = self._post(self._device_url(f"commands/{command_id}/result"), body)
+        if http in (200, 409):
+            return True
+        if http >= 500 or http in _RESULT_RETRY_HTTP:
+            return False
+        if 400 <= http < 500:
+            logger.warning(
+                "Result POST for %s is terminal HTTP %s; will not retry",
+                command_id,
+                http,
+            )
+            return RESULT_POST_DROP
+        return False
 
     # -- v2 telemetry -----------------------------------------------------------
 

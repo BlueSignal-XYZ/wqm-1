@@ -44,6 +44,8 @@ from app.workers import (
 )
 from calibration.calibrate import CalibrationManager
 from cloud import CloudClient
+from cloud.device_commands import DeviceCommandDispatcher
+from cloud.device_hardware import Wqm1CommandHardware
 from control.irrigation_hold import IrrigationHold
 from control.led import StatusLEDs
 from control.relay import RelayController
@@ -969,6 +971,10 @@ class WQM1App:
                     apply_command=self._apply_cloud_command,
                     on_config_version=self._reconcile_remote_config,
                     on_ota_pending=self._nudge_ota_agent,
+                    apply_device_command=DeviceCommandDispatcher(
+                        hardware=Wqm1CommandHardware(self),
+                        cache_path=Path(self._settings.db_path).with_name("handled-commands.json"),
+                    ).apply,
                 )
             )
             self._heartbeat_worker = HeartbeatWorker(
