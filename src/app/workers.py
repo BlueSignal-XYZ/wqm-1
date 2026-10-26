@@ -695,6 +695,7 @@ class CommandWorker(Worker):
         apply_command: Callable[[dict[str, Any]], None],
         on_config_version: Callable[[int | None], None] | None = None,
         on_ota_pending: Callable[[], None] | None = None,
+        apply_device_command: Callable[[dict[str, Any]], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(clock)
@@ -704,6 +705,7 @@ class CommandWorker(Worker):
         self._apply_command = apply_command
         self._on_config_version = on_config_version
         self._on_ota_pending = on_ota_pending
+        self._apply_device_command = apply_device_command
 
     def interval_s(self) -> float:
         return float(self._settings().command_poll_s)
@@ -728,6 +730,8 @@ class CommandWorker(Worker):
         if poll.get("otaPending") and self._on_ota_pending:
             self._on_ota_pending()
 
+        self._apply_pending_device_commands()
+
         # Ship queued device events (monitor findings, config acks, ...).
         for event in self._state.drain_events():
             self._cloud.send_event(
@@ -736,6 +740,35 @@ class CommandWorker(Worker):
                 sensor=event.get("sensor"),
                 details=event.get("details"),
             )
+
+    def _apply_pending_device_commands(self) -> None:
+        """GET pending Cloud commands and POST each result. Optional on fakes."""
+        apply = self._apply_device_command
+        fetch = getattr(self._cloud, "fetch_pending_commands", None)
+        if apply is None or not callable(fetch):
+            return
+        try:
+            commands = fetch()
+        except Exception as exc:  # noqa: BLE001 — pending must not stall the legacy poll
+            logger.error("Fetch pending commands failed: %s", exc)
+            return
+        if not isinstance(commands, list):
+            return
+        post = getattr(self._cloud, "post_command_result", None)
+        for cmd in commands:
+            if not isinstance(cmd, dict):
+                continue
+            cmd_id = cmd.get("id")
+            try:
+                outcome = apply(cmd)
+                status = getattr(outcome, "status", "rejected")
+                result = getattr(outcome, "result", None)
+                message = getattr(outcome, "message", "")
+            except Exception as exc:  # noqa: BLE001 — one bad command must not stop the rest
+                logger.error("Apply device command %s failed: %s", cmd_id, exc)
+                status, result, message = "rejected", None, str(exc)
+            if callable(post) and cmd_id:
+                post(cmd_id, status, result, str(message)[:200])
 
 
 class HeartbeatWorker(Worker):

@@ -1,61 +1,82 @@
 # Sensor Calibration
 
-> **This is changing.** The Captain ruled on 24 Oct 2026 that calibration
-> moves into BlueSignal Cloud, as Cloud commands with no unit page, and the
-> unit's local page goes off (`docs/install-build-plan.md` §13 and §10).
-> Those commands are not built yet. Until they ship, calibration is done on
-> the bench by BlueSignal staff, from the Service Window as described below.
-> Owners and installers never open it. Rewrite this page in the PR that
-> ships the Cloud calibration command.
+Calibration and RS485 sensor setup for a claimed unit are done in
+**BlueSignal Cloud**, by the **owner**, through device commands. The local
+unit page is off after #157; there is no installer wizard on the LAN.
 
-All calibration is done from the **Service Window** (the on-device web UI at
-`http://<unit-ip>:8080`, under **Calibration**) with guided wizards. Each wizard
-shows a **live voltage** for its channel, refreshed every two seconds, with a
-*Use this value* button that fills the form. Save applies the calibration and
-stamps `calibrated_at`, so the firmware's drift tracking can nag you when a
-probe is due.
+The command formats are in [device-commands.md](device-commands.md). This
+page is the field procedure. **Unverified on hardware** until the Captain
+benches it. Do not treat anything below as a bench result.
 
-> **Enter the converter voltage, not a corrected one.** The number the wizard
-> displays and fills is what the ADC sees; the unit applies the divider and
-> temperature compensation itself. The TDS page additionally *reports* the
-> compensated probe voltage — that one is information, never an input.
+> **Enter the converter voltage, not a corrected one.** Analog pH `point`
+> reads what the ADC sees. The unit applies the divider and temperature
+> compensation itself. A compensated or handheld-corrected number is not an
+> input.
 >
-> Until firmware 2.1.2 the wizards asked you to "read the voltage" and nothing
-> in the product displayed one, so calibration was effectively impossible in the
-> field and units ran on factory nominals. A nominal reading looks exactly like
-> a calibrated one on the dashboard: check **Never calibrated on this unit** on
-> the Calibration index, or the absence of `/etc/bluesignal/calibration.yaml`.
+> Until firmware 2.1.2 nothing in the product displayed a voltage, so
+> analog calibration was effectively impossible in the field and units ran
+> on factory nominals. A nominal reading looks exactly like a calibrated
+> one on the dashboard: check the absence of a `calibrated_at` stamp, or
+> the absence of `/etc/bluesignal/calibration.yaml`.
 
-The live reading comes from the firmware daemon over its command socket, not
-from the Service Window opening the I²C bus. That boundary is deliberate: the
-ADS1115 has one conversion register shared by all four channels, so two
-independent readers can return one channel's voltage under another's name with
-nothing raised and nothing logged.
+The analog read still comes from the firmware daemon, which owns the I²C
+bus. The ADS1115 has one conversion register shared by all four channels,
+so a second process opening the bus can return one channel's voltage under
+another's name with nothing raised and nothing logged. Cloud commands ask
+the daemon; they do not open the bus themselves.
 
 Calibrating drifted or aged probes matters: the firmware detects drift and
-flags "recalibrate soon", but it never auto-corrects — a correction without a
-reference solution would corrupt the data record. The human recalibrates.
+flags "recalibrate soon", but it never auto-corrects — a correction without
+a reference solution would corrupt the data record. The owner recalibrates
+from Cloud. Each applied pH calibration stamps `calibrated_at`, so drift
+tracking can nag when a probe is due.
 
-## Analog probes (Raspberry Pi hosts)
+## Analog pH (Raspberry Pi hosts)
 
-| Probe | Method | Cadence | Consumable life |
-|---|---|---|---|
-| pH (BNC) | Two-point: rinse in distilled water, stabilize in pH 7.00 (point 1), rinse, stabilize in pH 4.00 or 10.00 (point 2). Verify 6.95–7.05 back in 7.00. | 30 days (or on drift alert) | Electrode 12–18 months |
-| TDS | Single-point in a conductivity standard (1413 µS/cm typical); set the point. Default ~500 ppm/V is **PROVISIONAL** — see below. | 180 days | Clean at every visit |
-| Turbidity | Zero in clean water; for compliance sites cross-check a handheld turbidimeter and record both values. | 90 days | Wipe optics at every visit |
-| Temperature (DS18B20) | Factory calibrated — no field calibration. | — | 5+ years |
+Two-point only: **4.0** then **7.0**. Cloud `ph_calibrate` with
+`probe: analog`. The unit rejects **10.0** and the Honde buffer set
+(4.01 / 6.86 / 9.18).
+
+1. Rinse in distilled water. Put the electrode in pH 4.0 buffer. Queue
+   `start`, then `point` with `buffer` 4.0, and wait for `applied`.
+2. Rinse. Put the electrode in pH 7.0 buffer. Queue `point` with
+   `buffer` 7.0.
+3. Queue `finish`. Cloud should show slope, offset, the two buffers, and
+   `measuredAt`. A rejected result is the unit's message in words.
+
+Cadence: 30 days, or on a drift alert. Electrode life is typically 12–18
+months.
+
+Verify 6.95–7.05 back in 7.0 after `finish`. That check is unverified on
+hardware.
 
 > Analog ORP (AIN3) is non-functional on PCBA rev Fin_3 — the pin is spare,
-> with no ORP circuit behind it, so the Service Window's ORP page cannot
-> calibrate a base-unit channel and says so. Use the digital RS485 ORP probe
-> below.
+> with no ORP circuit behind it. Use the digital RS485 ORP probe below.
 
-**If TDS reads far lower than the water should:** calibration is the test, not
-the fix. Put the probe in a known standard and watch the live voltage. If it
-barely moves between air and solution the probe is not conducting — check full
-immersion, fouling, and wiring — and the wizard will refuse to solve a `k` from
-it, because a `k` derived from a dead probe makes every later reading wrong
-without ever looking wrong.
+## Analog TDS and turbidity
+
+Cloud commands for TDS and turbidity are not in this firmware change.
+Until they ship, BlueSignal staff set those coefficients on the bench.
+Owners do not open a local page to do it. Unverified on hardware.
+
+The stored coefficients still work the way they did:
+
+**TDS** is a single-point in a conductivity standard (1413 µS/cm typical).
+Default ~500 ppm/V is **PROVISIONAL** — see below. Cadence 180 days. Clean
+at every visit.
+
+**If TDS reads far lower than the water should:** calibration is the test,
+not the fix. Put the probe in a known standard. If the converter voltage
+barely moves between air and solution the probe is not conducting — check
+full immersion, fouling, and wiring — and do not solve a `k` from a dead
+probe. A `k` derived that way makes every later reading wrong without ever
+looking wrong.
+
+**Turbidity** is a zero in clean water; for compliance sites cross-check a
+handheld turbidimeter and record both values. Cadence 90 days. Wipe optics
+at every visit.
+
+**Temperature (DS18B20)** is factory calibrated — no field calibration.
 
 ### Analog TDS — BUILD provisional scale (2026-09-04)
 
@@ -63,7 +84,7 @@ without ever looking wrong.
 > These are **not** measured bench values. Firmware 2.1.1 samples AIN0
 > only; it does not drive CD4060 excitation.
 
-The analog TDS one-point wizard uses a conductivity standard
+The analog TDS one-point uses a conductivity standard
 (**1413 µS/cm** typical). The default **~500 ppm/V** coefficient is a
 provisional starting point. Absolute V/ppm is unknown until the cell
 constant is known — **order-of-magnitude only**.
@@ -79,28 +100,37 @@ and AMS1117 current bands are in
 Replace these notes when Jacques benches Q4 / VIN0 / current; the
 HL-A250L-38 nameplate is still pending from Haolin.
 
-## RS485 digital probes (Honde Tech)
+## RS485 digital probes
 
-The digital probes hold their own calibration state on the probe. Calibrate
-through **Service Window → RS485 Sensors → Calibrate**.
+The digital probes hold their own calibration state on the probe. The
+owner adds, re-addresses, enables, and disables them from Cloud with
+`rs485_config`. Allowed models only: residual chlorine
+(`HondeChlorineSensor`), ORP RD-ORP-WE-01 (`HondeOrpSensor`), and 5-in-1
+RD-PETSTS-01 (`HondeMultiSensor`). Anything else is rejected. Addresses
+are 1–247.
 
 | Probe | Method | Cadence |
 |---|---|---|
-| Residual chlorine | Guided zero/slope wizard in a flow cell (15–30 L/h) against a lab-verified sample. Valid pH 5–9. Activate a new probe in 3M KCL before first use. | Every 1–2 months |
-| 5-in-1 pH | Guided buffer wizard: 4.01 / 6.86 / 9.18 after stability in each buffer. | Quarterly, or on drift alert |
-| 5-in-1 EC / conductivity | Slope against a known-conductivity solution; EC, TDS, and salinity all derive from this one electrode. | Quarterly, or on drift alert |
+| Residual chlorine | Zero/slope in a flow cell (15–30 L/h) against a lab-verified sample. Valid pH 5–9. Activate a new probe in 3M KCL before first use. Cloud does not yet send those cal steps — only add / address / enable. Unverified on hardware. | Every 1–2 months |
+| 5-in-1 pH (RD-PETSTS-01) | Cloud `ph_calibrate` with `probe: rs485_multi`. Buffers **4.01**, **6.86**, and **9.18** only, after the reading is stable in each. The unit rejects 4.0, 7.0, and 10.0. | Quarterly, or on drift alert |
+| 5-in-1 EC / conductivity | Slope against a known-conductivity solution; EC, TDS, and salinity all derive from this one electrode. Not a Cloud command in this change. Unverified on hardware. | Quarterly, or on drift alert |
 | Digital ORP (RD-ORP-WE-01) | Factory calibrated. | Replace electrode per vendor guidance |
+
+pH on the 5-in-1: `start`, then one `point` per buffer, then `finish`.
+Cloud shows the buffers and `measuredAt`. Slope and offset stay on the
+probe.
 
 ## Drift & health
 
 Every calibration re-anchors the drift baseline. Between calibrations the
 firmware watches the long-window median against that baseline and raises a
-`calibration_drift` event — surfaced on the dashboard and the Service Window
-status page as a plain-language "recalibrate soon" — before readings go
-meaningfully wrong. A flatlined or disconnected probe is reported as a fault
-(not fake data) and its relay rules are suspended until it recovers.
+`calibration_drift` event — surfaced on the Cloud dashboard as a
+plain-language "recalibrate soon" — before readings go meaningfully wrong.
+A flatlined or disconnected probe is reported as a fault (not fake data)
+and its relay rules are suspended until it recovers.
 
-See also: [getting-started.md](getting-started.md) (RS485 wiring & addresses),
+See also: [device-commands.md](device-commands.md) (wire formats),
+[getting-started.md](getting-started.md) (RS485 wiring & addresses),
 [firmware-overview.md](firmware-overview.md) (sensing architecture),
 [hardware-overview.md](hardware-overview.md) (TDS excitation / VIN0 / AMS1117
 BUILD estimates).

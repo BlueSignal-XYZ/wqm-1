@@ -401,6 +401,37 @@ class CloudClient:
             body["error"] = str(error)[:200]
         self._post(self._command_url, body)
 
+    def fetch_pending_commands(self) -> list[dict[str, Any]]:
+        """GET ``/v2/devices/{id}/commands/pending`` with the device key.
+
+        Empty list when ``api_base`` is unset or the request fails, so an
+        older Cloud that does not serve this route cannot stall the unit.
+        """
+        if not self._api_base:
+            return []
+        status, resp = self._request(self._device_url("commands/pending"), method="GET")
+        if status == 200 and resp:
+            cmds = resp.get("commands", [])
+            return cmds if isinstance(cmds, list) else []
+        return []
+
+    def post_command_result(
+        self,
+        command_id: str,
+        status: str,
+        result: dict[str, Any] | None = None,
+        message: str | None = None,
+    ) -> None:
+        """POST ``/v2/devices/{id}/commands/{cmdId}/result``."""
+        if not command_id or not self._api_base:
+            return
+        body: dict[str, Any] = {"status": status}
+        if result is not None:
+            body["result"] = result
+        if message:
+            body["message"] = str(message)[:200]
+        self._post(self._device_url(f"commands/{command_id}/result"), body)
+
     # -- v2 telemetry -----------------------------------------------------------
 
     def send_heartbeat(self, payload: dict[str, Any]) -> bool:
