@@ -127,11 +127,11 @@ RS485 multi-sensor `finish` sends the points and may have `slope` /
 Wire `sensor` names (canonical). Firmware maps them to the existing
 probe drivers and rejects anything else with `sensor not allowed`:
 
-| Wire name | Driver |
+| Wire name | Probe |
 |---|---|
-| `residual_chlorine` | `HondeChlorineSensor` |
-| `RD-ORP-WE-01` | `HondeOrpSensor` |
-| `RD-PETSTS-01` | `HondeMultiSensor` |
+| `residual_chlorine` | residual chlorine |
+| `RD-ORP-WE-01` | digital ORP |
+| `RD-PETSTS-01` | 5-in-1 (pH, EC, TDS, salinity, temperature) |
 
 ```json
 {

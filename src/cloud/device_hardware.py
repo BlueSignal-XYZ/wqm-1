@@ -59,9 +59,10 @@ class Wqm1CommandHardware:
 
     def rs485_add(self, sensor: str, address: int) -> list[dict[str, Any]]:
         prefix, attr, cls = _binding(sensor)
-        self._write_local({f"{prefix}_enabled": True, f"{prefix}_addr": address})
         bus = self._ensure_bus()
-        setattr(self._app, attr, cls(bus, address))
+        probe = cls(bus, address)
+        self._write_local({f"{prefix}_enabled": True, f"{prefix}_addr": address})
+        setattr(self._app, attr, probe)
         self._sync()
         return self.rs485_list()
 
@@ -96,13 +97,15 @@ class Wqm1CommandHardware:
         updates: dict[str, Any] = {f"{prefix}_enabled": enabled}
         if address is not None:
             updates[f"{prefix}_addr"] = address
-        self._write_local(updates)
         if enabled:
             current = address
             if current is None:
                 current = int(getattr(self._live_settings(), f"{prefix}_addr"))
-            setattr(self._app, attr, cls(self._ensure_bus(), current))
+            probe = cls(self._ensure_bus(), current)
+            self._write_local(updates)
+            setattr(self._app, attr, probe)
         else:
+            self._write_local(updates)
             setattr(self._app, attr, None)
         self._sync()
         return self.rs485_list()

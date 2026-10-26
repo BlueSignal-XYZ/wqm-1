@@ -882,6 +882,32 @@ class TestResultHttpStatus:
         monkeypatch.setattr("urllib.request.urlopen", unprocessable)
         assert c.post_command_result("bad", "applied") == RESULT_POST_DROP
 
+    def test_401_and_403_are_retried(self, monkeypatch):
+        c = CloudClient(
+            device_id="BS-WQM1-00aabbccddee",
+            ingest_url="https://example.test/ingestReading",
+            command_url="https://example.test/deviceCommands",
+            api_key="device-key",
+            fw_version="2.4.0",
+            api_base="https://example.test/app",
+        )
+        c._sleep = lambda *_: None
+        c._max_retries = 1
+
+        def unauthorized(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", unauthorized)
+        assert c.post_command_result("rotating", "applied") is False
+
+        c._api_key = "device-key"
+
+        def forbidden(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", forbidden)
+        assert c.post_command_result("forbidden", "applied") is False
+
 
 class TestTerminalResultNotRetried:
     def test_404_is_dropped_and_not_reposted(self, mock_hardware):
@@ -929,6 +955,58 @@ class TestHandledIdExpiryWindow:
         assert second.status == "applied"
         assert second.result == first.result
         assert len(hw.voltages) == remaining
+
+
+class TestRs485ConfigWrittenAfterHardware:
+    def test_add_does_not_write_yaml_when_bus_open_fails(self, tmp_path, monkeypatch):
+        app, config, sync = _real_app(tmp_path)
+        app._modbus_bus = None
+        writes: list[dict] = []
+
+        def boom(*_a, **_k):
+            raise OSError("no such port")
+
+        def record_write(path, updates):
+            writes.append(dict(updates))
+            raise AssertionError("config must not be written when the bus fails")
+
+        monkeypatch.setattr("cloud.device_hardware.ModbusBus", boom)
+        monkeypatch.setattr("cloud.device_hardware.update_config", record_write)
+        hw = Wqm1CommandHardware(app)
+        with pytest.raises(OSError, match="no such port"):
+            hw.rs485_add("residual_chlorine", 5)
+        assert writes == []
+        assert app._chlorine is None
+        assert app._modbus_bus is None
+        assert config.settings.rs485_chlorine_enabled is False
+        assert config.settings.rs485_chlorine_addr == 1
+        assert "rs485_chlorine_enabled: true" not in Path(config._base_path).read_text()
+        sync.assert_not_called()
+
+    def test_enable_does_not_write_yaml_when_bus_open_fails(self, tmp_path, monkeypatch):
+        app, config, sync = _real_app(tmp_path)
+        app._modbus_bus = None
+        writes: list[dict] = []
+
+        def boom(*_a, **_k):
+            raise OSError("port busy")
+
+        def record_write(path, updates):
+            writes.append(dict(updates))
+            raise AssertionError("config must not be written when the bus fails")
+
+        monkeypatch.setattr("cloud.device_hardware.ModbusBus", boom)
+        monkeypatch.setattr("cloud.device_hardware.update_config", record_write)
+        hw = Wqm1CommandHardware(app)
+        with pytest.raises(OSError, match="port busy"):
+            hw.rs485_set_enabled("RD-PETSTS-01", 8, True)
+        assert writes == []
+        assert app._multi is None
+        assert app._modbus_bus is None
+        assert config.settings.rs485_multi_enabled is False
+        assert config.settings.rs485_multi_addr == 3
+        assert "rs485_multi_enabled: true" not in Path(config._base_path).read_text()
+        sync.assert_not_called()
 
 
 class TestSetAddressConfigWriteFailure:

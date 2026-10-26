@@ -37,9 +37,10 @@ from cloud.register import note_http_key_revoked
 
 logger = logging.getLogger("wqm1.cloud")
 
-# post_command_result: 4xx other than 408/429 are permanent; do not retry.
+# post_command_result: retry transport, 5xx, 401, 403, 408, 429.
+# Other 4xx (404, 422, ...) are terminal; Cloud has dropped the command.
 RESULT_POST_DROP = "drop"
-_RESULT_RETRY_HTTP = frozenset({0, 408, 429})
+_RESULT_RETRY_HTTP = frozenset({0, 401, 403, 408, 429})
 
 # DB column -> cloud sensor name. Cloud SENSOR_RANGES keys (functions/readings.js).
 _SENSOR_MAP = {
@@ -429,9 +430,10 @@ class CloudClient:
         """POST ``/v2/devices/{id}/commands/{cmdId}/result``.
 
         Returns True when Cloud accepted the result (HTTP 200) or already
-        recorded it (HTTP 409). False on transport errors, 5xx, 408, or 429
-        so the worker can retry the stored result. Returns RESULT_POST_DROP
-        for other 4xx (the command is gone; retrying will not help).
+        recorded it (HTTP 409). False on transport errors, 5xx, 401, 403,
+        408, or 429 so the worker can retry the stored result (a rotating
+        device key is transient). Returns RESULT_POST_DROP for other 4xx
+        (the command is gone; retrying will not help).
         """
         if not command_id or not self._api_base:
             return False
