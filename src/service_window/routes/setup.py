@@ -665,6 +665,13 @@ def cloud() -> ResponseReturnValue:
     if request.method == "POST":
         if request.form.get("continue") or request.form.get("skip"):
             return redirect(url_for("setup.done"))
+        # Writing keys is the bench override only. The hotspot comes back
+        # whenever the unit loses its Wi-Fi, and its passphrase is on the
+        # card, so a phone on it must not replace the cloud or LoRa keys.
+        from service_window.auth import _on_the_unit, service_window_closed
+
+        if not _on_the_unit():
+            return service_window_closed()
         key = request.form.get("api_key", "").strip()
         app_key = request.form.get("app_key", "").strip()
         app_eui = request.form.get("app_eui", "").strip()

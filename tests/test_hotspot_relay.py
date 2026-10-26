@@ -123,6 +123,43 @@ class TestRelayedSetupRequests:
         assert r.status_code != 403
         assert b"no local sign-in" not in r.data
 
+    def test_a_hotspot_phone_cannot_replace_the_units_keys(
+        self, tmp_path, mock_hardware, real_hotspot
+    ):
+        """Cursor security review on #153 (42e9d86): the recovery hotspot comes
+        back whenever Wi-Fi is lost, so /setup/cloud must not write keys from
+        it. Saving a key there is the bench override only."""
+        import yaml
+
+        app = make_app(tmp_path, mock_hardware, setup_completed=True)
+        form = {"api_key": "k" * 20, "app_key": "a" * 32, "app_eui": "b" * 16}
+        before = (tmp_path / "config.yaml").read_text()
+        for remote, extra in (("127.0.0.1", RELAYED), ("192.168.4.23", {})):
+            with app.test_client() as c:
+                r = c.post(
+                    "/setup/cloud",
+                    data=form,
+                    headers={"Host": "192.168.4.1", **extra},
+                    environ_base={"REMOTE_ADDR": remote},
+                )
+            assert r.status_code == 403, remote
+        assert (tmp_path / "config.yaml").read_text() == before
+        assert yaml.safe_load(before).get("api_key") != "k" * 20
+
+    def test_a_hotspot_phone_can_still_continue_past_the_cloud_page(
+        self, tmp_path, mock_hardware, real_hotspot
+    ):
+        app = make_app(tmp_path, mock_hardware)
+        with app.test_client() as c:
+            r = c.post(
+                "/setup/cloud",
+                data={"continue": "1"},
+                headers={"Host": "192.168.4.1", **RELAYED},
+                environ_base={"REMOTE_ADDR": "127.0.0.1"},
+            )
+        assert r.status_code == 302
+        assert r.headers["Location"].endswith("/setup/done")
+
 
 class TestBenchTunnel:
     """Decision 2 (24 Oct 2026): staff reach the Service Window at the bench
