@@ -28,6 +28,7 @@ import json
 import logging
 import re
 import threading
+import time
 
 from flask import (
     Blueprint,
@@ -338,6 +339,10 @@ def _fail_join_job(app: object, ssid: str, message: str, ap_restored: bool = Fal
     }
 
 
+def _restore_sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
 def _bring_hotspot_back(ap_ssid: str | None, ap_pass: str | None) -> bool:
     """After ``join_network`` raised, put the setup hotspot back up.
 
@@ -348,12 +353,14 @@ def _bring_hotspot_back(ap_ssid: str | None, ap_pass: str | None) -> bool:
     """
     if not (ap_ssid and ap_pass):
         return False
-    from utils.netctl import ap_active, start_ap
+    from utils import netctl
 
     try:
-        if ap_active():
+        if netctl.ap_active():
             return True
-        return bool(start_ap(ap_ssid, ap_pass).get("ok"))
+        # The radio is often still settling after stop_ap and a connect, so
+        # use join_network's own restore: AP_ATTEMPTS tries, 2 s apart.
+        return netctl._restore_ap(True, ap_ssid, ap_pass, netctl.DEFAULT_WIFI_IFACE, _restore_sleep)
     except Exception:
         logger.exception("Could not bring the setup hotspot back after a join error")
         return False
@@ -406,9 +413,14 @@ def _begin_join(
                     # The radio is on the site network now. A failure while
                     # recording setup is not a failed join: the hotspot is
                     # down and the installer must not be sent to retry it.
+                    # The register kick and the setup record are separate:
+                    # a kick that raises must not leave setup unrecorded.
                     forgotten: list = []
                     try:
                         _kick_register()
+                    except Exception:
+                        logger.exception("Joined %s, but the register kick failed", ssid)
+                    try:
                         forgotten = _finish_setup(ssid)["forgotten"]
                     except Exception:
                         logger.exception("Joined %s, but recording setup failed", ssid)

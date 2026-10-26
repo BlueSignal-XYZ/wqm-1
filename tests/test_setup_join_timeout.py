@@ -195,6 +195,75 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert "LAST_JOIN" not in app.config
         assert started == []
 
+    def test_a_raising_register_kick_still_records_setup(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        """Bugbot on #157 (ce248b1): the kick and the setup record shared one
+        try, so a kick that raised left setup unrecorded."""
+        from service_window.routes import setup as setup_routes
+        from utils import netctl
+
+        client, _app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *_a, **_k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
+        )
+
+        def broken_kick():
+            raise OSError("config.yaml unreadable")
+
+        recorded = []
+        monkeypatch.setattr(setup_routes, "_kick_register", broken_kick)
+        monkeypatch.setattr(
+            setup_routes,
+            "_finish_setup",
+            lambda ssid: recorded.append(ssid) or {"forgotten": []},
+        )
+        client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        assert recorded == ["PondHouse"]
+        assert client.get("/setup/join-status").get_json()["state"] == "ok"
+
+    def test_hotspot_restore_retries_a_settling_radio(self, tmp_path, mock_hardware, monkeypatch):
+        """Bugbot on #157 (ce248b1): one start_ap was not enough while the
+        radio settles. The restore uses join_network's AP_ATTEMPTS tries."""
+        from service_window.routes import setup as setup_routes
+        from utils import netctl
+
+        state = {"ap": True, "calls": 0}
+
+        def boom(*_a, **_k):
+            state["ap"] = False
+            raise RuntimeError("nmcli missing")
+
+        def start_ap(ssid, passphrase, iface="wlan0"):
+            state["calls"] += 1
+            if state["calls"] < netctl.AP_ATTEMPTS:
+                return {"ok": False}
+            state["ap"] = True
+            return {"ok": True}
+
+        client, app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        monkeypatch.setattr(netctl, "join_network", boom)
+        monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": state["ap"])
+        monkeypatch.setattr(netctl, "start_ap", start_ap)
+        monkeypatch.setattr(setup_routes, "_restore_sleep", lambda _s: None)
+        client.post(
+            "/setup/network",
+            data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+        )
+        assert state["calls"] == netctl.AP_ATTEMPTS
+        assert (app.config.get("LAST_JOIN") or {}).get("ap_restored") is True
+
     def test_second_join_post_keeps_the_running_ssid(self, tmp_path, mock_hardware, monkeypatch):
         from utils import netctl
 

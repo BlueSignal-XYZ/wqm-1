@@ -37,6 +37,9 @@ _HOTSPOT_OPEN = frozenset(
     }
 )
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
 _CLOSED_BODY = (
     "<!DOCTYPE html><html lang=en><head><meta charset=utf-8>"
     "<meta name=viewport content='width=device-width, initial-scale=1'>"
@@ -96,9 +99,37 @@ def _on_the_unit() -> bool:
     try:
         from service_window.captive import on_the_unit
 
-        return on_the_unit()
+        return on_the_unit() and _bench_request_is_ours()
     except Exception:
         return False
+
+
+def _bench_request_is_ours() -> bool:
+    """The tunnel's own browser tab, not another site that browser opened.
+
+    While the tunnel is up, any page in the staff browser can send a request
+    to 127.0.0.1:8080, and it arrives from loopback like the tunnel does.
+    Two checks keep those out:
+
+    * Host must name loopback. A DNS-rebinding page arrives with its own
+      name as Host, and could otherwise read every page.
+    * A request that changes something must be same-origin. ``Sec-Fetch-Site``,
+      when sent, is ``same-origin`` or ``none``, and ``Origin``, when sent,
+      is this host.
+
+    curl and scripts on the bench send neither header, so they pass.
+    """
+    host = (request.host or "").lower()
+    name = host.split("]", 1)[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
+    if name not in _LOOPBACK_HOSTS:
+        return False
+    if request.method in _SAFE_METHODS:
+        return True
+    site = request.headers.get("Sec-Fetch-Site")
+    if site is not None and site not in {"same-origin", "none"}:
+        return False
+    origin = request.headers.get("Origin")
+    return origin is None or origin.lower() in {f"http://{host}", f"https://{host}"}
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])

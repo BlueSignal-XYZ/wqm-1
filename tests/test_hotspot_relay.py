@@ -34,6 +34,11 @@ def _get(app, path, remote, headers=None):
         return c.get(path, headers=headers or {}, environ_base={"REMOTE_ADDR": remote})
 
 
+def _post(app, path, remote, headers=None):
+    with app.test_client() as c:
+        return c.post(path, headers=headers or {}, environ_base={"REMOTE_ADDR": remote})
+
+
 RELAYED = {"X-WQM1-Relay": "hotspot"}
 
 
@@ -117,6 +122,50 @@ class TestBenchTunnel:
     def test_the_home_network_is_not_the_tunnel(self, tmp_path, mock_hardware, real_hotspot):
         app = make_app(tmp_path, mock_hardware, setup_completed=True)
         assert _get(app, "/settings/", "10.0.0.5").status_code == 403
+
+    # Cursor security review on #157 (ce248b1): while the tunnel is up, any
+    # page in the staff browser can reach 127.0.0.1:8080 from loopback.
+
+    def test_a_cross_site_post_through_the_tunnel_is_refused(
+        self, tmp_path, mock_hardware, real_hotspot
+    ):
+        app = make_app(tmp_path, mock_hardware, setup_completed=True)
+        for headers in (
+            {"Origin": "https://evil.example"},
+            {"Sec-Fetch-Site": "cross-site"},
+            {"Origin": "null"},
+        ):
+            r = _post(app, "/relays/set", "127.0.0.1", headers)
+            assert r.status_code == 403, headers
+            assert b"no local sign-in" in r.data, headers
+
+    def test_a_rebound_host_name_is_refused(self, tmp_path, mock_hardware, monkeypatch):
+        """With the hotspot down (a unit online at its site), a DNS-rebinding
+        page reaches the tunnel under its own name."""
+        from service_window import captive
+        from utils import netsim
+
+        monkeypatch.setattr(captive, "hotspot_up", lambda: False)
+        monkeypatch.setattr(netsim, "is_virtual", lambda: False)
+        app = make_app(tmp_path, mock_hardware, setup_completed=True)
+        r = _get(app, "/settings/", "127.0.0.1", {"Host": "evil.example:8080"})
+        assert r.status_code == 403
+        assert b"no local sign-in" in r.data
+        assert _get(app, "/settings/", "127.0.0.1").status_code == 200
+
+    def test_the_tunnel_tab_and_bench_scripts_still_post(
+        self, tmp_path, mock_hardware, real_hotspot
+    ):
+        app = make_app(tmp_path, mock_hardware, setup_completed=True)
+        same_origin = {
+            "Host": "127.0.0.1:8080",
+            "Origin": "http://127.0.0.1:8080",
+            "Sec-Fetch-Site": "same-origin",
+        }
+        for headers in (same_origin, {"Host": "[::1]:8080"}, {}):
+            r = _post(app, "/relays/set", "127.0.0.1", headers)
+            assert r.status_code != 403, headers
+            assert b"no local sign-in" not in r.data, headers
 
 
 class _Echo(BaseHTTPRequestHandler):
