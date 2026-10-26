@@ -381,6 +381,9 @@ def _begin_join(
         time.sleep(_JOIN_POLL_S)
         state = join.read_state()
     if state.get("state") == "joined":
+        # "joined" is written before the follow-up; the page below says setup
+        # is finished, so let the follow-up (record setup, restart) finish.
+        join.wait_for_follow_up()
         rssi = state.get("rssi")
         return render_template(
             "setup/joined.html",

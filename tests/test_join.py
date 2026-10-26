@@ -15,18 +15,25 @@ real network.
 
 from __future__ import annotations
 
+import email.message
 import importlib
 import importlib.util
 import json
 import logging
+import ssl
 import threading
 import time
+import urllib.error
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from utils import join, netctl
+
+# The real network checks, taken before conftest stubs them for every test.
+REAL_HTTPS_STATUS = netctl._https_status
+REAL_HTTP_DATE = netctl._http_date
 
 HOME = "SmithHome"
 RIGHT = "Sup3r-Secret-Pw!"
@@ -309,10 +316,145 @@ class TestClockFix:
         assert moved == []
         assert dates == []
 
+    def test_the_clock_is_set_forward_at_most_once_per_boot(self):
+        header = datetime(2027, 6, 1, 12, 0, tzinfo=UTC)
+        first, moved, _ = _clock_case(header)
+        assert moved == [header]
+        assert netctl.clock_step_marker().exists()
+        second, moved_again, dates = _clock_case(header)
+        assert moved_again == []
+        assert dates == [], "no Date header is even read"
+        assert second["clock"] == {"action": "refused", "reason": "once_per_boot"}
+        assert second["ok"] is False
+
+    def test_a_failed_step_does_not_use_up_the_boot(self):
+        result = netctl._repair_clock(
+            "api.bluesignal.test",
+            http_date=lambda url: datetime(2027, 1, 1, tzinfo=UTC),
+            now=lambda: NOW,
+            set_time=lambda when: False,
+            ntp_synced=lambda: False,
+        )
+        assert result["action"] == "set_failed"
+        assert not netctl.clock_step_marker().exists()
+
     def test_the_cap_handles_29_february(self):
         leap = datetime(2028, 2, 29, tzinfo=UTC)
         assert netctl.clock_step_allowed(leap, datetime(2030, 2, 28, tzinfo=UTC))
         assert not netctl.clock_step_allowed(leap, datetime(2030, 3, 1, tzinfo=UTC))
+
+
+# -- The real HTTPS and Date checks (conftest stubs them everywhere else) ------
+
+
+class _Resp:
+    def __init__(self, headers=None):
+        self.headers = headers
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _cert_error(code: int, message: str = "certificate verify failed"):
+    err = ssl.SSLCertVerificationError(1, message)
+    err.verify_code = code
+    err.verify_message = message
+    return err
+
+
+def _headers(**fields):
+    msg = email.message.Message()
+    for key, value in fields.items():
+        msg[key] = value
+    return msg
+
+
+class TestRealHttpsCheck:
+    def _status(self, monkeypatch, outcome):
+        def fake_urlopen(request, timeout=None, context=None):
+            assert request.full_url.startswith("https://")
+            assert context is not None and context.verify_mode == ssl.CERT_REQUIRED
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return _Resp()
+
+        monkeypatch.setattr(netctl.urllib.request, "urlopen", fake_urlopen)
+        return REAL_HTTPS_STATUS("https://api.bluesignal.test/")
+
+    def test_any_answer_is_ok(self, monkeypatch):
+        assert self._status(monkeypatch, None) == "ok"
+
+    def test_an_http_error_status_is_still_an_answer(self, monkeypatch):
+        error = urllib.error.HTTPError("https://api.bluesignal.test/", 404, "Not Found", None, None)
+        assert self._status(monkeypatch, error) == "ok"
+
+    @pytest.mark.parametrize("code", [9, 10])
+    def test_a_certificate_time_error_is_time(self, monkeypatch, code):
+        wrapped = urllib.error.URLError(_cert_error(code))
+        assert self._status(monkeypatch, wrapped) == "time"
+        assert self._status(monkeypatch, _cert_error(code)) == "time"
+
+    def test_a_not_yet_valid_message_is_time_without_a_code(self, monkeypatch):
+        err = _cert_error(0, "certificate is not yet valid")
+        assert self._status(monkeypatch, urllib.error.URLError(err)) == "time"
+
+    def test_another_certificate_error_is_a_failure(self, monkeypatch):
+        err = _cert_error(62, "hostname mismatch")
+        assert self._status(monkeypatch, urllib.error.URLError(err)) == "fail"
+
+    @pytest.mark.parametrize(
+        "error",
+        [OSError("unreachable"), urllib.error.URLError(OSError("no route")), ValueError("x")],
+    )
+    def test_no_answer_is_a_failure(self, monkeypatch, error):
+        assert self._status(monkeypatch, error) == "fail"
+
+
+class TestRealDateHeader:
+    def _date(self, monkeypatch, outcome):
+        def fake_urlopen(request, timeout=None):
+            assert request.full_url.startswith("http://")
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return _Resp(outcome)
+
+        monkeypatch.setattr(netctl.urllib.request, "urlopen", fake_urlopen)
+        return REAL_HTTP_DATE("http://api.bluesignal.test/")
+
+    def test_a_good_header_is_read_as_utc(self, monkeypatch):
+        got = self._date(monkeypatch, _headers(Date="Mon, 26 Oct 2026 12:00:00 GMT"))
+        assert got == datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+
+    def test_an_offset_is_converted_to_utc(self, monkeypatch):
+        got = self._date(monkeypatch, _headers(Date="Mon, 26 Oct 2026 07:00:00 -0500"))
+        assert got == datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+
+    def test_an_error_status_still_carries_a_date(self, monkeypatch):
+        error = urllib.error.HTTPError(
+            "http://api.bluesignal.test/",
+            404,
+            "Not Found",
+            _headers(Date="Mon, 26 Oct 2026 12:00:00 GMT"),
+            None,
+        )
+        assert self._date(monkeypatch, error) == datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            _headers(),
+            _headers(Date="not a date"),
+            # -0000 means "no zone information": parsed naive, never trusted.
+            _headers(Date="Mon, 26 Oct 2026 12:00:00 -0000"),
+            OSError("unreachable"),
+        ],
+        ids=["missing", "garbage", "naive", "no-answer"],
+    )
+    def test_anything_else_is_none(self, monkeypatch, outcome):
+        assert self._date(monkeypatch, outcome) is None
 
 
 # -- join.start_join / join.read_state ----------------------------------------
@@ -351,6 +493,27 @@ class TestStartJoin:
         assert first == {"state": "joining", "ssid": HOME}
         assert second == {"state": "busy", "ssid": HOME}
         assert calls == [HOME]
+
+    def test_joined_is_recorded_before_the_follow_up_runs(self, radio):
+        """A follow-up that hangs or dies must not leave a proven join
+        reading as joining or interrupted (review of #167)."""
+        release = threading.Event()
+        seen: list[str] = []
+
+        def slow_follow_up(_result):
+            seen.append(join.read_state()["state"])
+            release.wait(5)
+
+        join.start_join(HOME, RIGHT, on_joined=slow_follow_up)
+        end = time.monotonic() + 5
+        while not seen and time.monotonic() < end:
+            time.sleep(0.01)
+        assert seen == ["joined"]
+        assert join.read_state()["state"] == "joined"
+        assert join.wait_for_follow_up(timeout_s=0.05) is False
+        release.set()
+        assert join.wait_for_follow_up(timeout_s=5) is True
+        assert join.read_state()["state"] == "joined"
 
     def test_the_lock_is_free_again_after_a_join(self, radio):
         join.start_join(HOME, RIGHT)

@@ -990,6 +990,28 @@ def clock_step_allowed(now: datetime, header: datetime) -> bool:
     return now < header <= _add_years(now, CLOCK_STEP_MAX_YEARS)
 
 
+CLOCK_STEP_MARKER = Path("/run/bluesignal/clock-stepped")
+
+
+def clock_step_marker() -> Path:
+    """Written after a clock step; /run is emptied by a reboot."""
+    override = os.environ.get("WQM1_CLOCK_STEP_MARKER")
+    return Path(override) if override else CLOCK_STEP_MARKER
+
+
+def _clock_stepped_this_boot() -> bool:
+    return clock_step_marker().exists()
+
+
+def _mark_clock_stepped() -> None:
+    try:
+        path = clock_step_marker()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
+    except OSError as e:
+        logger.warning("Clock step not recorded: %s", e)
+
+
 def _ntp_synced() -> bool:
     from utils.clock import ClockDiscipline
 
@@ -1009,10 +1031,20 @@ def _repair_clock(
     now: Callable[[], datetime],
     set_time: Callable[[datetime], bool],
     ntp_synced: Callable[[], bool],
+    stepped_this_boot: Callable[[], bool] = _clock_stepped_this_boot,
+    mark_stepped: Callable[[], None] = _mark_clock_stepped,
 ) -> dict[str, Any]:
-    """Move a stuck clock forward from the API host's ``Date`` header."""
+    """Move a stuck clock forward from the API host's ``Date`` header.
+
+    At most once per boot. The header is unauthenticated, so the cap bounds
+    one forged step; refusing a second one stops a LAN that keeps forging it
+    from walking the clock forward two years per join.
+    """
     if ntp_synced():
         return {"action": "none", "reason": "ntp"}
+    if stepped_this_boot():
+        logger.warning("Not moving the clock again: it was already set forward this boot")
+        return {"action": "refused", "reason": "once_per_boot"}
     header = http_date(f"http://{host}/")
     current = now()
     if header is None:
@@ -1031,6 +1063,7 @@ def _repair_clock(
     except Exception as e:  # noqa: BLE001 - a failed correction is logged, never fatal
         logger.error("clock correction from HTTP Date failed: %s", e)
     if ok:
+        mark_stepped()
         logger.warning(
             "System clock set forward from the API host's Date header: %s -> %s",
             current.strftime("%Y-%m-%dT%H:%M:%SZ"),
