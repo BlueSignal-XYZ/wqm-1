@@ -1,7 +1,7 @@
 """Live hardware ports for Cloud pH calibration and RS485 sensor setup.
 
 Applies commands through the existing ``CalibrationManager.calibrate_ph``
-path and the Honde probe drivers. Config changes use the same YAML write
+path and the RS485 probe drivers. Config changes use the same YAML write
 the rest of the firmware already uses.
 """
 
@@ -57,10 +57,21 @@ class Wqm1CommandHardware:
             raise RuntimeError("5-in-1 probe is not enabled")
         probe.calibrate_ph_point(buffer)
 
+    def read_rs485_ph(self) -> float:
+        probe = self._app._multi
+        if probe is None:
+            raise RuntimeError("5-in-1 probe is not enabled")
+        values = probe.read_all()
+        if not isinstance(values, dict) or "ph" not in values:
+            live = getattr(probe, "address", "?")
+            raise RuntimeError(f"no response at address {live}")
+        return float(values["ph"])
+
     def rs485_add(self, sensor: str, address: int) -> list[dict[str, Any]]:
         prefix, attr, cls = _binding(sensor)
         bus = self._ensure_bus()
         probe = cls(bus, address)
+        self._confirm_answers(probe, address)
         self._write_local({f"{prefix}_enabled": True, f"{prefix}_addr": address})
         setattr(self._app, attr, probe)
         self._sync()
@@ -76,6 +87,7 @@ class Wqm1CommandHardware:
         live = getattr(probe, "address", None)
         if live != address:
             raise RuntimeError("no probe at that address")
+        self._reject_address_in_use(new_address, except_prefix=prefix)
         probe.set_address(new_address)
         updates = {f"{prefix}_addr": new_address}
         try:
@@ -102,6 +114,7 @@ class Wqm1CommandHardware:
             if current is None:
                 current = int(getattr(self._live_settings(), f"{prefix}_addr"))
             probe = cls(self._ensure_bus(), current)
+            self._confirm_answers(probe, current)
             self._write_local(updates)
             setattr(self._app, attr, probe)
         else:
@@ -129,6 +142,27 @@ class Wqm1CommandHardware:
                 }
             )
         return rows
+
+    def _confirm_answers(self, probe: Any, address: int) -> None:
+        if hasattr(probe, "read_all"):
+            value = probe.read_all()
+        elif hasattr(probe, "read"):
+            value = probe.read()
+        else:
+            raise RuntimeError(f"no response at address {address}")
+        if value is None:
+            raise RuntimeError(f"no response at address {address}")
+
+    def _reject_address_in_use(self, new_address: int, except_prefix: str) -> None:
+        settings = self._live_settings()
+        for _name, cls in WIRE_SENSORS.items():
+            prefix, _attr = _PREFIX_ATTR[cls]
+            if prefix == except_prefix:
+                continue
+            if not bool(getattr(settings, f"{prefix}_enabled", False)):
+                continue
+            if int(getattr(settings, f"{prefix}_addr")) == new_address:
+                raise RuntimeError(f"address {new_address} is already in use")
 
     def _write_local(self, updates: dict[str, Any]) -> None:
         config = self._app._config

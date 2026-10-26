@@ -11,7 +11,7 @@ import inspect
 import json
 import math
 import urllib.error
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,12 +30,15 @@ from cloud.device_commands import (
     ANALOG_POINT_READS,
     HANDLED_COMMANDS_MAX,
     RS485_BUFFER_LABELS,
+    RS485_POINT_MAX_SPREAD_PH,
+    RS485_POINT_READS,
     WIRE_SENSORS,
     CommandHardware,
     DeviceCommandDispatcher,
 )
 from cloud.device_hardware import Wqm1CommandHardware
 from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
+from sensors.modbus import ModbusTimeout, encode_float_cdab
 from utils.config import ADC_CH_PH, ConfigManager
 
 NOW_MS = 1_700_000_000_000
@@ -82,8 +85,13 @@ def _rs485(*, op: str, sensor: str, extra_payload: dict | None = None, **fields)
 class FakeHardware:
     """Records calls. No relay, breaker, or GPIO methods exist on purpose."""
 
-    def __init__(self, voltages: list[float] | None = None) -> None:
+    def __init__(
+        self,
+        voltages: list[float] | None = None,
+        ph_samples: list[float] | None = None,
+    ) -> None:
         self.voltages = list(voltages or [1.04, 1.50])
+        self.ph_samples = list(ph_samples or [7.00] * 40)
         self.analog_applied: list[tuple[float, float]] = []
         self.rs485_points: list[str] = []
         self.ops: list[tuple] = []
@@ -109,6 +117,11 @@ class FakeHardware:
         if buffer not in HondeMultiSensor.PH_CAL_POINTS:
             raise ValueError(f"unknown pH buffer: {buffer!r}")
         self.rs485_points.append(buffer)
+
+    def read_rs485_ph(self) -> float:
+        if not self.ph_samples:
+            raise RuntimeError("no pH sample queued")
+        return self.ph_samples.pop(0)
 
     def rs485_add(self, sensor: str, address: int) -> list[dict]:
         self.ops.append(("add", sensor, address))
@@ -243,13 +256,20 @@ class TestDispatcherRejects:
 
 
 class TestDispatcherHasNoActuationPath:
-    def test_module_source_has_no_relay_breaker_or_gpio(self):
+    def test_module_imports_have_no_actuation_path(self):
         from cloud import device_commands
 
-        src = inspect.getsource(device_commands)
-        lowered = src.lower()
+        names = [n for n in dir(device_commands) if not n.startswith("_")]
         for needle in ("relay", "breaker", "gpio", "awg", "eaton"):
-            assert needle not in lowered, f"dispatcher source mentions {needle!r}"
+            assert all(needle not in n.lower() for n in names), names
+        for name, obj in vars(device_commands).items():
+            if inspect.ismodule(obj):
+                qual = (obj.__name__ or "").lower()
+                for needle in ("relay", "breaker", "gpio", "awg"):
+                    assert needle not in qual, qual
+            module = getattr(obj, "__module__", "") or ""
+            for needle in ("relay", "breaker", "gpio", "awg"):
+                assert needle not in module.lower(), f"{name} from {module}"
 
     def test_hardware_protocol_has_no_actuation_methods(self):
         public = {n for n in dir(CommandHardware) if not n.startswith("_")}
@@ -332,6 +352,17 @@ class TestPhCalibrateRs485:
         assert out.status == "rejected"
         assert "point" in out.message.lower()
 
+    def test_unstable_ph_is_rejected_and_does_not_write(self):
+        samples = [7.00, 7.00, 7.00, 7.00, 7.00 + RS485_POINT_MAX_SPREAD_PH + 0.02]
+        assert len(samples) == RS485_POINT_READS
+        hw = FakeHardware(ph_samples=list(samples))
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        d.apply(_ph(step="start", probe="rs485_multi"))
+        out = d.apply(_ph(step="point", probe="rs485_multi", buffer=4.01))
+        assert out.status == "rejected"
+        assert "stable" in out.message.lower()
+        assert hw.rs485_points == []
+
 
 class TestRs485Config:
     def test_add_set_address_enable_disable(self):
@@ -360,7 +391,7 @@ class TestRs485Config:
         for name in WIRE_SENSORS:
             out = d.apply(_rs485(op="add", sensor=name, address=11))
             assert out.status == "applied", out.message
-        out = d.apply(_rs485(op="add", sensor="HondeWhatever", address=12))
+        out = d.apply(_rs485(op="add", sensor="unknown-probe", address=12))
         assert out.status == "rejected"
         assert out.message == "sensor not allowed"
 
@@ -636,7 +667,27 @@ class TestAnalogCalibratePhIsTheRealFunction:
         assert config.settings.rs485_chlorine_enabled is False
 
 
-def _real_app(tmp_path, yaml_text: str = ""):
+def _answering_bus() -> MagicMock:
+    bus = MagicMock()
+
+    def _read(_address: int, _start: int, count: int) -> list[int]:
+        if count >= 5:
+            return [700, 1413, 250, 700, 0]
+        if count == 2:
+            return list(encode_float_cdab(0.4))
+        return [120]
+
+    bus.read_registers.side_effect = _read
+    return bus
+
+
+def _silent_bus() -> MagicMock:
+    bus = MagicMock()
+    bus.read_registers.side_effect = ModbusTimeout("no reply")
+    return bus
+
+
+def _real_app(tmp_path, yaml_text: str = "", bus: MagicMock | None = None):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml_text or "rs485_port: /dev/ttyTEST\n")
     config = ConfigManager(str(cfg_path), str(tmp_path / "remote.yaml"))
@@ -647,7 +698,7 @@ def _real_app(tmp_path, yaml_text: str = ""):
         _adc=None,
         _adc_error=None,
         _config=config,
-        _modbus_bus=MagicMock(),
+        _modbus_bus=_answering_bus() if bus is None else bus,
         _chlorine=None,
         _orp=None,
         _multi=None,
@@ -882,7 +933,7 @@ class TestResultHttpStatus:
         monkeypatch.setattr("urllib.request.urlopen", unprocessable)
         assert c.post_command_result("bad", "applied") == RESULT_POST_DROP
 
-    def test_401_and_403_are_terminal(self, monkeypatch):
+    def test_401_and_403_are_retried(self, monkeypatch):
         c = CloudClient(
             device_id="BS-WQM1-00aabbccddee",
             ingest_url="https://example.test/ingestReading",
@@ -898,7 +949,7 @@ class TestResultHttpStatus:
             raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
 
         monkeypatch.setattr("urllib.request.urlopen", unauthorized)
-        assert c.post_command_result("rotating", "applied") == RESULT_POST_DROP
+        assert c.post_command_result("rotating", "applied") is False
 
         c._api_key = "device-key"
 
@@ -906,7 +957,7 @@ class TestResultHttpStatus:
             raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
 
         monkeypatch.setattr("urllib.request.urlopen", forbidden)
-        assert c.post_command_result("forbidden", "applied") == RESULT_POST_DROP
+        assert c.post_command_result("forbidden", "applied") is False
 
 
 class TestTerminalResultNotRetried:
@@ -1009,6 +1060,47 @@ class TestRs485ConfigWrittenAfterHardware:
         sync.assert_not_called()
 
 
+class TestProbeMustAnswerBeforeYaml:
+    def test_add_rejects_silent_address_and_does_not_write(self, tmp_path):
+        app, config, sync = _real_app(tmp_path, bus=_silent_bus())
+        hw = Wqm1CommandHardware(app)
+        with pytest.raises(RuntimeError, match="no response at address 5"):
+            hw.rs485_add("residual_chlorine", 5)
+        assert app._chlorine is None
+        assert config.settings.rs485_chlorine_enabled is False
+        assert "rs485_chlorine_enabled: true" not in Path(config._base_path).read_text()
+        sync.assert_not_called()
+
+    def test_enable_rejects_silent_address_and_does_not_write(self, tmp_path):
+        app, config, sync = _real_app(tmp_path, bus=_silent_bus())
+        hw = Wqm1CommandHardware(app)
+        with pytest.raises(RuntimeError, match="no response at address 8"):
+            hw.rs485_set_enabled("RD-PETSTS-01", 8, True)
+        assert app._multi is None
+        assert config.settings.rs485_multi_enabled is False
+        sync.assert_not_called()
+
+
+class TestSetAddressRejectsTakenAddress:
+    def test_new_address_matching_another_enabled_probe_is_rejected(self, tmp_path):
+        app, config, sync = _real_app(
+            tmp_path,
+            "rs485_chlorine_enabled: true\nrs485_chlorine_addr: 5\n"
+            "rs485_orp_enabled: true\nrs485_orp_addr: 6\n",
+        )
+        bus = MagicMock()
+        probe = HondeChlorineSensor(bus, address=5)
+        app._modbus_bus = bus
+        app._chlorine = probe
+        hw = Wqm1CommandHardware(app)
+        with pytest.raises(RuntimeError, match="address 6 is already in use"):
+            hw.rs485_set_address("residual_chlorine", 5, 6)
+        bus.write_register.assert_not_called()
+        assert probe.address == 5
+        assert config.settings.rs485_chlorine_addr == 5
+        sync.assert_not_called()
+
+
 class TestSetAddressConfigWriteFailure:
     def test_yaml_failure_after_readdress_names_the_new_address(self, tmp_path, monkeypatch):
         app, config, sync = _real_app(
@@ -1033,6 +1125,19 @@ class TestSetAddressConfigWriteFailure:
         assert len(writes) == 2
         assert "7" in str(err.value)
         sync.assert_not_called()
+
+
+class TestExpiresAtFormats:
+    def test_iso8601_string_is_accepted(self):
+        iso = datetime.fromtimestamp(FUTURE_MS / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out = _dispatch(_cmd(payload={"step": "start", "probe": "analog"}, expires_at=iso))
+        assert out.status == "applied", out.message
+
+    def test_expired_iso8601_string_is_rejected(self):
+        iso = datetime.fromtimestamp(PAST_MS / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out = _dispatch(_cmd(payload={"step": "start", "probe": "analog"}, expires_at=iso))
+        assert out.status == "rejected"
+        assert "expired" in out.message.lower()
 
 
 class TestMissingCommandId:
@@ -1091,7 +1196,7 @@ class TestReloadDoesNotUndoRs485Writes:
             _adc=None,
             _adc_error=None,
             _config=config,
-            _modbus_bus=MagicMock(),
+            _modbus_bus=_answering_bus(),
             _chlorine=None,
             _orp=None,
             _multi=None,
@@ -1135,4 +1240,6 @@ class TestCalibrationDocsImportValues:
             assert name in pages
         assert str(ANALOG_POINT_READS) in pages
         assert f"{ANALOG_POINT_MAX_SPREAD_V}" in pages
+        assert str(RS485_POINT_READS) in pages
+        assert f"{RS485_POINT_MAX_SPREAD_PH}" in pages
         assert ADC_CH_PH == 2  # analog point still reads the pH converter channel

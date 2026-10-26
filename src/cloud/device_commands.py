@@ -47,9 +47,14 @@ MESSAGE_MAX = 200
 # Analog `point` samples. Spread is converter volts, not pH.
 ANALOG_POINT_READS = 5
 ANALOG_POINT_MAX_SPREAD_V = 0.02
+# RS485 multi `point` samples the probe pH before writing a buffer register.
+RS485_POINT_READS = 5
+RS485_POINT_MAX_SPREAD_PH = 0.05
 HANDLED_COMMANDS_MAX = 64
-# When Cloud omits a usable expiresAt, keep the id this long so a reboot
-# or a flood of later commands cannot re-apply it.
+# HANDLED_COMMANDS_MAX bounds only the worker's unposted-result map.
+# The dispatcher's _handled map is unbounded while ids remain unexpired:
+# evicting an unexpired id would re-apply a command Cloud can still redeliver.
+# Expired rows are dropped. Missing/unusable expiresAt is kept 24 h.
 HANDLED_WITHOUT_EXPIRES_MS = 24 * 60 * 60 * 1000
 
 
@@ -61,6 +66,8 @@ class CommandHardware(Protocol):
     def apply_analog_ph(self, v_ph4: float, v_ph7: float) -> dict[str, float]: ...
 
     def calibrate_rs485_ph_point(self, buffer: str) -> None: ...
+
+    def read_rs485_ph(self) -> float: ...
 
     def rs485_add(self, sensor: str, address: int) -> list[dict[str, Any]]: ...
 
@@ -117,6 +124,26 @@ def _unexpected(keys: set[str], allowed: frozenset[str]) -> str | None:
 
 def _measured_at() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_expires_at_ms(raw: Any) -> int | None:
+    """Epoch-ms from a number or an ISO-8601 string. None if unusable."""
+    if raw is None:
+        return None
+    if _finite(raw):
+        return int(raw)
+    if isinstance(raw, str) and raw.strip():
+        text = raw.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000)
+    return None
 
 
 def _buffer_label(probe: str, value: Any) -> str | CommandOutcome:
@@ -190,9 +217,14 @@ class DeviceCommandDispatcher:
         expires_at = command.get("expiresAt")
         if expires_at is None:
             return self._store(cmd_id, _rejected("missing expiresAt"), keep_until)
-        if not _finite(expires_at):
-            return self._store(cmd_id, _rejected("non-finite number"), keep_until)
-        if self._now_ms() >= int(expires_at):
+        parsed = _parse_expires_at_ms(expires_at)
+        if parsed is None:
+            return self._store(
+                cmd_id,
+                _rejected("expiresAt must be epoch-ms or ISO-8601"),
+                keep_until,
+            )
+        if self._now_ms() >= parsed:
             return self._store(cmd_id, _rejected("expired"), keep_until)
         payload = command.get("payload")
         if not isinstance(payload, dict):
@@ -207,8 +239,9 @@ class DeviceCommandDispatcher:
         return self._store(cmd_id, outcome, keep_until)
 
     def _keep_until_ms(self, raw: Any) -> int:
-        if _finite(raw):
-            return int(raw)
+        parsed = _parse_expires_at_ms(raw)
+        if parsed is not None:
+            return parsed
         return self._now_ms() + HANDLED_WITHOUT_EXPIRES_MS
 
     def _evict_expired(self) -> None:
@@ -320,6 +353,9 @@ class DeviceCommandDispatcher:
                     f"pH {label} point stored",
                     {"buffers": sorted(self._analog_volts), "measuredAt": _measured_at()},
                 )
+            ph = self._read_rs485_point()
+            if isinstance(ph, CommandOutcome):
+                return ph
             self._hardware.calibrate_rs485_ph_point(label)
             value = round(float(payload["buffer"]), 2)
             if value not in self._rs485_buffers:
@@ -347,6 +383,18 @@ class DeviceCommandDispatcher:
         spread = max(samples) - min(samples)
         if spread > ANALOG_POINT_MAX_SPREAD_V:
             return _rejected("voltage not stable")
+        return float(median(samples))
+
+    def _read_rs485_point(self) -> float | CommandOutcome:
+        samples: list[float] = []
+        for _ in range(RS485_POINT_READS):
+            ph = float(self._hardware.read_rs485_ph())
+            if not math.isfinite(ph):
+                return _rejected("non-finite number")
+            samples.append(ph)
+        spread = max(samples) - min(samples)
+        if spread > RS485_POINT_MAX_SPREAD_PH:
+            return _rejected("pH not stable")
         return float(median(samples))
 
     def _finish_analog(self) -> CommandOutcome:
