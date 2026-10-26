@@ -119,8 +119,10 @@ owner adds, re-addresses, enables, and disables them from Cloud with
 | Digital ORP (RD-ORP-WE-01) | Factory calibrated. | Replace electrode per vendor guidance |
 
 pH on the 5-in-1: `start`, then one `point` per buffer, then `finish`.
-Cloud shows the buffers and `measuredAt`. Slope and offset stay on the
-probe.
+Each `point` reads pH 5 times and rejects with `pH not stable` if the
+spread is above 0.05; leave the electrode still and queue `point`
+again. Cloud shows the buffers and `measuredAt`. Slope and offset stay
+on the probe.
 
 ## Drift & health
 
