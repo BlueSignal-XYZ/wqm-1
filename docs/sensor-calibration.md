@@ -1,9 +1,15 @@
 # Sensor Calibration
 
-All calibration is done from the **Service Window** (the on-device web UI,
-under **Calibration**) with guided wizards. It answers nobody on the network:
-open `ssh -L 8080:127.0.0.1:8080 pi@<unit-ip>` and use
-`http://localhost:8080`. Each wizard
+> **This is changing.** The Captain ruled on 24 Oct 2026 that calibration
+> moves into BlueSignal Cloud, as Cloud commands with no unit page, and the
+> unit's local page goes off (`docs/install-build-plan.md` §13 and §10).
+> Those commands are not built yet. Until they ship, calibration is done on
+> the bench by BlueSignal staff, from the Service Window as described below.
+> Owners and installers never open it. Rewrite this page in the PR that
+> ships the Cloud calibration command.
+
+All calibration is done from the **Service Window** (the on-device web UI at
+`http://<unit-ip>:8080`, under **Calibration**) with guided wizards. Each wizard
 shows a **live voltage** for its channel, refreshed every two seconds, with a
 *Use this value* button that fills the form. Save applies the calibration and
 stamps `calibrated_at`, so the firmware's drift tracking can nag you when a
