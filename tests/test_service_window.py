@@ -48,7 +48,6 @@ def app(db_path, tmp_path):
     return create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
             "config_path": str(config_path),
             "cal_path": cal_path,
             "cmd_sock": str(tmp_path / "cmd.sock"),

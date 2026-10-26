@@ -105,11 +105,9 @@ class TestDiagnosticsEdgeCases:
         conn.close()
         app = create_app(
             {
-                "PIN": "9999",
                 "db_path": db_path,
                 # setup_completed in config.yaml is the only funnel gate.
                 # Several tests here patch Path.exists globally.
-                "pin": "9999",
                 "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
@@ -209,11 +207,9 @@ class TestProvisionEdgeCases:
         conn.close()
         app = create_app(
             {
-                "PIN": "9999",
                 "db_path": db_path,
                 # setup_completed in config.yaml is the only funnel gate.
                 # Several tests here patch Path.exists globally.
-                "pin": "9999",
                 "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),
@@ -335,11 +331,9 @@ class TestRelaySuccessFlash:
         conn.close()
         app = create_app(
             {
-                "PIN": "9999",
                 "db_path": db_path,
                 # setup_completed in config.yaml is the only funnel gate.
                 # Several tests here patch Path.exists globally.
-                "pin": "9999",
                 "config_path": _setup_done_config(tmp_path),
                 "cal_path": str(tmp_path / "cal.yaml"),
                 "cmd_sock": str(tmp_path / "cmd.sock"),

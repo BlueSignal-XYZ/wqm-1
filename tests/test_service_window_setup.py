@@ -11,7 +11,7 @@ import yaml
 def make_app(
     tmp_path,
     mock_hardware,
-    pin="1234",
+    pin="1234",  # leftover callers; discarded. There is no PIN.
     setup_completed=False,
     config_extra=None,
     open_window=False,
@@ -39,7 +39,6 @@ def make_app(
             "CONFIG_PATH": str(config_path),
             "CAL_PATH": str(tmp_path / "cal.yaml"),
             "CMD_SOCK": str(tmp_path / "cmd.sock"),
-            "PIN": pin,
             "SECRET_KEY": "test-secret",
         }
     )

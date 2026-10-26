@@ -1,9 +1,18 @@
-"""Captain, 2026-10-24: no PIN anywhere. Setup is the hotspot only.
+"""Captain, 2026-10-24 and 2026-10-25: no PIN anywhere. Setup is the hotspot
+only. Owners use BlueSignal Cloud. The LAN page is closed.
 
-These tests pin the review on PR #153 (findings 1–2). Each one fails when
-``src/service_window/auth.py`` is reverted to that PR's head: the factory-PIN
-gate comes back, LAN clients are sent to /login, and setup routes other than
-the Wi-Fi page need a PIN once setup is finished.
+These tests pin the review on PR #153 (findings 1–2) and Claude's 2026-10-25
+review on PR #157. Each one fails when the matching fix is reverted.
+
+Invariants:
+
+- There is no PIN to set or enter. ``_SETTING_ALIASES`` does not map one.
+- Setup pages are reachable only from this unit's own hotspot.
+- After setup the home LAN does not get the Service Window.
+- The hotspot comes up when ``wlan0`` has no usable station, not "only while
+  the unit is offline". Ethernet and LTE are not that check.
+- Hold this build off ``BS-WQM1-0000a92e4e7d`` until a later site visit or
+  firmware push. No per-unit exemption in code.
 """
 
 from pathlib import Path
@@ -161,3 +170,49 @@ class TestPinCodeIsGone:
         app.config["TESTING"] = False
         response = client.get("/settings/")
         assert response.status_code == 403
+
+
+class TestNoPinLeftovers:
+    """Claude review 2026-10-25: leftover PIN text and the alias must go."""
+
+    def test_setting_aliases_has_no_pin(self):
+        from service_window.app import _SETTING_ALIASES
+
+        assert "PIN" not in _SETTING_ALIASES
+        assert "pin" not in _SETTING_ALIASES
+        assert "pin" not in _SETTING_ALIASES.values()
+
+    def test_make_app_does_not_put_pin_in_app_config(self, tmp_path, mock_hardware):
+        app = make_app(tmp_path, mock_hardware)
+        assert "PIN" not in app.config
+        assert "pin" not in app.config
+
+    def test_hotspot_docstring_matches_ensure_reachable(self):
+        from service_window.auth import _wifi_setup_on_hotspot
+
+        doc = _wifi_setup_on_hotspot.__doc__ or ""
+        assert "only comes up while the unit is offline" not in doc
+        assert "wlan0" in doc
+        assert "Ethernet" in doc and "LTE" in doc
+
+    def test_installer_manual_does_not_walk_pin_setup(self):
+        html = Path("docs/manual/WQM1-IM-100-RevH.html").read_text()
+        assert "PIN setup" not in html
+        assert "walks PIN" not in html
+
+    def test_manual_errata_does_not_set_a_pin(self):
+        text = Path("docs/manual-errata-revD9.md").read_text()
+        assert "set a real PIN" not in text
+
+    def test_launch_audit_m7_is_no_pin(self):
+        text = Path("docs/launch-audit.md").read_text()
+        assert "M7 Service Window PIN" in text
+        assert "use more than four on a shared network" not in text
+        assert "BS-WQM1-0000a92e4e7d" in text
+
+    def test_rollout_note_holds_live_field_unit(self):
+        text = Path("docs/no-pin-rollout.md").read_text()
+        assert "BS-WQM1-0000a92e4e7d" in text
+        assert "site visit" in text
+        assert "firmware push" in text
+        assert "no PIN" in text

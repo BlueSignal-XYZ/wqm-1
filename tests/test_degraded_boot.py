@@ -306,7 +306,6 @@ class TestBoardFaultInTheServiceWindow:
         app = create_app(
             {
                 "db_path": str(db),
-                "pin": "9999",
                 "config_path": str(tmp_path / "config.yaml"),
                 "cal_path": str(tmp_path / "calibration.yaml"),
                 "cmd_sock": str(tmp_path / "missing.sock"),

@@ -31,7 +31,6 @@ def app(tmp_path):
             "CONFIG_PATH": config_path,
             "CAL_PATH": cal_path,
             "CMD_SOCK": str(tmp_path / "cmd.sock"),
-            "PIN": "4321",
             "SECRET_KEY": "test-secret",
         }
     )

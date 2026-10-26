@@ -75,10 +75,11 @@ def login_required(f: Callable[..., Any]) -> Callable[..., Any]:
 def _wifi_setup_on_hotspot() -> bool:
     """The setup pages, on this unit's own hotspot, never ask for a PIN.
 
-    The hotspot only comes up while the unit is offline, and joining it takes
-    the WPA2 passphrase on the card in the unit's box. That is the proof of
-    presence. Owners use BlueSignal Cloud; there is no PIN on the hotspot
-    and none later.
+    The hotspot comes up when wlan0 has no usable station IPv4. Ethernet and
+    LTE are not this check: a unit online on those still raises the AP if
+    wlan0 has no station. Joining the hotspot takes the WPA2 passphrase on
+    the card in the unit's box. That is the proof of presence. Owners use
+    BlueSignal Cloud; there is no PIN on the hotspot and none later.
     """
     try:
         from service_window.captive import from_hotspot

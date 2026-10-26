@@ -465,7 +465,6 @@ class TestServiceWindowEndToEnd:
         sw = create_app(
             {
                 "db_path": str(db),
-                "pin": "9999",
                 "config_path": str(cfg_path),  # the booted firmware's config
                 "cal_path": str(tmp_path / "calibration.yaml"),
                 "cmd_sock": "unused",

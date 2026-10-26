@@ -87,7 +87,6 @@ class TestServiceWindowSurfacesTheReason:
                 "CONFIG_PATH": str(readonly_config),
                 "CAL_PATH": str(tmp_path / "cal.yaml"),
                 "CMD_SOCK": str(tmp_path / "cmd.sock"),
-                "PIN": "1234",
                 "SECRET_KEY": "test-secret",
                 "TEST_OPEN_WINDOW": True,
             }

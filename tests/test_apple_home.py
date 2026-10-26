@@ -391,7 +391,6 @@ def sw_client(tmp_path, monkeypatch):
     app = create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
             "config_path": str(config_path),
             "cal_path": str(tmp_path / "cal.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
