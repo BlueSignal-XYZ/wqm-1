@@ -32,6 +32,19 @@ Header: `X-API-Key` (device key). No body.
 `expiresAt` is Unix time in milliseconds. The unit rejects an expired command
 and still posts `result`.
 
+The Cloud contract (marketplace #1479):
+
+- `GET .../pending` returns commands whose status is `pending` and marks each
+  one `sent`. A later poll does not see that command again.
+- `POST .../result` is accepted only for a `sent` command.
+- A second result for the same command is HTTP **409**. The unit treats 409 as
+  already recorded (same as 200): it does not retry and does not re-apply.
+
+The unit remembers handled command ids in memory (bounded). It never re-applies
+a calibration step for an id it has already applied. If the result POST fails
+(transport or any status other than 200/409), the next `command_poll_s` tick
+retries the stored result. It does not re-read the ADC or rewrite the probe.
+
 Allowed `type` values: `ph_calibrate`, `rs485_config`. Anything else is
 `rejected` with message `unknown type`. Extra fields on the command or the
 payload, and non-finite numbers, are rejected with a plain message.
@@ -60,10 +73,12 @@ Honde RD-PETSTS-01 (`calibrate_ph_point`): **4.01**, **6.86**, and **9.18** only
 
 `10.0` is rejected. A buffer from the other probe's set is rejected.
 
-`start` clears the in-memory session. `point` reads the converter voltage
-(analog) or writes the buffer register (5-in-1). `finish` on analog calls
-`CalibrationManager.calibrate_ph` and pushes the slope into the live pH
-driver.
+`start` clears the in-memory session. Analog `point` takes the median of 5
+converter-voltage samples. If the spread (max − min) is above 0.02 V the
+command is rejected with `voltage not stable` and the point is not stored.
+`rs485_multi` `point` writes the buffer register on the 5-in-1. `finish` on
+analog calls `CalibrationManager.calibrate_ph` and pushes the slope into the
+live pH driver.
 
 ## `rs485_config`
 
@@ -84,6 +99,12 @@ driver.
 | `address` | `add` and `set_address` (current); optional on enable/disable |
 | `newAddress` | `set_address` |
 | `enabled` | `enable` (`true`), `disable` (`false`) |
+
+`set_address` acts on the probe that is already at `address`. If a live
+probe of that model exists at a different address, the command is rejected
+with `no probe at that address`. The unit does not write the new address to
+a different probe and does not record a config change the command did not
+make.
 
 Addresses are 1–247. Allowed `sensor` values, imported from the drivers:
 
@@ -117,6 +138,9 @@ Header: `X-API-Key` (device key).
 | `status` | `applied` or `rejected` |
 | `result` | omitted on most rejections |
 | `message` | at most 200 characters, plain words |
+
+HTTP 200: Cloud stored the result. HTTP 409: Cloud already recorded a result
+for this command; the unit treats that as success.
 
 Analog pH `offset` is the intercept so `pH = slope * V + offset`
 (`7.0 - slope * V@7`). RS485 pH `finish` may send `slope` and `offset` as

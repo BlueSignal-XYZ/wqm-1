@@ -421,16 +421,22 @@ class CloudClient:
         status: str,
         result: dict[str, Any] | None = None,
         message: str | None = None,
-    ) -> None:
-        """POST ``/v2/devices/{id}/commands/{cmdId}/result``."""
+    ) -> bool:
+        """POST ``/v2/devices/{id}/commands/{cmdId}/result``.
+
+        Returns True when Cloud accepted the result (HTTP 200) or already
+        recorded it (HTTP 409). False on transport / other errors so the
+        worker can retry the stored result without re-running the command.
+        """
         if not command_id or not self._api_base:
-            return
+            return False
         body: dict[str, Any] = {"status": status}
         if result is not None:
             body["result"] = result
         if message:
             body["message"] = str(message)[:200]
-        self._post(self._device_url(f"commands/{command_id}/result"), body)
+        http, _ = self._post(self._device_url(f"commands/{command_id}/result"), body)
+        return http in (200, 409)
 
     # -- v2 telemetry -----------------------------------------------------------
 

@@ -10,9 +10,11 @@ import actuation drivers and does not offer a path to them.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from statistics import median
 from typing import Any, Protocol
 
 from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
@@ -35,6 +37,10 @@ ANALOG_BUFFERS = frozenset({4.0, 7.0})
 # Labels come from the probe driver so a rename there fails this import, not a string search.
 RS485_BUFFER_LABELS = {round(float(label), 2): label for label in HondeMultiSensor.PH_CAL_POINTS}
 MESSAGE_MAX = 200
+# Analog `point` samples. Spread is converter volts, not pH.
+ANALOG_POINT_READS = 5
+ANALOG_POINT_MAX_SPREAD_V = 0.02
+HANDLED_COMMANDS_MAX = 64
 
 
 class CommandHardware(Protocol):
@@ -140,34 +146,52 @@ class DeviceCommandDispatcher:
         self._now_ms = now_ms or (lambda: int(datetime.now(UTC).timestamp() * 1000))
         self._analog_volts: dict[float, float] = {}
         self._rs485_buffers: list[float] = []
+        self._handled: OrderedDict[str, CommandOutcome] = OrderedDict()
 
     def apply(self, command: dict[str, Any]) -> CommandOutcome:
         if not isinstance(command, dict):
             return _rejected("command must be an object")
+        cmd_id = command.get("id")
+        if isinstance(cmd_id, str) and cmd_id in self._handled:
+            self._handled.move_to_end(cmd_id)
+            return self._handled[cmd_id]
         unexpected = _unexpected(set(command), COMMAND_KEYS)
         if unexpected:
-            return _rejected(unexpected)
+            return self._store(cmd_id, _rejected(unexpected))
         cmd_type = command.get("type")
         if not isinstance(cmd_type, str) or not cmd_type:
-            return _rejected("missing type")
+            return self._store(cmd_id, _rejected("missing type"))
         if cmd_type not in COMMAND_TYPES:
-            return _rejected("unknown type")
+            return self._store(cmd_id, _rejected("unknown type"))
         expires_at = command.get("expiresAt")
         if expires_at is None:
-            return _rejected("missing expiresAt")
+            return self._store(cmd_id, _rejected("missing expiresAt"))
         if not _finite(expires_at):
-            return _rejected("non-finite number")
+            return self._store(cmd_id, _rejected("non-finite number"))
         if self._now_ms() >= int(expires_at):
-            return _rejected("expired")
+            return self._store(cmd_id, _rejected("expired"))
         payload = command.get("payload")
         if not isinstance(payload, dict):
-            return _rejected("payload must be an object")
+            return self._store(cmd_id, _rejected("payload must be an object"))
         try:
             if cmd_type == "ph_calibrate":
-                return self._ph_calibrate(payload)
-            return self._rs485_config(payload)
+                outcome = self._ph_calibrate(payload)
+            else:
+                outcome = self._rs485_config(payload)
         except Exception as exc:  # noqa: BLE001 — one failed command must post rejected
-            return _rejected(str(exc) or "command failed")
+            outcome = _rejected(str(exc) or "command failed")
+        return self._store(cmd_id, outcome)
+
+    def _store(self, cmd_id: Any, outcome: CommandOutcome) -> CommandOutcome:
+        if not isinstance(cmd_id, str) or not cmd_id:
+            return outcome
+        if cmd_id in self._handled:
+            self._handled.move_to_end(cmd_id)
+        else:
+            while len(self._handled) >= HANDLED_COMMANDS_MAX:
+                self._handled.popitem(last=False)
+        self._handled[cmd_id] = outcome
+        return outcome
 
     def _ph_calibrate(self, payload: dict[str, Any]) -> CommandOutcome:
         unexpected = _unexpected(set(payload), PH_KEYS)
@@ -192,9 +216,9 @@ class DeviceCommandDispatcher:
             if isinstance(label, CommandOutcome):
                 return label
             if probe == "analog":
-                volts = float(self._hardware.read_ph_adc_volts())
-                if not math.isfinite(volts):
-                    return _rejected("non-finite number")
+                volts = self._read_analog_point()
+                if isinstance(volts, CommandOutcome):
+                    return volts
                 self._analog_volts[round(float(payload["buffer"]), 2)] = volts
                 return _applied(
                     f"pH {label} point stored",
@@ -213,6 +237,18 @@ class DeviceCommandDispatcher:
         if probe == "analog":
             return self._finish_analog()
         return self._finish_rs485()
+
+    def _read_analog_point(self) -> float | CommandOutcome:
+        samples: list[float] = []
+        for _ in range(ANALOG_POINT_READS):
+            volts = float(self._hardware.read_ph_adc_volts())
+            if not math.isfinite(volts):
+                return _rejected("non-finite number")
+            samples.append(volts)
+        spread = max(samples) - min(samples)
+        if spread > ANALOG_POINT_MAX_SPREAD_V:
+            return _rejected("voltage not stable")
+        return float(median(samples))
 
     def _finish_analog(self) -> CommandOutcome:
         if 4.0 not in self._analog_volts or 7.0 not in self._analog_volts:

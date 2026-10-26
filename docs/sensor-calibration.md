@@ -38,7 +38,10 @@ Two-point only: **4.0** then **7.0**. Cloud `ph_calibrate` with
 (4.01 / 6.86 / 9.18).
 
 1. Rinse in distilled water. Put the electrode in pH 4.0 buffer. Queue
-   `start`, then `point` with `buffer` 4.0, and wait for `applied`.
+   `start`, then `point` with `buffer` 4.0, and wait for `applied`. Each
+   analog `point` is the median of 5 converter reads. If the spread is
+   above 0.02 V the unit rejects with `voltage not stable`; leave the
+   electrode still and queue `point` again.
 2. Rinse. Put the electrode in pH 7.0 buffer. Queue `point` with
    `buffer` 7.0.
 3. Queue `finish`. Cloud should show slope, offset, the two buffers, and

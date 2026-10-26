@@ -63,7 +63,11 @@ class Wqm1CommandHardware:
     ) -> list[dict[str, Any]]:
         prefix, attr, cls = _SENSOR_BINDINGS[sensor]
         probe = getattr(self._app, attr, None)
-        if probe is None:
+        if probe is not None:
+            live = getattr(probe, "address", None)
+            if live != address:
+                raise RuntimeError("no probe at that address")
+        else:
             probe = cls(self._ensure_bus(), address)
             setattr(self._app, attr, probe)
         probe.set_address(new_address)

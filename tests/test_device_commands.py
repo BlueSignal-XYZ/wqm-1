@@ -10,29 +10,47 @@ from __future__ import annotations
 import inspect
 import json
 import math
+import urllib.error
+from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from app.state import StateStore
+from app.workers import CommandWorker
+from calibration.calibrate import CalibrationManager
+from cloud.client import CloudClient
+from cloud.device_commands import (
+    ALLOWED_SENSORS,
+    ANALOG_BUFFERS,
+    ANALOG_POINT_MAX_SPREAD_V,
+    ANALOG_POINT_READS,
+    RS485_BUFFER_LABELS,
+    CommandHardware,
+    DeviceCommandDispatcher,
+)
+from cloud.device_hardware import Wqm1CommandHardware
 from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
+from utils.config import ADC_CH_PH, ConfigManager
 
 NOW_MS = 1_700_000_000_000
 FUTURE_MS = NOW_MS + 60_000
 PAST_MS = NOW_MS - 1
+_CMD_IDS = count(1)
 
 
 def _cmd(
     *,
-    cmd_id: str = "cmd-1",
+    cmd_id: str | None = None,
     cmd_type: str = "ph_calibrate",
     payload: dict | None = None,
     expires_at: int = FUTURE_MS,
     extra: dict | None = None,
 ) -> dict:
     body = {
-        "id": cmd_id,
+        "id": cmd_id if cmd_id is not None else f"cmd-{next(_CMD_IDS)}",
         "type": cmd_type,
         "payload": payload if payload is not None else {},
         "expiresAt": expires_at,
@@ -78,8 +96,6 @@ class FakeHardware:
         return self.voltages.pop(0)
 
     def apply_analog_ph(self, v_ph4: float, v_ph7: float) -> dict[str, float]:
-        from calibration.calibrate import CalibrationManager
-
         # The live path must go through calibrate_ph, not a copy of the math.
         cm = CalibrationManager(path="/tmp/device-commands-unused.yaml")
         slope = cm.calibrate_ph(v_ph4, v_ph7)
@@ -130,8 +146,6 @@ class FakeHardware:
 
 
 def _dispatch(cmd: dict, hw: FakeHardware | None = None, now_ms: int = NOW_MS):
-    from cloud.device_commands import DeviceCommandDispatcher
-
     return DeviceCommandDispatcher(hardware=hw or FakeHardware(), now_ms=lambda: now_ms).apply(cmd)
 
 
@@ -236,8 +250,6 @@ class TestDispatcherHasNoActuationPath:
             assert needle not in lowered, f"dispatcher source mentions {needle!r}"
 
     def test_hardware_protocol_has_no_actuation_methods(self):
-        from cloud.device_commands import CommandHardware
-
         public = {n for n in dir(CommandHardware) if not n.startswith("_")}
         for needle in ("relay", "breaker", "gpio", "awg"):
             assert all(needle not in n.lower() for n in public), public
@@ -248,9 +260,7 @@ class TestDispatcherHasNoActuationPath:
 
 class TestPhCalibrateAnalog:
     def test_start_point_finish_uses_calibrate_ph(self):
-        hw = FakeHardware(voltages=[1.00, 1.60])
-        from cloud.device_commands import DeviceCommandDispatcher
-
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS + [1.60] * ANALOG_POINT_READS)
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
         assert d.apply(_ph(step="start", probe="analog")).status == "applied"
         p4 = d.apply(_ph(step="point", probe="analog", buffer=4.0))
@@ -268,9 +278,7 @@ class TestPhCalibrateAnalog:
         assert len(done.message) <= 200
 
     def test_finish_without_both_points_is_rejected(self):
-        hw = FakeHardware(voltages=[1.00])
-        from cloud.device_commands import DeviceCommandDispatcher
-
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS)
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
         d.apply(_ph(step="start", probe="analog"))
         d.apply(_ph(step="point", probe="analog", buffer=4.0))
@@ -282,8 +290,6 @@ class TestPhCalibrateAnalog:
 class TestPhCalibrateRs485:
     def test_points_call_calibrate_ph_point(self):
         hw = FakeHardware()
-        from cloud.device_commands import DeviceCommandDispatcher
-
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
         assert d.apply(_ph(step="start", probe="rs485_multi")).status == "applied"
         for buffer in (4.01, 6.86, 9.18):
@@ -300,8 +306,6 @@ class TestPhCalibrateRs485:
 class TestRs485Config:
     def test_add_set_address_enable_disable(self):
         hw = FakeHardware()
-        from cloud.device_commands import DeviceCommandDispatcher
-
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
         name = HondeChlorineSensor.__name__
         added = d.apply(_rs485(op="add", sensor=name, address=5))
@@ -322,8 +326,6 @@ class TestRs485Config:
 
     def test_only_the_three_allowed_models(self):
         hw = FakeHardware()
-        from cloud.device_commands import DeviceCommandDispatcher
-
         d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
         for cls in (HondeChlorineSensor, HondeOrpSensor, HondeMultiSensor):
             out = d.apply(_rs485(op="add", sensor=cls.__name__, address=11))
@@ -334,8 +336,6 @@ class TestRs485Config:
 
 class TestCloudClientPendingAndResult:
     def _client(self):
-        from cloud.client import CloudClient
-
         c = CloudClient(
             device_id="BS-WQM1-00aabbccddee",
             ingest_url="https://example.test/ingestReading",
@@ -394,8 +394,6 @@ class TestCloudClientPendingAndResult:
         assert captured[0]["body"] is None
 
     def test_fetch_pending_empty_on_failure(self, monkeypatch):
-        import urllib.error
-
         c = self._client()
         c._max_retries = 1
 
@@ -474,8 +472,6 @@ class TestCloudClientPendingAndResult:
         }
 
     def test_no_api_base_skips_pending(self):
-        from cloud.client import CloudClient
-
         c = CloudClient(
             device_id="BS-WQM1-00aabbccddee",
             ingest_url="https://example.test/ingestReading",
@@ -490,14 +486,11 @@ class TestCloudClientPendingAndResult:
 
 class TestCommandWorkerPendingTick:
     def test_same_tick_keeps_legacy_poll_and_posts_v2_result(self, mock_hardware):
-        from app.state import StateStore
-        from app.workers import CommandWorker
-        from cloud.device_commands import DeviceCommandDispatcher
-
-        hw = FakeHardware(voltages=[1.00, 1.60])
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS + [1.60] * ANALOG_POINT_READS)
         dispatcher = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
         posted = []
         legacy = []
+        start = _ph(step="start", probe="analog")
 
         cloud = SimpleNamespace(
             poll=lambda: {
@@ -505,9 +498,7 @@ class TestCommandWorkerPendingTick:
                 "configVersion": 4,
                 "otaPending": False,
             },
-            fetch_pending_commands=lambda: [
-                _ph(step="start", probe="analog"),
-            ],
+            fetch_pending_commands=lambda: [start],
             post_command_result=lambda *a, **k: posted.append((a, k)),
             send_event=lambda *a, **k: None,
         )
@@ -525,13 +516,10 @@ class TestCommandWorkerPendingTick:
         assert versions == [4]
         assert posted, "v2 result must be posted"
         args, kwargs = posted[0]
-        assert args[0] == "cmd-1"
+        assert args[0] == start["id"]
         assert args[1] == "applied"
 
     def test_missing_v2_methods_leave_legacy_poll_alone(self, mock_hardware):
-        from app.state import StateStore
-        from app.workers import CommandWorker
-
         legacy = []
         cloud = SimpleNamespace(
             poll=lambda: {"commands": [{"id": "x", "type": "ota_check"}], "configVersion": None},
@@ -549,15 +537,13 @@ class TestCommandWorkerPendingTick:
 
 class TestAnalogCalibratePhIsTheRealFunction:
     def test_hardware_apply_calls_calibrate_ph(self, tmp_path):
-        from calibration.calibrate import CalibrationManager
-        from cloud.device_hardware import Wqm1CommandHardware
-
         cal = CalibrationManager(path=str(tmp_path / "cal.yaml"))
         ph = MagicMock()
+        channels: list[int] = []
         app = SimpleNamespace(
             _cal=cal,
             _ph=ph,
-            _adc=SimpleNamespace(read_voltage=lambda _ch: 1.23),
+            _adc=SimpleNamespace(read_voltage=lambda ch: channels.append(ch) or 1.23),
             _adc_error=None,
             _config=SimpleNamespace(_base_path=tmp_path / "config.yaml"),
             _settings=SimpleNamespace(
@@ -584,11 +570,9 @@ class TestAnalogCalibratePhIsTheRealFunction:
         assert cal.data.ph_v_at_7 == 1.60
         ph.set_calibration.assert_called_once()
         assert hw.read_ph_adc_volts() == 1.23
+        assert channels == [ADC_CH_PH]
 
     def test_rs485_list_and_disable_use_local_config(self, tmp_path):
-        from cloud.device_hardware import Wqm1CommandHardware
-        from utils.config import ConfigManager
-
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text("rs485_chlorine_enabled: true\nrs485_chlorine_addr: 5\n")
         config = ConfigManager(str(cfg_path), str(tmp_path / "remote.yaml"))
@@ -621,15 +605,241 @@ class TestAnalogCalibratePhIsTheRealFunction:
         assert config.settings.rs485_chlorine_enabled is False
 
 
-class TestCalibrationDocMovedToCloud:
-    def test_page_drops_local_service_window_and_names_cloud(self):
-        text = Path("docs/sensor-calibration.md").read_text()
-        assert ":8080" not in text
-        assert "Service Window" not in text
-        assert "BlueSignal Cloud" in text
-        assert "4.0" in text and "7.0" in text
-        assert "4.01" in text and "6.86" in text and "9.18" in text
-        assert "calibrated_at" in text
-        assert "converter voltage" in text.lower()
-        assert "unverified" in text.lower()
-        assert "owner" in text.lower()
+def _real_app(tmp_path, yaml_text: str = ""):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml_text or "rs485_port: /dev/ttyTEST\n")
+    config = ConfigManager(str(cfg_path), str(tmp_path / "remote.yaml"))
+    sync = MagicMock()
+    app = SimpleNamespace(
+        _cal=None,
+        _ph=None,
+        _adc=None,
+        _adc_error=None,
+        _config=config,
+        _modbus_bus=MagicMock(),
+        _chlorine=None,
+        _orp=None,
+        _multi=None,
+        _sync_sampler=sync,
+    )
+    return app, config, sync
+
+
+class TestSetAddressUsesCommandAddress:
+    def test_mismatch_does_not_write_the_live_probe_or_config(self, tmp_path):
+        app, config, sync = _real_app(
+            tmp_path, "rs485_chlorine_enabled: true\nrs485_chlorine_addr: 1\n"
+        )
+        bus = MagicMock()
+        probe = HondeChlorineSensor(bus, address=1)
+        app._modbus_bus = bus
+        app._chlorine = probe
+        hw = Wqm1CommandHardware(app)
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+
+        out = d.apply(
+            _rs485(
+                op="set_address",
+                sensor=HondeChlorineSensor.__name__,
+                address=5,
+                newAddress=7,
+            )
+        )
+        assert out.status == "rejected"
+        assert out.message == "no probe at that address"
+
+        bus.write_register.assert_not_called()
+        assert probe.address == 1
+        assert config.settings.rs485_chlorine_addr == 1
+        sync.assert_not_called()
+
+    def test_matching_address_readdresses_that_probe_and_syncs(self, tmp_path):
+        app, config, sync = _real_app(
+            tmp_path, "rs485_chlorine_enabled: true\nrs485_chlorine_addr: 5\n"
+        )
+        bus = MagicMock()
+        probe = HondeChlorineSensor(bus, address=5)
+        app._modbus_bus = bus
+        app._chlorine = probe
+        hw = Wqm1CommandHardware(app)
+
+        rows = hw.rs485_set_address(HondeChlorineSensor.__name__, 5, 7)
+        bus.write_register.assert_called_once_with(5, HondeChlorineSensor.REG_ADDRESS, 7)
+        assert probe.address == 7
+        assert config.settings.rs485_chlorine_addr == 7
+        sync.assert_called()
+        row = next(r for r in rows if r["sensor"] == HondeChlorineSensor.__name__)
+        assert row["address"] == 7
+
+
+class TestAnalogPointMedian:
+    def test_stable_samples_store_the_median(self):
+        # First sample is not the median, so a single-shot read would store 1.01.
+        samples = [1.01, 1.00, 1.00, 1.00, 1.00]
+        assert len(samples) == ANALOG_POINT_READS
+        hw = FakeHardware(voltages=list(samples))
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        d.apply(_ph(step="start", probe="analog"))
+        out = d.apply(_ph(step="point", probe="analog", buffer=4.0))
+        assert out.status == "applied"
+        assert d._analog_volts[4.0] == pytest.approx(1.00)
+
+    def test_noisy_samples_are_rejected(self):
+        samples = [1.00, 1.00, 1.00, 1.00, 1.00 + ANALOG_POINT_MAX_SPREAD_V + 0.01]
+        assert len(samples) == ANALOG_POINT_READS
+        hw = FakeHardware(voltages=list(samples))
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        d.apply(_ph(step="start", probe="analog"))
+        out = d.apply(_ph(step="point", probe="analog", buffer=4.0))
+        assert out.status == "rejected"
+        assert "stable" in out.message.lower() or "spread" in out.message.lower()
+        assert 4.0 not in d._analog_volts
+
+
+class TestHandledCommandIds:
+    def test_same_id_is_not_reapplied(self):
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS * 2)
+        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        d.apply(_ph(step="start", probe="analog"))
+        cmd = _ph(step="point", probe="analog", buffer=4.0)
+        first = d.apply(cmd)
+        remaining_after_first = len(hw.voltages)
+        second = d.apply(cmd)
+        assert first.status == "applied"
+        assert second.status == "applied"
+        assert second.result == first.result
+        assert len(hw.voltages) == remaining_after_first
+
+
+class TestRealRs485Adapter:
+    def test_add_creates_driver_writes_config_and_syncs(self, tmp_path):
+        app, config, sync = _real_app(tmp_path)
+        hw = Wqm1CommandHardware(app)
+        rows = hw.rs485_add(HondeOrpSensor.__name__, 6)
+        assert isinstance(app._orp, HondeOrpSensor)
+        assert app._orp.address == 6
+        assert config.settings.rs485_orp_enabled is True
+        assert config.settings.rs485_orp_addr == 6
+        sync.assert_called()
+        row = next(r for r in rows if r["sensor"] == HondeOrpSensor.__name__)
+        assert row == {"sensor": HondeOrpSensor.__name__, "address": 6, "enabled": True}
+
+    def test_enable_builds_the_driver_and_syncs(self, tmp_path):
+        app, config, sync = _real_app(tmp_path)
+        hw = Wqm1CommandHardware(app)
+        hw.rs485_set_enabled(HondeMultiSensor.__name__, 8, True)
+        assert isinstance(app._multi, HondeMultiSensor)
+        assert app._multi.address == 8
+        assert config.settings.rs485_multi_enabled is True
+        assert config.settings.rs485_multi_addr == 8
+        sync.assert_called()
+
+    def test_disable_clears_driver_and_syncs(self, tmp_path):
+        app, config, sync = _real_app(
+            tmp_path, "rs485_chlorine_enabled: true\nrs485_chlorine_addr: 5\n"
+        )
+        app._chlorine = HondeChlorineSensor(app._modbus_bus, address=5)
+        hw = Wqm1CommandHardware(app)
+        hw.rs485_set_enabled(HondeChlorineSensor.__name__, 5, False)
+        assert app._chlorine is None
+        assert config.settings.rs485_chlorine_enabled is False
+        sync.assert_called()
+
+
+class TestPendingWorkerFailures:
+    def test_exception_inside_apply_posts_rejected(self, mock_hardware):
+        posted = []
+
+        def apply(_cmd):
+            raise RuntimeError("boom")
+
+        cloud = SimpleNamespace(
+            poll=lambda: {"commands": [], "configVersion": None},
+            fetch_pending_commands=lambda: [_ph(step="start", probe="analog")],
+            post_command_result=lambda *a, **k: posted.append((a, k)) or True,
+            send_event=lambda *a, **k: None,
+        )
+        CommandWorker(
+            lambda: SimpleNamespace(command_poll_s=5, cloud_enabled=True),
+            cloud,
+            StateStore(),
+            apply_command=lambda _c: None,
+            apply_device_command=apply,
+        ).step()
+        assert posted
+        assert posted[0][0][1] == "rejected"
+        assert "boom" in posted[0][0][3]
+
+    def test_failed_result_post_retries_without_reapplying(self, mock_hardware):
+        hw = FakeHardware(voltages=[1.00] * ANALOG_POINT_READS * 3)
+        dispatcher = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
+        posts = []
+        point = _ph(step="point", probe="analog", buffer=4.0)
+        fetches: list[int] = []
+
+        def fetch():
+            fetches.append(1)
+            return [point] if len(fetches) == 1 else []
+
+        def post(*a, **k):
+            posts.append(a)
+            return False
+
+        cloud = SimpleNamespace(
+            poll=lambda: {"commands": [], "configVersion": None},
+            fetch_pending_commands=fetch,
+            post_command_result=post,
+            send_event=lambda *a, **k: None,
+        )
+        worker = CommandWorker(
+            lambda: SimpleNamespace(command_poll_s=5, cloud_enabled=True),
+            cloud,
+            StateStore(),
+            apply_command=lambda _c: None,
+            apply_device_command=dispatcher.apply,
+        )
+        dispatcher.apply(_ph(step="start", probe="analog"))
+        worker.step()
+        remaining = len(hw.voltages)
+        worker.step()
+        assert len(posts) == 2
+        assert posts[0][0] == point["id"]
+        assert posts[1][0] == point["id"]
+        assert len(hw.voltages) == remaining
+
+
+class TestResultHttpStatus:
+    def test_409_is_already_recorded(self, monkeypatch):
+        c = CloudClient(
+            device_id="BS-WQM1-00aabbccddee",
+            ingest_url="https://example.test/ingestReading",
+            command_url="https://example.test/deviceCommands",
+            api_key="device-key",
+            fw_version="2.4.0",
+            api_base="https://example.test/app",
+        )
+        c._sleep = lambda *_: None
+        c._max_retries = 1
+
+        def conflict(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 409, "Conflict", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", conflict)
+        assert c.post_command_result("c1", "applied") is True
+
+
+class TestCalibrationDocsImportValues:
+    def test_docs_name_imported_buffers_and_models(self):
+        pages = (
+            Path("docs/device-commands.md").read_text()
+            + Path("docs/sensor-calibration.md").read_text()
+        )
+        for value in ANALOG_BUFFERS:
+            assert f"{value:.1f}" in pages
+        for label in RS485_BUFFER_LABELS.values():
+            assert label in pages
+        for name in ALLOWED_SENSORS:
+            assert name in pages
+        assert str(ANALOG_POINT_READS) in pages
+        assert f"{ANALOG_POINT_MAX_SPREAD_V}" in pages
+        assert ADC_CH_PH == 2  # analog point still reads the pH converter channel

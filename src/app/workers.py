@@ -17,11 +17,13 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from app.state import StateStore
+from cloud.device_commands import HANDLED_COMMANDS_MAX
 from cloud.register import STOP_BACKOFF_S, attempt_register, set_config_path
 from utils.config import FIRMWARE_VERSION
 from utils.device_keys import load_http_key, load_register_state
@@ -706,6 +708,7 @@ class CommandWorker(Worker):
         self._on_config_version = on_config_version
         self._on_ota_pending = on_ota_pending
         self._apply_device_command = apply_device_command
+        self._unposted_device_results: OrderedDict[str, tuple[str, Any, str]] = OrderedDict()
 
     def interval_s(self) -> float:
         return float(self._settings().command_poll_s)
@@ -744,8 +747,12 @@ class CommandWorker(Worker):
     def _apply_pending_device_commands(self) -> None:
         """GET pending Cloud commands and POST each result. Optional on fakes."""
         apply = self._apply_device_command
+        if apply is None:
+            return
+        post = getattr(self._cloud, "post_command_result", None)
+        self._retry_unposted_device_results(post)
         fetch = getattr(self._cloud, "fetch_pending_commands", None)
-        if apply is None or not callable(fetch):
+        if not callable(fetch):
             return
         try:
             commands = fetch()
@@ -754,7 +761,6 @@ class CommandWorker(Worker):
             return
         if not isinstance(commands, list):
             return
-        post = getattr(self._cloud, "post_command_result", None)
         for cmd in commands:
             if not isinstance(cmd, dict):
                 continue
@@ -767,8 +773,36 @@ class CommandWorker(Worker):
             except Exception as exc:  # noqa: BLE001 — one bad command must not stop the rest
                 logger.error("Apply device command %s failed: %s", cmd_id, exc)
                 status, result, message = "rejected", None, str(exc)
-            if callable(post) and cmd_id:
-                post(cmd_id, status, result, str(message)[:200])
+            self._deliver_device_result(post, cmd_id, status, result, str(message))
+
+    def _retry_unposted_device_results(self, post: Any) -> None:
+        if not callable(post) or not self._unposted_device_results:
+            return
+        for cmd_id, (status, result, message) in list(self._unposted_device_results.items()):
+            self._deliver_device_result(post, cmd_id, status, result, message)
+
+    def _deliver_device_result(
+        self,
+        post: Any,
+        cmd_id: Any,
+        status: str,
+        result: Any,
+        message: str,
+    ) -> None:
+        if not callable(post) or not isinstance(cmd_id, str) or not cmd_id:
+            return
+        posted = post(cmd_id, status, result, message[:200])
+        if posted is False:
+            if cmd_id not in self._unposted_device_results:
+                while len(self._unposted_device_results) >= HANDLED_COMMANDS_MAX:
+                    self._unposted_device_results.popitem(last=False)
+            self._unposted_device_results[cmd_id] = (status, result, message[:200])
+            logger.warning(
+                "Result POST for %s failed; will retry the stored result",
+                cmd_id,
+            )
+            return
+        self._unposted_device_results.pop(cmd_id, None)
 
 
 class HeartbeatWorker(Worker):
