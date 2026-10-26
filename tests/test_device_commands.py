@@ -30,15 +30,13 @@ from cloud.device_commands import (
     ANALOG_POINT_READS,
     HANDLED_COMMANDS_MAX,
     RS485_BUFFER_LABELS,
-    RS485_POINT_MAX_SPREAD_PH,
-    RS485_POINT_READS,
     WIRE_SENSORS,
     CommandHardware,
     DeviceCommandDispatcher,
 )
 from cloud.device_hardware import Wqm1CommandHardware
 from sensors.honde import HondeChlorineSensor, HondeMultiSensor, HondeOrpSensor
-from sensors.modbus import ModbusTimeout, encode_float_cdab
+from sensors.modbus import ModbusTimeout
 from utils.config import ADC_CH_PH, ConfigManager
 
 NOW_MS = 1_700_000_000_000
@@ -85,13 +83,8 @@ def _rs485(*, op: str, sensor: str, extra_payload: dict | None = None, **fields)
 class FakeHardware:
     """Records calls. No relay, breaker, or GPIO methods exist on purpose."""
 
-    def __init__(
-        self,
-        voltages: list[float] | None = None,
-        ph_samples: list[float] | None = None,
-    ) -> None:
+    def __init__(self, voltages: list[float] | None = None) -> None:
         self.voltages = list(voltages or [1.04, 1.50])
-        self.ph_samples = list(ph_samples or [7.00] * 40)
         self.analog_applied: list[tuple[float, float]] = []
         self.rs485_points: list[str] = []
         self.ops: list[tuple] = []
@@ -117,11 +110,6 @@ class FakeHardware:
         if buffer not in HondeMultiSensor.PH_CAL_POINTS:
             raise ValueError(f"unknown pH buffer: {buffer!r}")
         self.rs485_points.append(buffer)
-
-    def read_rs485_ph(self) -> float:
-        if not self.ph_samples:
-            raise RuntimeError("no pH sample queued")
-        return self.ph_samples.pop(0)
 
     def rs485_add(self, sensor: str, address: int) -> list[dict]:
         self.ops.append(("add", sensor, address))
@@ -351,17 +339,6 @@ class TestPhCalibrateRs485:
         out = d.apply(_ph(step="finish", probe="rs485_multi"))
         assert out.status == "rejected"
         assert "point" in out.message.lower()
-
-    def test_unstable_ph_is_rejected_and_does_not_write(self):
-        samples = [7.00, 7.00, 7.00, 7.00, 7.00 + RS485_POINT_MAX_SPREAD_PH + 0.02]
-        assert len(samples) == RS485_POINT_READS
-        hw = FakeHardware(ph_samples=list(samples))
-        d = DeviceCommandDispatcher(hardware=hw, now_ms=lambda: NOW_MS)
-        d.apply(_ph(step="start", probe="rs485_multi"))
-        out = d.apply(_ph(step="point", probe="rs485_multi", buffer=4.01))
-        assert out.status == "rejected"
-        assert "stable" in out.message.lower()
-        assert hw.rs485_points == []
 
 
 class TestRs485Config:
@@ -667,20 +644,6 @@ class TestAnalogCalibratePhIsTheRealFunction:
         assert config.settings.rs485_chlorine_enabled is False
 
 
-def _answering_bus() -> MagicMock:
-    bus = MagicMock()
-
-    def _read(_address: int, _start: int, count: int) -> list[int]:
-        if count >= 5:
-            return [700, 1413, 250, 700, 0]
-        if count == 2:
-            return list(encode_float_cdab(0.4))
-        return [120]
-
-    bus.read_registers.side_effect = _read
-    return bus
-
-
 def _silent_bus() -> MagicMock:
     bus = MagicMock()
     bus.read_registers.side_effect = ModbusTimeout("no reply")
@@ -698,7 +661,7 @@ def _real_app(tmp_path, yaml_text: str = "", bus: MagicMock | None = None):
         _adc=None,
         _adc_error=None,
         _config=config,
-        _modbus_bus=_answering_bus() if bus is None else bus,
+        _modbus_bus=MagicMock() if bus is None else bus,
         _chlorine=None,
         _orp=None,
         _multi=None,
@@ -1060,25 +1023,26 @@ class TestRs485ConfigWrittenAfterHardware:
         sync.assert_not_called()
 
 
-class TestProbeMustAnswerBeforeYaml:
-    def test_add_rejects_silent_address_and_does_not_write(self, tmp_path):
+class TestAddDoesNotConfirmProbeAnswers:
+    def test_add_writes_even_when_the_probe_is_silent(self, tmp_path):
         app, config, sync = _real_app(tmp_path, bus=_silent_bus())
         hw = Wqm1CommandHardware(app)
-        with pytest.raises(RuntimeError, match="no response at address 5"):
-            hw.rs485_add("residual_chlorine", 5)
-        assert app._chlorine is None
-        assert config.settings.rs485_chlorine_enabled is False
-        assert "rs485_chlorine_enabled: true" not in Path(config._base_path).read_text()
-        sync.assert_not_called()
+        rows = hw.rs485_add("residual_chlorine", 5)
+        assert isinstance(app._chlorine, HondeChlorineSensor)
+        assert config.settings.rs485_chlorine_enabled is True
+        assert config.settings.rs485_chlorine_addr == 5
+        row = next(r for r in rows if r["sensor"] == "residual_chlorine")
+        assert row["enabled"] is True
+        sync.assert_called()
 
-    def test_enable_rejects_silent_address_and_does_not_write(self, tmp_path):
+    def test_enable_writes_even_when_the_probe_is_silent(self, tmp_path):
         app, config, sync = _real_app(tmp_path, bus=_silent_bus())
         hw = Wqm1CommandHardware(app)
-        with pytest.raises(RuntimeError, match="no response at address 8"):
-            hw.rs485_set_enabled("RD-PETSTS-01", 8, True)
-        assert app._multi is None
-        assert config.settings.rs485_multi_enabled is False
-        sync.assert_not_called()
+        hw.rs485_set_enabled("RD-PETSTS-01", 8, True)
+        assert isinstance(app._multi, HondeMultiSensor)
+        assert config.settings.rs485_multi_enabled is True
+        assert config.settings.rs485_multi_addr == 8
+        sync.assert_called()
 
 
 class TestSetAddressRejectsTakenAddress:
@@ -1196,7 +1160,7 @@ class TestReloadDoesNotUndoRs485Writes:
             _adc=None,
             _adc_error=None,
             _config=config,
-            _modbus_bus=_answering_bus(),
+            _modbus_bus=MagicMock(),
             _chlorine=None,
             _orp=None,
             _multi=None,
@@ -1240,6 +1204,4 @@ class TestCalibrationDocsImportValues:
             assert name in pages
         assert str(ANALOG_POINT_READS) in pages
         assert f"{ANALOG_POINT_MAX_SPREAD_V}" in pages
-        assert str(RS485_POINT_READS) in pages
-        assert f"{RS485_POINT_MAX_SPREAD_PH}" in pages
         assert ADC_CH_PH == 2  # analog point still reads the pH converter channel

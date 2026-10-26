@@ -26,12 +26,11 @@ Firmware **dedupes by `id`**. A string `id` is required. A command
 without one is rejected with `missing id` and is not applied. Handled
 ids are stored in a small file next to the readings database
 (`handled-commands.json`, written with `utils.atomic`) so a reboot does
-not re-run a calibration step. The file is **not capped at 64**. Expired
-ids are dropped. An id without a usable `expiresAt` is kept for 24
-hours. Unexpired ids are never evicted to make room: Cloud's expiry
-bounds the map. A second `POST .../result` for the same id is HTTP
-**409**; the unit treats 409 as already recorded (same as 200) and does
-not retry.
+not re-run a calibration step. The handled-id cache is bounded by
+command expiry, not by count. Expired ids are dropped. An id without a
+usable `expiresAt` is kept for 24 hours. A second `POST .../result` for
+the same id is HTTP **409**; the unit treats 409 as already recorded
+(same as 200) and does not retry.
 
 ```json
 {
@@ -87,11 +86,11 @@ RD-PETSTS-01 (`calibrate_ph_point`): **4.01**, **6.86**, and **9.18** only.
 require a prior `start`. Analog `point` takes the median of 5
 converter-voltage samples. If the spread (max − min) is above 0.02 V the
 command is rejected with `voltage not stable`. RD-PETSTS-01 `point`
-reads pH 5 times first; if the spread is above 0.05 the command is
-rejected with `pH not stable` and the buffer register is not written.
-A successful analog `finish` clears the session so a later `finish`
-cannot reuse the volts. RS485 `finish` with no points is rejected with
-`missing calibration points`.
+writes the buffer register; the unit does not re-read pH for
+stability. The installer must wait for a stable reading before sending
+that `point`. A successful analog `finish` clears the session so a
+later `finish` cannot reuse the volts. RS485 `finish` with no points is
+rejected with `missing calibration points`.
 
 Only **`finish`** carries `slope` and `offset`. `start` and `point`
 results are `applied` with `buffers` and `measuredAt` only.
@@ -170,8 +169,9 @@ equals another enabled `rs485_*_addr`, the command is rejected with
 disabled sensor, does not write the new address to a different probe,
 and does not record a config change the command did not make.
 
-`add` and `enable` do one cheap read (`read` or `read_all`) before
-writing YAML. No answer is `no response at address N`.
+`add` and `enable` open the serial port (construct the bus) and write
+YAML. They do not confirm a probe answers at that address. The
+installer must confirm a live reading after adding or enabling.
 
 An RS485 result uses the same wire names:
 
@@ -218,7 +218,8 @@ Retry later (keep the stored result): transport error, 5xx, 408, 429,
 result.
 
 Terminal (drop the stored result, log it): other 4xx, including 404
-and 422.
+and 422. A terminal 4xx means Cloud never learns the outcome; the
+command stays `sent` until server-side expiry covers it.
 
 The dispatcher has no path to a coil, a smart breaker, or a host pin.
 Legacy `deviceCommands` types (`relay`, `awg`, …) stay on the existing

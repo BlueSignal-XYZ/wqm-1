@@ -57,21 +57,10 @@ class Wqm1CommandHardware:
             raise RuntimeError("5-in-1 probe is not enabled")
         probe.calibrate_ph_point(buffer)
 
-    def read_rs485_ph(self) -> float:
-        probe = self._app._multi
-        if probe is None:
-            raise RuntimeError("5-in-1 probe is not enabled")
-        values = probe.read_all()
-        if not isinstance(values, dict) or "ph" not in values:
-            live = getattr(probe, "address", "?")
-            raise RuntimeError(f"no response at address {live}")
-        return float(values["ph"])
-
     def rs485_add(self, sensor: str, address: int) -> list[dict[str, Any]]:
         prefix, attr, cls = _binding(sensor)
         bus = self._ensure_bus()
         probe = cls(bus, address)
-        self._confirm_answers(probe, address)
         self._write_local({f"{prefix}_enabled": True, f"{prefix}_addr": address})
         setattr(self._app, attr, probe)
         self._sync()
@@ -114,7 +103,6 @@ class Wqm1CommandHardware:
             if current is None:
                 current = int(getattr(self._live_settings(), f"{prefix}_addr"))
             probe = cls(self._ensure_bus(), current)
-            self._confirm_answers(probe, current)
             self._write_local(updates)
             setattr(self._app, attr, probe)
         else:
@@ -142,16 +130,6 @@ class Wqm1CommandHardware:
                 }
             )
         return rows
-
-    def _confirm_answers(self, probe: Any, address: int) -> None:
-        if hasattr(probe, "read_all"):
-            value = probe.read_all()
-        elif hasattr(probe, "read"):
-            value = probe.read()
-        else:
-            raise RuntimeError(f"no response at address {address}")
-        if value is None:
-            raise RuntimeError(f"no response at address {address}")
 
     def _reject_address_in_use(self, new_address: int, except_prefix: str) -> None:
         settings = self._live_settings()

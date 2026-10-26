@@ -47,12 +47,9 @@ MESSAGE_MAX = 200
 # Analog `point` samples. Spread is converter volts, not pH.
 ANALOG_POINT_READS = 5
 ANALOG_POINT_MAX_SPREAD_V = 0.02
-# RS485 multi `point` samples the probe pH before writing a buffer register.
-RS485_POINT_READS = 5
-RS485_POINT_MAX_SPREAD_PH = 0.05
 HANDLED_COMMANDS_MAX = 64
 # HANDLED_COMMANDS_MAX bounds only the worker's unposted-result map.
-# The dispatcher's _handled map is unbounded while ids remain unexpired:
+# The dispatcher's _handled map is bounded by command expiry, not count:
 # evicting an unexpired id would re-apply a command Cloud can still redeliver.
 # Expired rows are dropped. Missing/unusable expiresAt is kept 24 h.
 HANDLED_WITHOUT_EXPIRES_MS = 24 * 60 * 60 * 1000
@@ -66,8 +63,6 @@ class CommandHardware(Protocol):
     def apply_analog_ph(self, v_ph4: float, v_ph7: float) -> dict[str, float]: ...
 
     def calibrate_rs485_ph_point(self, buffer: str) -> None: ...
-
-    def read_rs485_ph(self) -> float: ...
 
     def rs485_add(self, sensor: str, address: int) -> list[dict[str, Any]]: ...
 
@@ -353,9 +348,6 @@ class DeviceCommandDispatcher:
                     f"pH {label} point stored",
                     {"buffers": sorted(self._analog_volts), "measuredAt": _measured_at()},
                 )
-            ph = self._read_rs485_point()
-            if isinstance(ph, CommandOutcome):
-                return ph
             self._hardware.calibrate_rs485_ph_point(label)
             value = round(float(payload["buffer"]), 2)
             if value not in self._rs485_buffers:
@@ -383,18 +375,6 @@ class DeviceCommandDispatcher:
         spread = max(samples) - min(samples)
         if spread > ANALOG_POINT_MAX_SPREAD_V:
             return _rejected("voltage not stable")
-        return float(median(samples))
-
-    def _read_rs485_point(self) -> float | CommandOutcome:
-        samples: list[float] = []
-        for _ in range(RS485_POINT_READS):
-            ph = float(self._hardware.read_rs485_ph())
-            if not math.isfinite(ph):
-                return _rejected("non-finite number")
-            samples.append(ph)
-        spread = max(samples) - min(samples)
-        if spread > RS485_POINT_MAX_SPREAD_PH:
-            return _rejected("pH not stable")
         return float(median(samples))
 
     def _finish_analog(self) -> CommandOutcome:

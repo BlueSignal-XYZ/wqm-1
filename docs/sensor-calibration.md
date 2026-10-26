@@ -109,7 +109,9 @@ The digital probes hold their own calibration state on the probe. The
 owner adds, re-addresses, enables, and disables them from Cloud with
 `rs485_config`. Cloud wire names only: `residual_chlorine`,
 `RD-ORP-WE-01`, and `RD-PETSTS-01`. Anything else is rejected with
-`sensor not allowed`. Addresses are 1–247.
+`sensor not allowed`. Addresses are 1–247. `add` and `enable` check
+that the serial port opens; they do not confirm a probe answers. After
+adding, confirm a live reading on the dashboard before you leave.
 
 | Probe | Method | Cadence |
 |---|---|---|
@@ -119,10 +121,9 @@ owner adds, re-addresses, enables, and disables them from Cloud with
 | Digital ORP (RD-ORP-WE-01) | Factory calibrated. | Replace electrode per vendor guidance |
 
 pH on the 5-in-1: `start`, then one `point` per buffer, then `finish`.
-Each `point` reads pH 5 times and rejects with `pH not stable` if the
-spread is above 0.05; leave the electrode still and queue `point`
-again. Cloud shows the buffers and `measuredAt`. Slope and offset stay
-on the probe.
+Wait for a stable reading before each `point`. The unit writes the
+buffer register and does not re-check stability. Cloud shows the
+buffers and `measuredAt`. Slope and offset stay on the probe.
 
 ## Drift & health
 
