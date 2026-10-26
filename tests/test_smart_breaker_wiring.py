@@ -457,20 +457,22 @@ class TestServiceWindowEndToEnd:
             "INSERT INTO lorawan_session (id) VALUES (1);"
         )
         conn.close()
+        cfg_path = tmp_path / "config.yaml"
+        text = cfg_path.read_text() if cfg_path.exists() else ""
+        if "setup_completed" not in text:
+            text = text.rstrip() + "\nservice_window:\n  setup_completed: true\n"
+        cfg_path.write_text(text)
         sw = create_app(
             {
                 "db_path": str(db),
-                "pin": "9999",
-                "config_path": str(tmp_path / "config.yaml"),  # the booted firmware's config
+                "config_path": str(cfg_path),  # the booted firmware's config
                 "cal_path": str(tmp_path / "calibration.yaml"),
                 "cmd_sock": "unused",
                 "TESTING": True,
+                "TEST_OPEN_WINDOW": True,
             }
         )
-        client = sw.test_client()
-        with client.session_transaction() as sess:
-            sess["pin_verified"] = True
-        return client, app, fake
+        return sw.test_client(), app, fake
 
     def test_page_reflects_the_real_controller(self, browser):
         client, app, fake = browser

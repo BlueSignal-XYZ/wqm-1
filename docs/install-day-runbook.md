@@ -103,12 +103,14 @@ Capture and store all three before closing the page:
 
 ### 1.5 Walk the Service Window wizard as far as the bench allows
 
-Power the unit, join its network, open `http://wqmbench.local:8080`. Until setup
-completes the unit serves only the wizard:
+Power the unit and open an SSH tunnel to it:
+`ssh -L 8080:127.0.0.1:8080 pi@wqmbench.local`, then `http://localhost:8080`.
+The Service Window answers nobody on the network. Until setup completes the
+unit serves only the wizard:
 
-`welcome → pin → identity → network → cloud → sensors → done`
+`welcome → identity → sensors → network → cloud → done`
 
-On the bench do **pin**, **identity** (screenshot the QR for your install
+On the bench do **identity** (screenshot the QR for your install
 records) and **cloud** (paste `api_key`; add `app_key`/`join_eui` if this site
 uses LoRa — the wizard verifies the key against the cloud there and then rather
 than letting a typo surface as a unit that just never appears). Leave
@@ -193,7 +195,8 @@ join of the day. The setup page repeats the short version.
 - [ ] Wi-Fi signal checked **with the enclosure closed**
 - [ ] GPS fix acquired (LED 3), or knowingly accepted as unavailable
 - [ ] LoRa joined — or knowingly accepted as not joining, per T2
-- [ ] Factory PIN replaced (the wizard refuses 1234)
+- [ ] Setup finished: the unit is on the site network (or recorded as LTE /
+      no-network) and Cloud shows a recent reading. There is no PIN to replace.
 - [ ] Relays confirmed inert, or confirmed clicking on the correct channel
 - [ ] Device id, DevEUI and the identity QR recorded for the install record
 - [ ] `journalctl -u bluesignal-ota -f` shows the agent polling, and
@@ -212,7 +215,7 @@ join of the day. The setup page repeats the short version.
 | GPS permission denied | `sudo usermod -aG dialout $USER` + reboot |
 | Service won't start | `journalctl -u bluesignal-wqm -e` — usually YAML syntax in `/etc/bluesignal/config.yaml` |
 | Cloud key rejected | Re-check on the wizard's Finish step; the probe is read-only and says which of key/network failed |
-| SSH dead but :8080 alive | Known: use Service Window → Settings → Reboot the unit (typed confirmation). Don't drive back for it |
+| SSH dead | The Service Window is reachable only through SSH now, so its Reboot button cannot help. Send **Restart** from BlueSignal Cloud (restarts the firmware, not the host) or power-cycle the unit |
 | Nothing works and light is fading | Swap in the spare SD card, re-run §1.2, re-use the **same** claim secrets — the device id derives from the Pi's CPU serial and does not change on re-flash |
 
 ---
@@ -340,8 +343,9 @@ Service Window opens by itself at `http://192.168.4.1/setup/` (the phone's
 captive-portal sheet; port 80). `http://192.168.4.1:8080/setup/` still works
 if the sheet does not. That is how you reach a unit whose flashed SSID does
 not exist at this site, and how service reaches it next year. After the unit
-joins the site network, use `http://<unit-ip>:8080` — port 80 is only the
-hotspot.
+joins the site network, the local page answers nobody on that network; use
+BlueSignal Cloud, or an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<unit-ip>`,
+then `http://localhost:8080`) for bench work.
 Joining the site network from that page turns the AP off for the join; a failed
 join brings it straight back — reconnect and try again. Declare on the same page
 what the unit IS (Wi-Fi / LTE / no network; LoRa and GPS fitted or not): the

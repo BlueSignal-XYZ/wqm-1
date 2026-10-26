@@ -23,11 +23,9 @@ def _client(tmp_path, mock_hardware, monkeypatch, status_text="firmware: 2.4.0\n
     status = tmp_path / "wqm1-status.txt"
     status.write_text(status_text, encoding="utf-8")
     monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
-    app = make_app(tmp_path, mock_hardware)
+    app = make_app(tmp_path, mock_hardware, open_window=True)
     assert not Path(app.config["CMD_SOCK"]).exists()
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
     return client, app
 
 
@@ -36,13 +34,11 @@ class TestSetupWhenFirmwareIsAbsent:
         self, tmp_path, mock_hardware, monkeypatch
     ):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        assert client.get("/setup/").headers["Location"].endswith("/setup/network")
         for path in (
-            "/setup/",
-            "/setup/pin",
             "/setup/identity",
             "/setup/cloud",
             "/setup/sensors",
-            "/setup/network",
             "/setup/done",
         ):
             resp = client.get(path)
@@ -50,6 +46,16 @@ class TestSetupWhenFirmwareIsAbsent:
             assert STARTING in resp.data
             assert b"firmware-starting" in resp.data
             assert b"5000" in resp.data
+
+    def test_the_wifi_page_does_not_wait_on_the_firmware(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        resp = client.get("/setup/network")
+        assert resp.status_code == 200
+        assert STARTING not in resp.data
+        assert b"steps-track" not in resp.data
+        assert b"window.location.reload()" not in resp.data
 
     def test_identity_shows_a_device_id_not_an_error(self, tmp_path, mock_hardware, monkeypatch):
         client, _app = _client(tmp_path, mock_hardware, monkeypatch)
@@ -89,11 +95,9 @@ class TestSetupWhenFirmwareIsAbsent:
         status = tmp_path / "wqm1-status.txt"
         status.write_text("firmware: 2.4.0\n", encoding="utf-8")
         monkeypatch.setenv("WQM1_STATUS_FILE", str(status))
-        app = make_app(tmp_path, mock_hardware)
+        app = make_app(tmp_path, mock_hardware, open_window=True)
         app.config["DB_PATH"] = str(tmp_path / "missing" / "wqm1.db")
         with app.test_client() as client:
-            with client.session_transaction() as sess:
-                sess["pin_verified"] = True
             sensors = client.get("/setup/sensors")
             done = client.get("/setup/done")
         assert sensors.status_code == 200
@@ -107,7 +111,6 @@ class TestSetupWhenFirmwareIsAbsent:
         self, tmp_path, mock_hardware, monkeypatch
     ):
         client, app = _client(tmp_path, mock_hardware, monkeypatch)
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         resp = client.post("/setup/done", data={}, follow_redirects=False)
         assert resp.status_code == 302
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
@@ -126,7 +129,6 @@ class TestMissingProbeFromStatusFile:
             monkeypatch,
             status_text="adc: faulted\nonewire: ok\n",
         )
-        client.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
         page = client.get("/setup/done").data.decode()
         assert "Finish without probe ADC" in page
         assert "not detected" in page
@@ -146,3 +148,37 @@ class TestMissingProbeFromStatusFile:
         page = client.get("/setup/sensors").data.decode()
         assert "checking" in page
         assert "Finish without probe" not in page
+
+
+class TestStartingRefreshNeverEatsTyping:
+    """Field, 2026-10-21 (WQM-10001): the 5 s refresh wiped the PIN and the
+    Wi-Fi password while the installer was typing them. The refresh still
+    runs on an untouched page, and stops once a field is touched."""
+
+    def test_sensor_page_guards_the_refresh(self, tmp_path, mock_hardware, monkeypatch):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        for path in ("/setup/sensors",):
+            page = client.get(path).data.decode()
+            assert "window.location.reload()" in page, path
+            assert "if (touched) { return; }" in page, path
+            assert "'input', 'keydown', 'pointerdown'" in page, path
+            # Focus alone is not typing: the PIN field autofocuses, and a
+            # focus guard stopped the refresh on an untouched page.
+            assert "focusin" not in page, path
+
+    def test_no_unconditional_reload_is_left_in_the_setup_base(self):
+        base = (
+            Path(__file__).resolve().parent.parent / "src/service_window/templates/setup_base.html"
+        ).read_text()
+        assert "setTimeout(function () { window.location.reload(); }" not in base
+
+
+class TestComingBackMidSetup:
+    """An installer who leaves mid-setup (a call, a swipe) and comes back
+    lands on the Wi-Fi page, whatever happened before."""
+
+    def test_the_landing_page_is_the_wifi_page(self, tmp_path, mock_hardware, monkeypatch):
+        client, _app = _client(tmp_path, mock_hardware, monkeypatch)
+        assert client.get("/setup/").headers["Location"].endswith("/setup/network")
+        client.get("/setup/sensors")
+        assert client.get("/setup/").headers["Location"].endswith("/setup/network")

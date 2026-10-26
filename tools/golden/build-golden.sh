@@ -251,15 +251,41 @@ pyc = list(Path("/opt/bluesignal/current/src/service_window/__pycache__").glob("
 sys.exit(0 if pyc else "no service_window app.pyc in the release tree")'
 
 install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-firstboot" "$R/usr/local/sbin/"
+install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-boot-stage" "$R/usr/local/sbin/"
+install -m 755 "$HERE/overlay/usr/local/sbin/wqm1-journal-preserve" "$R/usr/local/sbin/"
+install -D -m 644 "$HERE/overlay/usr/local/lib/wqm1-boot.sh" "$R/usr/local/lib/wqm1-boot.sh"
 install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-firstboot.service" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-boot-stage.service" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-journal-preserve.service" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/wqm1-journal-dirs.service" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/var-log.mount" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/var-log-journal.mount" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/var-tmp.mount" "$R/etc/systemd/system/"
+install -m 644 "$HERE/overlay/etc/systemd/system/var-cache.mount" "$R/etc/systemd/system/"
+install -D -m 644 "$HERE/overlay/etc/systemd/journald.conf.d/wqm1.conf" \
+  "$R/etc/systemd/journald.conf.d/wqm1.conf"
 install -m 644 "$HERE/overlay/etc/cloud/cloud.cfg.d/99_wqm1.cfg" "$R/etc/cloud/cloud.cfg.d/"
 install -m 644 "$HERE/overlay/etc/ssh/sshd_config.d/10-wqm1.conf" "$R/etc/ssh/sshd_config.d/"
-chroot "$R" systemctl enable wqm1-firstboot.service
+mkdir -p "$R/var/lib/wqm1/journal" "$R/var/lib/wqm1/journal-previous" "$R/var/lib/wqm1-firstboot"
+# No overlayfs root. A tmpfs upper layer would drop OTA and identity on
+# the next boot; a persistent upper layer still writes the card and breaks
+# the OTA symlink rename. rootfs-resilience.sh is fsck + fewer writes.
+chroot "$R" systemctl enable \
+  wqm1-boot-stage.service \
+  wqm1-firstboot.service \
+  wqm1-journal-preserve.service \
+  wqm1-journal-dirs.service \
+  var-log.mount \
+  var-log-journal.mount \
+  var-tmp.mount \
+  var-cache.mount
 chroot "$R" systemctl disable userconfig.service ssh.service
 printf '%s\n' '[main]' 'WirelessEnabled=true' > "$R/var/lib/NetworkManager/NetworkManager.state"
 if ! grep -q cfg80211.ieee80211_regdom "$R/boot/firmware/cmdline.txt"; then
   sed -i '1s/$/ cfg80211.ieee80211_regdom=US/' "$R/boot/firmware/cmdline.txt"
 fi
+bash "$HERE/rootfs-resilience.sh" apply-cmdline "$R/boot/firmware/cmdline.txt"
+bash "$HERE/rootfs-resilience.sh" apply-fstab "$R/etc/fstab"
 chroot_env \
   bash -c 'cd /opt/wqm-1-src && bash ./setup.sh --golden'
 
@@ -317,6 +343,10 @@ echo "rootfs blocks: $NB (minimum ${MIN_BLOCKS:-unknown})"
 resize2fs "$L2" "$NB"
 zerofree "$L2"
 e2fsck -fy "$L2"
+# After the last e2fsck: that check resets the mount count, and the next
+# line puts it back so the first real boot already runs fsck.
+# shellcheck disable=SC2046
+tune2fs $(bash "$HERE/rootfs-resilience.sh" tune2fs-args) "$L2"
 losetup -d "$L1"
 losetup -d "$L2"
 L1=""

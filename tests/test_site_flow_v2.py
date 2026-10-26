@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.remote import HOME_NETWORK, HOTSPOT, clients_from
 from tests.test_service_window_setup import make_app
 
 
@@ -86,10 +87,8 @@ class TestCaptivePortal:
         from service_window import captive
 
         monkeypatch.setattr(captive, "hotspot_up", lambda: True)
-        app = make_app(tmp_path, mock_hardware, pin="8642", setup_completed=True)
+        app = make_app(tmp_path, mock_hardware, pin="8642", setup_completed=True, open_window=True)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             r = c.get("/", headers={"Host": host})
         assert not (r.status_code == 302 and "192.168.4.1/setup" in r.headers.get("Location", ""))
 
@@ -156,34 +155,63 @@ class TestHotspotSkipsTheFactoryPin:
         from service_window import captive
 
         monkeypatch.setattr(captive, "from_hotspot", lambda: on_hotspot)
-        return make_app(tmp_path, mock_hardware, **kw)
+        app = make_app(tmp_path, mock_hardware, **kw)
+        return clients_from(app, HOTSPOT if on_hotspot else HOME_NETWORK)
 
     def test_first_setup_on_the_hotspot_opens_without_a_pin(
         self, tmp_path, mock_hardware, monkeypatch
     ):
         app = self._app(tmp_path, mock_hardware, monkeypatch, True)
         with app.test_client() as c:
-            r = c.get("/setup/")
+            r = c.get("/setup/", follow_redirects=True)
         assert r.status_code == 200
-        assert b"set this unit up" in r.data
+        assert b"Connect it to Wi-Fi" in r.data
 
     def test_off_the_hotspot_the_pin_is_still_asked(self, tmp_path, mock_hardware, monkeypatch):
         app = self._app(tmp_path, mock_hardware, monkeypatch, False)
         with app.test_client() as c:
             r = c.get("/setup/")
-        assert r.status_code == 302
-        assert "/login" in r.headers["Location"]
+        assert r.status_code == 403
+        assert b'name="pin"' not in r.data
+        assert "/login" not in (r.headers.get("Location") or "")
 
-    def test_exemption_ends_once_the_factory_pin_is_gone(
+    def test_the_wifi_page_stays_open_on_the_hotspot_after_setup(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        """2026-10-21: an installer set the PIN, got dropped, rejoined the
+        hotspot and was asked for a PIN to reach the Wi-Fi page. Being on the
+        hotspot (its passphrase is on the card in the box) is enough."""
+        app = self._app(
+            tmp_path, mock_hardware, monkeypatch, True, pin="8642", setup_completed=True
+        )
+        with app.test_client() as c:
+            assert c.get("/setup/network").status_code == 200
+
+    def test_only_the_wifi_page_is_open_on_the_hotspot_after_setup(
         self, tmp_path, mock_hardware, monkeypatch
     ):
         app = self._app(
             tmp_path, mock_hardware, monkeypatch, True, pin="8642", setup_completed=True
         )
         with app.test_client() as c:
+            # Setup pages stay open on the hotspot. /setup/pin is gone.
+            # Owner pages stay closed.
+            assert c.get("/setup/sensors").status_code == 200
+            assert c.get("/setup/pin").status_code == 404
+            r = c.get("/settings/")
+            assert r.status_code == 403
+            assert b'name="pin"' not in r.data
+
+    def test_the_wifi_page_needs_the_pin_off_the_hotspot(
+        self, tmp_path, mock_hardware, monkeypatch
+    ):
+        app = self._app(
+            tmp_path, mock_hardware, monkeypatch, False, pin="8642", setup_completed=True
+        )
+        with app.test_client() as c:
             r = c.get("/setup/network")
-        assert r.status_code == 302
-        assert "/login" in r.headers["Location"]
+        assert r.status_code == 403
+        assert b'name="pin"' not in r.data
 
     def test_setting_the_pin_keeps_the_installer_signed_in(
         self, tmp_path, mock_hardware, monkeypatch
@@ -191,9 +219,8 @@ class TestHotspotSkipsTheFactoryPin:
         app = self._app(tmp_path, mock_hardware, monkeypatch, True)
         with app.test_client() as c:
             r = c.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
-            assert r.status_code == 302
-            # The factory PIN is gone, so the hotspot exemption no longer
-            # applies — the session carries them on.
+            # /setup/pin is gone: there is no PIN to set.
+            assert r.status_code == 404
             assert c.get("/setup/sensors").status_code == 200
 
 
@@ -207,23 +234,17 @@ class TestCardedUnit:
             tmp_path, mock_hardware, config_extra={"api_key": "k" * 40, "cloud_enabled": True}
         )
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
-            r = c.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
-            assert r.headers["Location"].endswith("/setup/sensors")
+            app.config["TEST_OPEN_WINDOW"] = True
             assert c.get("/setup/identity").headers["Location"].endswith("/setup/sensors")
             assert c.get("/setup/cloud").headers["Location"].endswith("/setup/done")
-            page = c.get("/setup/").data
-        assert b"already knows who it" in page
 
     def test_card_without_a_cloud_key_still_asks_for_it(self, tmp_path, mock_hardware, monkeypatch):
         _carded_identity(tmp_path, monkeypatch)
         app = make_app(tmp_path, mock_hardware)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
-            r = c.post("/setup/pin", data={"pin": "8642", "pin_confirm": "8642"})
-        assert r.headers["Location"].endswith("/setup/identity")
+            app.config["TEST_OPEN_WINDOW"] = True
+            r = c.get("/setup/identity")
+        assert r.status_code == 200
 
 
 # ── 4. The join finishes setup; the bench network does not follow the unit ──
@@ -231,10 +252,8 @@ class TestCardedUnit:
 
 class TestJoinFinishesSetup:
     def _client(self, tmp_path, mock_hardware, virtual_net, **kw):
-        app = make_app(tmp_path, mock_hardware, pin="8642", **kw)
+        app = make_app(tmp_path, mock_hardware, pin="8642", open_window=True, **kw)
         c = app.test_client()
-        with c.session_transaction() as sess:
-            sess["pin_verified"] = True
         return c, app
 
     def _cfg(self, app):
@@ -257,7 +276,7 @@ class TestJoinFinishesSetup:
                 "password": netsim.DEMO_HOME_PASSWORD,
             },
         )
-        assert b"Setup is finished" in r.data
+        assert b"You&rsquo;re done here" in r.data
         state = json.loads(virtual_net.read_text())
         assert state["station"] == netsim.DEMO_HOME_SSID
         assert state["saved"] == [netsim.DEMO_HOME_SSID]  # BlueSignal-Shop forgotten
@@ -405,7 +424,7 @@ class TestDemoUnit:
         assert "BlueSignal-Shop" in net["saved"]
         assert len(unit["ap_passphrase"]) >= 8  # WPA2 minimum, so card and unit agree
         cfg = yaml.safe_load(unit["config"].read_text())
-        assert cfg["service_window"]["pin"] == "1234"
+        assert "pin" not in (cfg.get("service_window") or {})
         assert cfg["cloud_api_base"].startswith("http://127.0.0.1")
 
     def test_cloud_is_never_production(self):
@@ -425,10 +444,10 @@ class TestProbePageAgreesWithItself:
     "not installed" below. Opt-in probes are unticked when absent."""
 
     def _page(self, tmp_path, mock_hardware, **extra):
-        app = make_app(tmp_path, mock_hardware, pin="8642", config_extra=extra or None)
+        app = make_app(
+            tmp_path, mock_hardware, pin="8642", config_extra=extra or None, open_window=True
+        )
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             return c.get("/setup/sensors").data.decode()
 
     def test_absent_flow_is_unticked_and_listed_as_not_fitted(self, tmp_path, mock_hardware):
@@ -460,10 +479,8 @@ def _seed_networks(path, extra):
 
 class TestSiteScenarios:
     def _client(self, tmp_path, mock_hardware, pin="8642", **kw):
-        app = make_app(tmp_path, mock_hardware, pin=pin, **kw)
+        app = make_app(tmp_path, mock_hardware, pin=pin, open_window=True, **kw)
         c = app.test_client()
-        with c.session_transaction() as sess:
-            sess["pin_verified"] = True
         return c, app
 
     def _done(self, app):
@@ -501,7 +518,7 @@ class TestSiteScenarios:
         page = c.get("/setup/network").data.decode()
         assert "O&#39;Brien &#34;Home&#34;: 2.4G" in page  # escaped, not broken HTML
         r = c.post("/setup/network", data={"action": "join", "ssid": ssid, "password": password})
-        assert b"Setup is finished" in r.data
+        assert b"You&rsquo;re done here" in r.data
         assert json.loads(virtual_net.read_text())["station"] == ssid
 
     def test_longest_wpa2_password(self, tmp_path, mock_hardware, virtual_net):
@@ -617,21 +634,22 @@ class TestSiteScenarios:
             },
         )
         monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", "cedar-river-42"))
-        monkeypatch.setattr(
-            netctl,
-            "forget_saved_wifi",
-            lambda keep, iface="wlan0": {
+
+        def _forget(keep, iface="wlan0"):
+            return {
                 "ok": False,
                 "forgotten": [],
                 "failed": ["BlueSignal-Shop"],
                 "kept": keep,
-            },
-        )
+            }
+
+        monkeypatch.setattr(netctl, "forget_saved_wifi", _forget)
+        monkeypatch.setattr("service_window.routes.setup.forget_saved_wifi", _forget)
         c, app = self._client(tmp_path, mock_hardware)
         r = c.post(
             "/setup/network", data={"action": "join", "ssid": "Smith-Home", "password": "x" * 9}
         )
-        assert b"Setup is finished" in r.data
+        assert b"You&rsquo;re done here" in r.data
         assert b"The unit forgot" not in r.data  # never claims a forget that failed
         assert self._done(app)
 
@@ -662,6 +680,10 @@ class TestSiteScenarios:
         app = make_app(tmp_path, mock_hardware)
         with app.test_client() as c:
             r = c.get("/setup/", headers={"Host": "demo-unit.trycloudflare.com"})
+            assert r.status_code == 302
+            assert "192.168.4.1" not in r.headers["Location"]
+            assert r.headers["Location"].endswith("/setup/network")
+            r = c.get("/setup/network", headers={"Host": "demo-unit.trycloudflare.com"})
         assert r.status_code == 200
 
 

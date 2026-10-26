@@ -26,10 +26,12 @@ for dest_dir in /boot/firmware /boot; do
     tmp="$dest_dir/wqm1-status.txt.tmp"
     dest="$dest_dir/wqm1-status.txt"
     cp "$SRC" "$tmp"
+    sync -f "$tmp" 2>/dev/null || true
     mv "$tmp" "$dest"
     # The Python writer fsyncs its own file. This copy lands on FAT, and a
     # power cut before the disk cache flushes drops the only clue on the card.
     sync
+    sync -f "$dest_dir" 2>/dev/null || true
     published=1
     break
   fi

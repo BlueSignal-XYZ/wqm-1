@@ -27,6 +27,7 @@ written on the enclosure. Never a shared default.
 from __future__ import annotations
 
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -104,7 +105,32 @@ def _write_status(
         logger.error("Could not write boot status: %s", e)
 
 
+def retry() -> int:
+    """bluesignal-wifi-retry.timer: try the saved site network again while the
+    hotspot is up and nobody is on it. Always exits 0 — a timer that fails
+    stops being scheduled."""
+    from utils.netctl import retry_saved_station
+
+    def _stop(_signum: int, _frame: object) -> None:
+        # systemd's SIGTERM at TimeoutStartSec would otherwise end the
+        # process mid-retry with the hotspot down. SystemExit runs the
+        # retry's own restore on the way out.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    ssid, passphrase = resolve_credentials()
+    try:
+        result = retry_saved_station(ssid, passphrase)
+    except Exception as e:  # noqa: BLE001 — never leave the timer failed
+        logger.error("Saved-network retry failed: %s", e)
+        return 0
+    logger.info("Saved-network retry: %s", result)
+    return 0
+
+
 def main() -> int:
+    if "--retry" in sys.argv[1:]:
+        return retry()
     # Before the radio wait. A card pulled while hostapd is still coming
     # up would otherwise show a stale hotspot line, or none.
     _write_status(hotspot="starting", portal="down: starting")

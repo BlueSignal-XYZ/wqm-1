@@ -12,6 +12,7 @@ import pytest
 
 from service_window.app import create_app
 from service_window.routes import settings as settings_routes
+from tests.remote import HOME_NETWORK, from_addr
 
 
 @pytest.fixture
@@ -35,11 +36,12 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def app(db_path, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("service_window:\n  setup_completed: true\n")
     return create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
-            "config_path": str(tmp_path / "config.yaml"),
+            "config_path": str(config_path),
             "cal_path": str(tmp_path / "calibration.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
         }
@@ -49,10 +51,8 @@ def app(db_path, tmp_path):
 @pytest.fixture
 def authed_client(app):
     app.config["TESTING"] = True
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client
+    app.config["TEST_OPEN_WINDOW"] = True
+    return app.test_client()
 
 
 @pytest.fixture
@@ -91,8 +91,10 @@ class TestRebootControl:
 
     def test_login_required(self, app):
         app.config["TESTING"] = True
-        resp = reboot(app.test_client())
-        assert b"PIN" in resp.data
+        resp = reboot(from_addr(app.test_client(), HOME_NETWORK))
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
+        assert b"BlueSignal Cloud" in resp.data
 
 
 class TestTypedConfirmation:

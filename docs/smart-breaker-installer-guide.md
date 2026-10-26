@@ -44,7 +44,8 @@ is the AWG circuit and not the neighbour.
 
 ### 2a. From the Service Window (preferred)
 
-Open `http://<pi-ip>:8080/settings/` → **AWG load control → Open the AWG
+Open an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<pi-ip>`), then
+`http://localhost:8080/settings/` → **AWG load control → Open the AWG
 circuit page** (once a vendor is saved the page also gets its own "AWG
 circuit" entry in the sidebar). Under **Breaker binding**:
 

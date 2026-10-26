@@ -61,6 +61,7 @@ from sensors.tds import TDSSensor
 from sensors.temperature import DS18B20
 from sensors.turbidity import TurbiditySensor
 from storage.database import WQM1Database
+from utils.atomic import atomic_write_text
 from utils.clock import ClockDiscipline
 from utils.config import (
     ADC_CH_ORP,
@@ -1071,10 +1072,11 @@ class WQM1App:
             self._state.request_restart()
             return {"ok": True, "restarting": True}
         if action == "reboot":
-            # Whole-host reboot, not just this service — the Service Window's
-            # break-glass path when a unit is reachable on :8080 but its sshd
-            # is not. We hold no privilege to do it ourselves: relays go to
-            # fail-safe here, the root OTA agent does the reboot.
+            # Whole-host reboot, not just this service, from the Service
+            # Window's Settings page. That page answers only on the unit
+            # itself now (the bench SSH tunnel), so this is no longer a way
+            # in when sshd is dead. We hold no privilege to do it ourselves:
+            # relays go to fail-safe here, the root OTA agent does the reboot.
             return request_host_reboot(self._relays, REBOOT_REQUEST_FLAG)
         if action == "config_reload":
             self._config.reload()
@@ -1403,10 +1405,7 @@ class WQM1App:
         if not persist:
             return
         try:
-            WATER_PROFILE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            tmp = WATER_PROFILE_CACHE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(profile))
-            tmp.replace(WATER_PROFILE_CACHE)
+            atomic_write_text(WATER_PROFILE_CACHE, json.dumps(profile))
         except OSError as e:
             logger.warning("Could not cache water profile: %s", e)
 

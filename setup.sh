@@ -61,7 +61,7 @@ echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 # card cut from an image that holds them would upload unit 1's bench samples
 # under its own label the moment its key is consumed), the cached water
 # profile, the OTA/reboot request flags, the first-boot marker and the
-# journal. Config (probes, variant, the factory PIN, setup not finished) and
+# journal. Config (probes, variant, setup not finished) and
 # the Wi-Fi the run checks in over stay. Mirrors ops -> Units -> "Bench a
 # WQM-1 run" -> Capture the master image.
 if [ "${1:-}" = "--golden" ]; then
@@ -475,7 +475,7 @@ echo "  current -> $RELEASE_DIR"
 
 # /etc/bluesignal must be writable by the service user, not just readable.
 # The service window provisions the device by rewriting config.yaml (AppKey,
-# cloud_enabled, api_key, PIN). It runs as $INSTALL_USER, so a root-owned
+# cloud_enabled, api_key). It runs as $INSTALL_USER, so a root-owned
 # /etc/bluesignal makes every save fail with a 500 and the provisioning page
 # is read-only in practice — which is the one thing it exists to do.
 sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal /etc/bluesignal
@@ -510,6 +510,10 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# While the hotspot is up and idle, retry the saved site network every 5 min
+# (router slower than the Pi after a power cut). Never while a phone is on it.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.timer" /etc/systemd/system/
 # Not enabled. OnFailure= of bluesignal-ap-fallback.service starts it.
 sudo cp "$SCRIPT_DIR/systemd/wqm1-apfail.service" /etc/systemd/system/
 # Setup AP processes. Not enabled: netctl starts and stops them. The distro
@@ -549,6 +553,7 @@ sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-captive-portal.service
 sudo systemctl enable bluesignal-ota.service
 sudo systemctl enable bluesignal-ap-fallback.service
+sudo systemctl enable bluesignal-wifi-retry.timer
 sudo systemctl enable bluesignal-burnin.service
 sudo systemctl enable bluesignal-card.service
 
@@ -616,12 +621,13 @@ echo "  6. Start service:    sudo systemctl start bluesignal-wqm"
 echo "  7. View logs:        journalctl -u bluesignal-wqm -f"
 echo ""
 echo "Service Window:"
-echo "  Web UI:              http://$(hostname).local:8080"
-echo "  Default PIN:         1234 (change in /etc/bluesignal/config.yaml)"
+echo "  Bench access:        ssh -L 8080:127.0.0.1:8080 $INSTALL_USER@$(hostname).local"
+echo "                       then open http://localhost:8080"
+echo "  Local page:          hotspot setup only; owners use BlueSignal Cloud. There is no PIN."
 echo ""
 echo "Provisioning:"
 echo "  CLI wizard:          sudo python3 /opt/bluesignal/current/scripts/provision.py"
-echo "  Web wizard:          http://$(hostname).local:8080/provision"
+echo "  Web wizard:          http://localhost:8080/provision (through the bench tunnel)"
 echo ""
 echo "OTA updates:"
 echo "  Layout:              releases in $INSTALL_DIR/releases/, active = $CURRENT_LINK"

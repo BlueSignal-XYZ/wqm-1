@@ -17,8 +17,9 @@
     </header>
 
     <main class="setup-shell">
+        {% if steps|length > 1 %}
         <ol class="steps-track" aria-label="Setup progress">
-            {% set labels = {'welcome': 'Welcome', 'pin': 'PIN', 'identity': 'Identity',
+            {% set labels = {'welcome': 'Welcome', 'identity': 'Identity',
                              'network': 'Network', 'cloud': 'Cloud', 'sensors': 'Sensors',
                              'done': 'Finish'} %}
             {% for s in steps %}
@@ -29,6 +30,7 @@
             </li>
             {% endfor %}
         </ol>
+        {% endif %}
 
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -52,7 +54,26 @@
     {% block scripts %}{% endblock %}
     {% if firmware_starting %}
     <script>
-    setTimeout(function () { window.location.reload(); }, 5000);
+    // Refresh while the unit starts, but never under someone typing: a
+    // reload wiped the Wi-Fi password mid-entry in the field
+    // (WQM-10001, 2026-10-21). Once a field is touched the page stops
+    // refreshing; submitting the form loads the next page anyway.
+    (function () {
+      // Real interaction only: an autofocused field is not someone typing.
+      var touched = false;
+      function mark(e) {
+        if (e.type === 'input' || /^(INPUT|TEXTAREA|SELECT|LABEL)$/.test(e.target.tagName)) {
+          touched = true;
+        }
+      }
+      ['input', 'keydown', 'pointerdown'].forEach(function (name) {
+        document.addEventListener(name, mark, true);
+      });
+      setTimeout(function tick() {
+        if (touched) { return; }
+        window.location.reload();
+      }, 5000);
+    })();
     </script>
     {% endif %}
 </body>

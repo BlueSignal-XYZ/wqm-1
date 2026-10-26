@@ -98,6 +98,13 @@ PROBE_HOSTS: frozenset[str] = frozenset(
 )
 
 _OWN_HOSTS = frozenset({PORTAL_HOST, "localhost", "127.0.0.1"})
+# Set on every request the port-80 relay passes to the Service Window, and
+# stripped from anything a phone sends. The relay connects from 127.0.0.1,
+# so without it the Service Window cannot tell a phone on the hotspot from
+# a request made on the unit itself.
+RELAY_HEADER = "X-WQM1-Relay"
+RELAY_VALUE = "hotspot"
+
 _HOP_HEADERS = frozenset(
     {
         "connection",
@@ -623,8 +630,10 @@ class PortalHandler(BaseHTTPRequestHandler):
         headers = {
             key: value
             for key, value in self.headers.items()
-            if key.lower() not in _HOP_HEADERS and key.lower() != "content-length"
+            if key.lower() not in _HOP_HEADERS
+            and key.lower() not in {"content-length", RELAY_HEADER.lower()}
         }
+        headers[RELAY_HEADER] = RELAY_VALUE
         conn = http.client.HTTPConnection("127.0.0.1", self._backend(), timeout=8)
         try:
             conn.request(self.command, self.path, body=body, headers=headers)

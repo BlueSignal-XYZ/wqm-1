@@ -1,0 +1,15 @@
+[Unit]
+Description=Record BOOT stage on the FAT partition before the setup hotspot
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target NetworkManager.service wqm1-firstboot.service bluesignal-ap-fallback.service wqm1-setup-hostapd.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wqm1-boot-stage
+RemainAfterExit=yes
+TimeoutStartSec=15
+
+[Install]
+WantedBy=sysinit.target

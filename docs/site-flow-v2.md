@@ -11,8 +11,8 @@ the firmware half and what still has to be proved on a real Pi.
 1. Scan the **Wi-Fi QR on the setup card** in the box with the iPhone camera,
    then tap "Join WQM1-xxxx".
 2. The setup page **opens by itself** (captive portal). No address, and no
-   factory PIN on the hotspot during first setup.
-3. Set a PIN, then watch the probes. A carded unit skips the identity and
+   PIN. The hotspot passphrase on the card is the proof of presence.
+3. Watch the probes if you need to. A carded unit skips the identity and
    cloud-key steps because the bench card supplied both.
 4. **Network, last:** the owner picks their Wi-Fi and types the password.
    *Join and finish* completes setup on the unit only after the checks
@@ -63,7 +63,7 @@ and raise the setup hotspot instead. The setup join is stricter.
 | Port 80 captive listener, hotspot only | `utils/captive_portal`, `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Closes when the station joins. |
 | Service Window, including setup, still on 8080 | `service_window` — the port-80 process proxies the setup UI here so the phone never sees `:8080` |
 | Probe paths + foreign-host redirect | `utils/captive_portal` on port 80, and `service_window/captive.py` on 8080 (same target: `http://192.168.4.1/setup/`) |
-| No factory PIN on the hotspot during first setup | `service_window/auth._first_setup_on_hotspot` |
+| Setup pages open on the hotspot; no PIN | `service_window/auth.login_required` + `captive.from_hotspot` |
 | Network-last wizard; join finishes setup | `service_window/routes/setup.py` |
 | Forget every other saved Wi-Fi | `utils/netctl.forget_saved_wifi` |
 | Virtual radio for simulated units | `utils/netsim.py` (`WQM1_VIRTUAL_NET`) |

@@ -73,8 +73,17 @@ from the earlier hardcoded-name build as a different tree.
 
 | Path | Role |
 |---|---|
-| `overlay/usr/local/sbin/wqm1-firstboot` | Every boot: unblock Wi-Fi, set the regulatory domain to US, log the device-tree model, and set hostname `wqm1-xxxx` from the same id the firmware uses for the hotspot SSID. A card moved to another Pi is renamed; it is not left with the first Pi's hostname. |
-| `overlay/etc/systemd/system/wqm1-firstboot.service` | Runs that script before the firmware and the setup hotspot. |
+| `overlay/usr/local/sbin/wqm1-firstboot` | Every boot: unblock Wi-Fi, set the regulatory domain to US, log the device-tree model, record which Pi this card was commissioned on, and set hostname `wqm1-xxxx` from the same id the firmware uses for the hotspot SSID. A card moved to another Pi is renamed. A power pull leaves a step marker; the next boot resumes that step. |
+| `overlay/usr/local/sbin/wqm1-boot-stage` | Writes `BOOT: stage=boot` on the FAT status file before the hotspot. Replaces a stale `COMMISSION` line. |
+| `overlay/usr/local/lib/wqm1-boot.sh` | Status file, step markers, and the card-binding file shared with `src/utils/cardmove.py`. |
+| `overlay/usr/local/sbin/wqm1-journal-preserve` | Copies the previous boot's journal to `/var/lib/wqm1/journal-previous/previous.journal` before journald starts. |
+| `overlay/etc/systemd/system/wqm1-firstboot.service` | Runs first-boot after NetworkManager and after the early boot-stage line, before the firmware and the setup hotspot. |
+| `overlay/etc/systemd/system/wqm1-boot-stage.service` | Oneshot before NetworkManager. |
+| `overlay/etc/systemd/journald.conf.d/wqm1.conf` | Persistent journal, 32M cap, flush every 30s. |
+| `overlay/etc/systemd/system/var-log.mount` | tmpfs for `/var/log`. The journal bind-mount is the copy that stays on the card. |
+| `overlay/etc/systemd/system/var-log-journal.mount` | Bind `/var/lib/wqm1/journal` onto `/var/log/journal`. |
+| `overlay/etc/systemd/system/var-tmp.mount`, `var-cache.mount` | tmpfs for the other chatty paths. |
+| `rootfs-resilience.sh` | `fsck.repair=yes`, root `noatime` and `errors=remount-ro`, `tune2fs -c 1 -C 1 -i 0 -e remount-ro`. Does not enable an overlayfs root: a tmpfs upper layer would drop OTA and identity, and a persistent upper layer breaks the OTA symlink rename. |
 | `overlay/etc/cloud/cloud.cfg.d/99_wqm1.cfg` | cloud-init does not configure the network and does not set a hostname. |
 | `overlay/etc/ssh/sshd_config.d/10-wqm1.conf` | If SSH is ever enabled, it is key-only. |
 | `bootfs/user-data`, `meta-data`, `network-config` | cloud-init identity of a never-booted card. No users, no Wi-Fi. |

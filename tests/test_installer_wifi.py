@@ -321,17 +321,19 @@ class TestProbes:
 
 
 def _client(tmp_path, mock_hardware, pin="8642"):
-    app = make_app(tmp_path, mock_hardware, pin=pin)
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client, app
+    app = make_app(tmp_path, mock_hardware, pin=pin, open_window=True)
+    return app.test_client(), app
 
 
 class TestSetupPage:
-    def test_landing_page_mentions_mobile_data(self, tmp_path, mock_hardware):
+    def test_landing_page_mentions_mobile_data(self, tmp_path, mock_hardware, monkeypatch):
+        # The hotspot lands on the Wi-Fi page now; the note moved with it.
+        from utils import netctl
+
+        monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": True)
+        monkeypatch.setattr(netctl, "scan_networks", lambda iface="wlan0": [])
         client, _app = _client(tmp_path, mock_hardware, pin="1234")
-        page = client.get("/setup/").data.decode()
+        page = client.get("/setup/", follow_redirects=True).data.decode()
         assert "turn off mobile data" in page
         assert "stay connected to WQM1-" in page
 
@@ -604,7 +606,9 @@ class TestSetupPage:
         saved = yaml.safe_load(Path(app.config["CONFIG_PATH"]).read_text())
         assert saved["service_window"]["setup_completed"] is True
 
-    def test_join_also_requires_the_missing_probe_tick(self, tmp_path, mock_hardware, monkeypatch):
+    def test_join_does_not_wait_on_the_probes(self, tmp_path, mock_hardware, monkeypatch):
+        """Getting online is the only on-site step (2026-10-22). A missing
+        probe is Cloud's quiet-probe alert, not a reason to stay offline."""
         from utils import netctl
 
         status = tmp_path / "wqm1-status.txt"
@@ -619,7 +623,12 @@ class TestSetupPage:
                 {"ssid": "PondHouse", "signal": 70, "secured": True, "freq_mhz": 2412}
             ],
         )
-        monkeypatch.setattr(netctl, "join_network", lambda *a, **k: calls.append(a))
+
+        def _join(*a, **k):
+            calls.append(a)
+            return {"connected": False, "error": "wrong password", "ap_restored": True}
+
+        monkeypatch.setattr(netctl, "join_network", _join)
         client, _app = _client(tmp_path, mock_hardware)
         client.post(
             "/setup/network",
@@ -627,9 +636,8 @@ class TestSetupPage:
             follow_redirects=True,
         )
         page = client.get("/setup/network").data.decode()
-        assert "Finish without probe ADC" in page
-        assert "Finish without probe 1-Wire" in page
-        assert calls == []
+        assert "Finish without probe" not in page
+        assert len(calls) == 1
 
 
 def test_percent_only_rows_still_get_bars():

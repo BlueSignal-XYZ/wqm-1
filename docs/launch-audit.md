@@ -132,7 +132,7 @@ install a fresh tree with the stock file. A site's rules and its
 never overwrites it.
 
 **H7 — Service Window had no CSRF protection.** Every state-changing route
-(relays, AWG circuit, reboot, PIN, keys) is a plain POST and Flask's session
+(relays, AWG circuit, reboot, keys) is a plain POST and Flask's session
 cookie defaulted to SameSite=None, so any page on the installer's phone could
 POST `/relays/set`. **FIXED** — `SESSION_COOKIE_SAMESITE=Lax`, HttpOnly.
 Proper per-form CSRF tokens remain a follow-up.
@@ -219,9 +219,12 @@ decoder; not changed here because it is a cloud contract.
   untouchable.
 - **M7 Service Window PIN.** Four digits, plaintext in `config.yaml`, rate
   limited to 5 tries/minute per IP: exhaustive search in ~33 hours from the
-  LAN. **Mitigated** — 15 wrong PINs within an hour lock the address out for
-  15 minutes (constant-time compare added); the wizard already accepts 4-8
-  digits, so use more than four on a shared network.
+  LAN. **FIXED** — there is no PIN. Setup pages are open only on this unit's
+  own hotspot (card passphrase is the proof of presence). After setup the
+  local page is closed on the LAN (HTTP 403); owners use BlueSignal Cloud.
+  Hold this build off the live field unit `BS-WQM1-0000a92e4e7d` until that
+  unit is migrated on a later site visit or firmware push. See
+  `docs/no-pin-rollout.md`.
 - **M8 Sync duplicates.** If the ingest POST succeeds but the response is
   lost, the rows stay pending and are re-sent; the payload has no client
   id, so de-duplication depends on the server keying on deviceId+timestamp.
@@ -253,8 +256,8 @@ decoder; not changed here because it is a cloud contract.
   GPS `power_cycle()` comment said "low" while the code pulses high
   (comment fixed; harmless on an M10 in continuous mode).
 - Service Window `SECRET_KEY` is regenerated per process start unless set, so
-  sessions log out on every restart (annoyance, not a hole). Non-constant-time
-  PIN compare (LAN-only, low value).
+  sessions log out on every restart (annoyance, not a hole). The old
+  non-constant-time PIN compare is gone: there is no PIN.
 - ADS1115 ALERT/RDY is pulled up to 3.3 V while the converter runs at 5 V —
   fine for an open-drain output, and the firmware polls the OS bit anyway.
 - Relay state bitmask is updated without a lock from three threads; only the
@@ -359,5 +362,5 @@ Run these on a Fin_3 unit with the branch flashed, and record the numbers in
 | `src/integrations/smart_breaker/controller.py`, `src/utils/config.py` | `smart_breaker_min_off_s` short-cycle guard | `…::TestShortCycleGuard` |
 | `src/radio/lorawan.py`, `src/main.py` | DevNonce counter, join backoff, LinkCheck rejoin, `lora_rejoin`; packet RSSI/SNR | `…::TestJoinHygiene` |
 | `src/storage/database.py` | Pending-row cap when cloud sync is off | `…::TestPendingRotation` |
-| `src/service_window/auth.py`, `routes/lora.py`, `routes/calibration.py` | PIN lockout escalation, forget-session button, restart hint after calibration | `…::TestPinLockout` |
+| `src/service_window/auth.py`, `routes/lora.py`, `routes/calibration.py` | No PIN; LAN closed; forget-session button; restart hint after calibration | `tests/test_no_pin_auth.py` |
 | `src/sensors/temperature.py`, `src/sensors/gps.py`, `setup.sh` | 85.0 °C filter, EXTINT comment, provision service enabled | `…::TestDriverFixes` |

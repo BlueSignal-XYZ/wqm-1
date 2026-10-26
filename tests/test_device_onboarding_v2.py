@@ -13,6 +13,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -529,10 +530,8 @@ class TestIdentityQr:
         assert set(payload) <= {"v", "device_id", "label", "pk"}
 
     def test_setup_identity_page_has_no_key_paste(self, tmp_path, mock_hardware):
-        app = make_app(tmp_path, mock_hardware)
+        app = make_app(tmp_path, mock_hardware, open_window=True)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             page = c.get("/setup/identity").get_data(as_text=True)
         assert 'name="api_key"' not in page
         assert "qr" in page.lower()
@@ -553,10 +552,8 @@ class TestSetupOrder:
         assert STEPS.index("sensors") < STEPS.index("network")
 
     def test_installer_cloud_page_hides_paste_behind_bench_override(self, tmp_path, mock_hardware):
-        app = make_app(tmp_path, mock_hardware)
+        app = make_app(tmp_path, mock_hardware, open_window=True)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             page = c.get("/setup/cloud").get_data(as_text=True)
         assert "Bench / dev override" in page
         assert "never pastes" in page.lower() or "never paste" in page.lower()
@@ -569,10 +566,8 @@ class TestSetupOrder:
         from utils.device_keys import store_register_state
 
         store_register_state({"status": "pending", "last_code": "pending_identity"})
-        app = make_app(tmp_path, mock_hardware)
+        app = make_app(tmp_path, mock_hardware, open_window=True)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             page = c.get("/setup/cloud").get_data(as_text=True)
         assert "Registration did not complete" not in page
         assert "Waiting for installer to assign this unit" in page
@@ -581,19 +576,26 @@ class TestSetupOrder:
     def test_cloud_page_does_not_wait_on_register(self, tmp_path, mock_hardware, monkeypatch):
         """A slow or hanging Cloud must not stall the setup page."""
 
+        release = threading.Event()
+
         def hang(*_a, **_k):
-            time.sleep(30)
+            # Hang until the test is done, then fail — never outlive the
+            # test (a 30 s sleep wrote register state after teardown).
+            release.wait(30)
             raise URLError("hung")
 
         monkeypatch.setattr("urllib.request.urlopen", hang)
-        app = make_app(tmp_path, mock_hardware)
+        app = make_app(tmp_path, mock_hardware, open_window=True)
         with app.test_client() as c:
-            with c.session_transaction() as sess:
-                sess["pin_verified"] = True
             started = time.monotonic()
             resp = c.get("/setup/cloud")
+        elapsed = time.monotonic() - started
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == "wqm1-register-kick":
+                thread.join(timeout=5)
         assert resp.status_code == 200
-        assert time.monotonic() - started < 2.0
+        assert elapsed < 2.0
 
 
 class TestInstalledImageLayout:

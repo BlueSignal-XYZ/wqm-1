@@ -13,7 +13,7 @@ a supervisor that relaunches the firmware when setup restarts it (systemd's
 job on a real unit). The unit boots the way a unit does at a well head:
 
 * its identity came from the bench card (serial, DevEUI, hotspot passphrase),
-  so the wizard is the short, carded one: PIN → probes → network;
+  so the wizard is the short, carded one: probes → join the owner's Wi-Fi;
 * no known network is in range, so its setup hotspot ``WQM1-0001`` is up;
 * the bench network ``BlueSignal-Shop`` is still saved from the shop;
 * the homeowner's network ``Smith-Home`` is in range (password printed below).
@@ -51,7 +51,6 @@ from utils.identity import ap_name  # noqa: E402
 
 # A closed loopback port: every upload fails fast and the unit buffers.
 DEAD_CLOUD = "http://127.0.0.1:9"
-FACTORY_PIN = "1234"
 DEMO_AP_PASSPHRASE = "cedar-river-42"  # nosec B105 — a virtual hotspot
 CLOUD_CLAIM_BASE = "https://cloud.bluesignal.xyz/claim/"
 
@@ -107,7 +106,6 @@ def build_unit(workdir: Path, port: int, seed: int) -> dict[str, Any]:
             "cmd_sock": str(workdir / "cmd.sock"),
             "service_window": {
                 "port": port,
-                "pin": FACTORY_PIN,
                 "db_path": str(workdir / "wqm1.db"),
                 "cal_path": str(workdir / "calibration.yaml"),
                 "cmd_sock": str(workdir / "cmd.sock"),
