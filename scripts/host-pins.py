@@ -75,14 +75,14 @@ def _write_overrides(path: Path, pins: dict[int, str], existing: dict) -> None:
     merged = {int(k): str(v) for k, v in current.items() if str(k).isdigit()}
     merged.update(pins)
     data["pins"] = dict(sorted(merged.items()))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(
+    from utils.atomic import atomic_write_text
+
+    atomic_write_text(
+        path,
         "# Written by scripts/host-pins.py from this board's `gpio readall`.\n"
         "# physical header pin -> SoC pin name. Bus overrides: i2c_bus, spi_bus,\n"
-        "# spi_device, gps_port. See docs/platforms.md.\n" + yaml.safe_dump(data, sort_keys=False)
+        "# spi_device, gps_port. See docs/platforms.md.\n" + yaml.safe_dump(data, sort_keys=False),
     )
-    tmp.replace(path)
 
 
 def _check(board_id: str, overrides_path: str) -> int:

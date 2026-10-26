@@ -4,8 +4,10 @@ A power cut in the middle of ``write_text`` leaves a half-written file that
 the next boot then trusts. The sequence here is the usual one: write a temp
 file in the same directory, ``fsync`` it, then ``rename`` over the
 destination. A second ``fsync`` on the directory makes the rename itself
-durable on ext4. The temp name keeps the historical suffix (``data.json``
-becomes ``data.tmp``) so a crash still leaves one predictable leftover.
+durable on ext4. The temp name is the whole file name plus ``.tmp``
+(``data.json`` becomes ``data.json.tmp``), so two files that share a stem
+never write the same temp file, and a crash still leaves one predictable
+leftover.
 
 vfat (the boot partition) does not make rename atomic. Callers that publish
 there still use this helper: a short temp file plus ``fsync`` is the best
