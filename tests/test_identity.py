@@ -327,3 +327,13 @@ class TestHostSerialFallbacks:
             from utils.identity import get_pi_serial
 
             assert get_pi_serial() == "567890abcdef0123"
+
+
+def test_the_cell_data_note_names_the_open_network_when_none_is_given():
+    """#170 review: the fallback still named the retired WQM1-xxxx network."""
+    from utils.identity import SETUP_SSID
+    from utils.wifi_setup import cell_data_note
+
+    assert SETUP_SSID in cell_data_note(None)
+    assert "WQM1-" not in cell_data_note(None)
+    assert "Home" in cell_data_note("Home")

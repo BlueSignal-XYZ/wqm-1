@@ -119,7 +119,7 @@ class TestProbeResponses:
         A body of Success, or an Android 204, tells the phone the hotspot has
         internet. The phone then skips the sheet and keeps using mobile data.
         These answers stay a redirect with an empty body so the phone offers
-        to stay on WQM1-xxxx.
+        to stay on BlueSignal Setup.
         """
         ios = _get(portal.server_address[1], "/hotspot-detect.html", "captive.apple.com")
         android = _get(portal.server_address[1], "/generate_204", "connectivitycheck.gstatic.com")

@@ -73,8 +73,10 @@ _DBM_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*dBm", re.IGNORECASE)
 
 
 def cell_data_note(ssid: str | None) -> str:
-    """The landing-page sentence. ``WQM1-xxxx`` when the name is not known."""
-    name = (ssid or "").strip() or "WQM1-xxxx"
+    """The landing-page sentence. The setup network's name when none is given."""
+    from utils.identity import SETUP_SSID
+
+    name = (ssid or "").strip() or SETUP_SSID
     return CELL_DATA_NOTE.format(ssid=name)
 
 
