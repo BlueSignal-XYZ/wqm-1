@@ -434,6 +434,8 @@ immersion installs read unstably and foul quickly.
 
 Rules: never put home Wi-Fi or any Mac password on a card. No OTA until the bench test passes and the Captain approves. The Pi Zero W needs the 32-bit (armhf) image.
 
+**Getting the image:** download `wqm1-pi-zero-<commit>.img.xz` from Actions → Card image and write it with Raspberry Pi Imager: [`flash-a-card.md`](flash-a-card.md). Steps 1 and 2 below are the older Mac-mini route.
+
 1. **Image:** `~/wqm1-flash/wqm1-golden-zerow.img` (Pi Zero W, armhf, fw2.4.0). Release candidate sha256 `8284e49d7e1b8a8f8e509dc0cc4236e369f16b858d1fa0c15ec3542b74de1c89`. Earlier images are kept as `.prev-<sha>`.
 2. **Flash:** `bash ~/flash-card.sh ~/wqm1-flash/wqm1-golden-zerow.img`. Always pass the path, because the default (`wqm1-golden.img`) is older. The script stops unless exactly one external 16 GB card is plugged in. It asks for the Mac password (sudo dd), takes about 10 minutes, then ejects the card and prints `FLASH DONE`.
 3. **Verify:** reinsert the card and wait for `bootfs` to mount. Check that `network-config` and `user-data` hold no saved Wi-Fi (no ssid or psk), and that `meta-data` has `instance_id: wqm1-golden-2.4.0`. The hostname is set from the serial on first boot.
