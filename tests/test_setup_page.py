@@ -621,6 +621,71 @@ class TestRescan:
         assert _json(portal, "POST", "/api/rescan", {})[1]["error"] == "rescan_failed"
 
 
+class TestOneSlowRequestStallsNoOne:
+    """#169 review: a Rescan waits up to 30 s on the root service. Served in
+    turn, every status poll and captive probe queued behind it."""
+
+    def test_state_answers_while_a_rescan_waits(self, portal):
+        scanning = threading.Event()
+        release = threading.Event()
+
+        def slow_rescan():
+            scanning.set()
+            assert release.wait(timeout=10)
+            return {"ok": True, "count": 2}
+
+        portal.rescan_request = slow_rescan
+        rescans: list = []
+        worker = threading.Thread(
+            target=lambda: rescans.append(_json(portal, "POST", "/api/rescan", body={}))
+        )
+        worker.start()
+        try:
+            assert scanning.wait(timeout=3)
+            began = time.monotonic()
+            status, _body = _json(portal, "GET", "/api/state")
+            assert status == 200
+            resp, _ = _call(portal, "GET", "/generate_204")
+            assert resp.status == 302
+            assert time.monotonic() - began < 2.0
+        finally:
+            release.set()
+            worker.join(timeout=5)
+        assert rescans and rescans[0][0] == 200
+
+    def test_requests_over_the_limit_are_closed_not_queued(self, unit, monkeypatch):
+        monkeypatch.setattr(captive_portal, "MAX_CLIENTS", 1)
+        server = captive_portal.make_server("127.0.0.1", 0)
+        thread = _serve(server)
+        release = threading.Event()
+        holding = threading.Event()
+
+        def slow_rescan():
+            holding.set()
+            assert release.wait(timeout=10)
+            return {"ok": True, "count": 0}
+
+        server.rescan_request = slow_rescan
+        worker = threading.Thread(target=lambda: _json(server, "POST", "/api/rescan", body={}))
+        worker.start()
+        try:
+            assert holding.wait(timeout=3)
+            began = time.monotonic()
+            with pytest.raises((ConnectionError, http.client.HTTPException, OSError)):
+                _call(server, "GET", "/api/state")
+            assert time.monotonic() - began < 2.0
+        finally:
+            release.set()
+            worker.join(timeout=5)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_a_silent_client_is_dropped(self):
+        assert captive_portal.PortalHandler.timeout == captive_portal.CLIENT_TIMEOUT_S
+        assert 0 < captive_portal.CLIENT_TIMEOUT_S <= 30
+
+
 # --- State ------------------------------------------------------------------
 
 

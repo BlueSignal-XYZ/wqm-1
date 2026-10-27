@@ -58,6 +58,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from typing import Any
 
 logger = logging.getLogger("wqm1.captive_portal")
@@ -72,6 +73,9 @@ SETUP_PATH = "/setup/"
 PAGE_PATHS = frozenset({"/", "/setup", SETUP_PATH})
 # The API takes a few small JSON fields. Anything larger is not this page.
 MAX_BODY = 4096
+# Requests served at once on port 80, and how long a silent one is kept.
+MAX_CLIENTS = 16
+CLIENT_TIMEOUT_S = 15.0
 POLL_MS = 3000
 # A failure older than this is not news to a phone that opens the page.
 STATE_FRESH_S = 30 * 60
@@ -879,17 +883,44 @@ def _default_rescan() -> dict[str, Any]:
     return join_service.request_rescan()
 
 
-class PortalServer(HTTPServer):
-    """Listens on one address. ``join_request`` and ``rescan_request`` reach root."""
+class PortalServer(ThreadingMixIn, HTTPServer):
+    """Listens on one address. ``join_request`` and ``rescan_request`` reach root.
+
+    One thread per request, at most ``MAX_CLIENTS`` at once. A Rescan waits
+    up to 30 s on the root service; served in turn, it froze every phone's
+    status poll and captive probe for as long as the scan ran. A request
+    over the limit is closed at once, never queued, and an idle connection
+    is dropped after ``CLIENT_TIMEOUT_S``, so the open network cannot pin
+    the page by holding sockets.
+    """
 
     allow_reuse_address = True
+    daemon_threads = True
+    # Closing on a station join must not wait for a slow rescan to answer.
+    block_on_close = False
     join_request: Callable[..., dict[str, Any]] = staticmethod(_default_join)
     rescan_request: Callable[[], dict[str, Any]] = staticmethod(_default_rescan)
     networks_source: Callable[[], list[dict[str, Any]]] = staticmethod(load_networks)
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(MAX_CLIENTS)
+
     def server_bind(self) -> None:
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         super().server_bind()
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 class PortalHandler(BaseHTTPRequestHandler):
@@ -897,6 +928,8 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.0"
     server: PortalServer
+    # Socket timeout for a slow or silent client (StreamRequestHandler).
+    timeout = CLIENT_TIMEOUT_S
 
     def log_message(self, fmt: str, *args: Any) -> None:
         logger.info("%s - " + fmt, self.address_string(), *args)
@@ -1031,8 +1064,8 @@ def run_loop(
 
     ``address_up`` defaults to "is 192.168.4.1 configured". Tests pass a
     stub so the loop can bind 127.0.0.1 and still prove the station-join
-    close. One request at a time: a Pi Zero does not need a thread per
-    phone, and every handler is short (the join runs elsewhere).
+    close. Each accepted request runs on its own thread (``PortalServer``),
+    so this loop keeps turning while a rescan waits on the root service.
     """
     check = address_up if address_up is not None else (lambda: address_is_local(bind[0]))
     stopped = stop if stop is not None else (lambda: False)
