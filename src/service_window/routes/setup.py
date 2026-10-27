@@ -310,6 +310,8 @@ def _declare(form: dict, backhaul: str) -> None:
 # a few minutes returns the polling page instead of holding the HTTP request.
 _JOIN_HTTP_WAIT_S = 0.2
 _JOIN_POLL_S = 0.02
+# How long the joined page waits for setup to be recorded after the join.
+_FOLLOW_UP_WAIT_S = 8.0
 
 
 def _joining_page(ssid: str) -> str:
@@ -383,7 +385,9 @@ def _begin_join(
     if state.get("state") == "joined":
         # "joined" is written before the follow-up; the page below says setup
         # is finished, so let the follow-up (record setup, restart) finish.
-        join.wait_for_follow_up()
+        # If it is still running, the joining page polls until it has.
+        if not join.wait_for_follow_up(timeout_s=_FOLLOW_UP_WAIT_S):
+            return _joining_page(str(state.get("ssid") or ssid))
         rssi = state.get("rssi")
         return render_template(
             "setup/joined.html",
@@ -850,6 +854,10 @@ def join_status() -> ResponseReturnValue:
     state = join.read_state()
     # The joining page reads the job words it always has: ok / fail.
     shown = {"joined": "ok", "failed": "fail"}.get(str(state.get("state")), state.get("state"))
+    if shown == "ok" and join._lock_held():
+        # Joined, but setup is still being recorded. "ok" ends the polling
+        # page with "setup is finished", so it waits for the follow-up.
+        shown = "joining"
     last = _notice_for(str(state.get("ssid") or ""), state, []) if shown == "fail" else None
     return jsonify(
         {

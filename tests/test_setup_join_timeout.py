@@ -396,3 +396,57 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert result.returncode == 0, result.stderr + result.stdout
         release.set()
         worker.join(timeout=1)
+
+
+class TestDonePageWaitsForSetupToBeRecorded:
+    """#167 review: "joined" is written before the follow-up (record setup,
+    restart the firmware) runs. The done page says setup is finished, so it
+    is shown only once the follow-up has finished; until then the joining
+    page polls, and the poll keeps saying "joining"."""
+
+    def test_page_and_poll_wait_for_the_follow_up(self, tmp_path, mock_hardware, monkeypatch):
+        from service_window.routes import setup as setup_routes
+        from utils import netctl
+
+        client, _app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *_a, **_k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
+        )
+        monkeypatch.setattr(setup_routes, "_kick_register", lambda: None)
+        monkeypatch.setattr(setup_routes, "_FOLLOW_UP_WAIT_S", 0.2)
+        recording = threading.Event()
+        release = threading.Event()
+
+        def slow_finish(_ssid, **_kwargs):
+            recording.set()
+            assert release.wait(timeout=5)
+
+        monkeypatch.setattr(setup_routes, "_finish_setup", slow_finish)
+        try:
+            response = client.post(
+                "/setup/network",
+                data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+            )
+            assert recording.wait(timeout=2)
+            assert response.status_code == 200
+            assert b"Joined PondHouse" not in response.data
+            assert b"join-status" in response.data
+            assert client.get("/setup/join-status").get_json()["state"] == "joining"
+        finally:
+            release.set()
+        deadline = time.monotonic() + 2
+        body = {}
+        while time.monotonic() < deadline:
+            body = client.get("/setup/join-status").get_json()
+            if body.get("state") == "ok":
+                break
+            time.sleep(0.02)
+        assert body["state"] == "ok"
