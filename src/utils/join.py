@@ -55,7 +55,19 @@ LOCK_RETRIES = 4
 LOCK_RETRY_S = 0.02
 STATES = ("idle", "joining", "joined", "failed")
 # What may be written to the state file. The password is never one of them.
-_FIELDS = ("state", "ssid", "reason", "message", "at", "ap_restored", "ip", "rssi", "forgotten")
+_FIELDS = (
+    "state",
+    "ssid",
+    "reason",
+    "message",
+    "at",
+    "boot_id",
+    "ap_restored",
+    "ip",
+    "rssi",
+    "forgotten",
+)
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 INTERRUPTED_MESSAGE = "The last join did not finish. Try again."
 
 _THREAD_LOCK = threading.Lock()
@@ -72,6 +84,21 @@ def lock_path() -> Path:
 
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def current_boot_id() -> str:
+    """The kernel's id for this boot, or "" when it cannot be read.
+
+    A clock step can move ``at`` by years; the boot id says which boot a
+    record belongs to without trusting the clock.
+    """
+    override = os.environ.get("WQM1_BOOT_ID")
+    if override is not None:
+        return override
+    try:
+        return BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _idle() -> dict[str, Any]:
@@ -143,6 +170,7 @@ def _lock_held() -> bool:
 def _write_state(fields: dict[str, Any]) -> None:
     clean = {key: fields.get(key) for key in _FIELDS if key in fields}
     clean.setdefault("at", _now())
+    clean.setdefault("boot_id", current_boot_id())
     ensure_state_dir()
     try:
         atomic_write_text(state_path(), json.dumps(clean, sort_keys=True), mode=FILE_MODE)

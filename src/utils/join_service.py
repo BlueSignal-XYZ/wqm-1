@@ -34,6 +34,7 @@ import pwd
 import signal
 import socket
 import struct
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -48,9 +49,12 @@ JOIN_REPLY_TIMEOUT_S = 10.0
 # A rescan in AP mode takes several seconds on a Pi Zero.
 RESCAN_REPLY_TIMEOUT_S = 30.0
 UNIT_NAME = "bluesignal-wifi-join.service"
-# Early in a boot the AP fallback decides between the saved network and the
-# setup network; recovery must not raise the setup network under it.
-BOOT_GRACE_S = 600.0
+# Requests answered at once, each on its own thread, so a join is never
+# queued behind a rescan that takes 20 s. The callers are the install user
+# and root; four is more than the one page ever needs.
+MAX_CONNECTIONS = 4
+# One scan at a time; a second Rescan waits for the first and reads its list.
+_RESCAN_LOCK = threading.Lock()
 
 UNAVAILABLE = {"error": "unavailable"}
 BAD_REQUEST = {"error": "bad_request"}
@@ -96,7 +100,8 @@ def handle_request(request: Any) -> dict[str, Any]:
         if join._lock_held():
             # A join owns the radio; the cached list stays.
             return {"ok": False, "count": 0}
-        return netctl.refresh_scan_cache()
+        with _RESCAN_LOCK:
+            return netctl.refresh_scan_cache()
     if op != "join":
         return dict(BAD_REQUEST)
     ssid = request.get("ssid")
@@ -241,32 +246,26 @@ def bind(path: Path, owner: tuple[int, int] | None) -> socket.socket:
     return sock
 
 
-def uptime_s() -> float:
-    try:
-        return float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
-    except (OSError, ValueError, IndexError):
-        return 0.0
-
-
-def recover_interrupted_join(uptime: Callable[[], float] = uptime_s) -> bool:
+def recover_interrupted_join() -> bool:
     """After a crash mid-join, put the setup network back (I6).
 
     A join that died with the setup network down and no station leaves the
     unit unreachable until a reboot. The join lock is free once this process
-    starts, so a ``joining`` record means that join is not running. In the
-    first minutes of a boot the record is from before a power cut, and the
-    AP fallback, not this, decides whether the setup network comes up.
+    starts, so a ``joining`` record means that join is not running. A record
+    from an earlier boot (a power cut mid-join) is the AP fallback's to
+    decide at boot, not this; the kernel's boot id says which boot wrote it,
+    whatever the clock did since.
     """
     from utils import join, netctl
-
-    if uptime() < BOOT_GRACE_S:
-        return False
 
     try:
         raw = json.loads(join.state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     if not isinstance(raw, dict) or raw.get("state") != "joining":
+        return False
+    now_boot = join.current_boot_id()
+    if not now_boot or raw.get("boot_id") != now_boot:
         return False
     if join._lock_held():
         # Another process (the Service Window) is running that join.
@@ -288,6 +287,14 @@ def serve(
     target = path or socket_path()
     who = owner if owner is not None else _owner()
     stopped = stop if stop is not None else (lambda: False)
+    slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def _serve_and_release(conn: socket.socket) -> None:
+        try:
+            serve_one(conn, who)
+        finally:
+            slots.release()
+
     sock = bind(target, who)
     try:
         while not stopped():
@@ -302,7 +309,15 @@ def serve(
             except OSError as e:
                 logger.warning("Join socket accept failed: %s", e)
                 continue
-            serve_one(conn, who)
+            if not slots.acquire(blocking=False):
+                # Every slot is busy: answer now rather than queue the caller.
+                with contextlib.suppress(OSError):
+                    conn.sendall((json.dumps(UNAVAILABLE) + "\n").encode("utf-8"))
+                    conn.close()
+                continue
+            threading.Thread(
+                target=_serve_and_release, args=(conn,), name="wifi-join-req", daemon=True
+            ).start()
     finally:
         sock.close()
         with contextlib.suppress(OSError):

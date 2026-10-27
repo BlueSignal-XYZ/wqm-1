@@ -19,6 +19,24 @@ Environment=PYTHONPATH=/opt/bluesignal/current/src
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=2
+# Hardening that cannot reach what a join does. Deliberately not set:
+#   ProtectSystem  - the boot status file is written to /boot/firmware
+#   ProtectClock   - a join may set a stuck clock forward (install plan §2)
+#   NoNewPrivileges - the clock step runs `sudo -n date` (utils.clock)
+#   PrivateDevices - /dev/rfkill unblocks the radio
+#   RestrictAddressFamilies - nmcli (D-Bus), iw and ip (netlink), the HTTPS check
+#   MemoryDenyWriteExecute - not proven against every library a join loads
+# ProtectHome is read-only, not "yes": sudo still reads /root.
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
 
 [Install]
 WantedBy=multi-user.target

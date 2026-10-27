@@ -213,10 +213,70 @@ class TestRequests:
         assert join_service._use_socket() is False
 
 
+class TestConcurrency:
+    """#169 review: the service was strictly serial, so a join sent while a
+    rescan ran waited past the page's 10 s timeout, was reported as failed,
+    and then ran anyway."""
+
+    def test_a_join_is_answered_while_a_rescan_is_still_scanning(self, service, monkeypatch):
+        _path, started = service
+        scanning = threading.Event()
+        release = threading.Event()
+
+        def slow_scan(iface="wlan0"):
+            scanning.set()
+            assert release.wait(timeout=10)
+            return {"ok": True, "count": 3}
+
+        monkeypatch.setattr(netctl, "refresh_scan_cache", slow_scan)
+        rescans: list[dict] = []
+        worker = threading.Thread(target=lambda: rescans.append(join_service.request_rescan()))
+        worker.start()
+        try:
+            assert scanning.wait(timeout=3)
+            began = time.monotonic()
+            answer = join_service.request_join("PondHouse", "hunter2222")
+            assert time.monotonic() - began < 2.0
+            assert answer == {"state": "joining", "ssid": "PondHouse"}
+            assert started[-1]["ssid"] == "PondHouse"
+        finally:
+            release.set()
+            worker.join(timeout=5)
+        assert rescans == [{"ok": True, "count": 3}]
+
+    def test_one_scan_at_a_time(self, monkeypatch):
+        running = 0
+        most = 0
+        guard = threading.Lock()
+
+        def scan(iface="wlan0"):
+            nonlocal running, most
+            with guard:
+                running += 1
+                most = max(most, running)
+            time.sleep(0.05)
+            with guard:
+                running -= 1
+            return {"ok": True, "count": 1}
+
+        monkeypatch.setattr(netctl, "refresh_scan_cache", scan)
+        monkeypatch.setattr(join, "_lock_held", lambda: False)
+        workers = [
+            threading.Thread(target=join_service.handle_request, args=({"op": "rescan"},))
+            for _ in range(4)
+        ]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(timeout=5)
+        assert most == 1
+
+
 class TestRecovery:
     @pytest.fixture
     def radio(self, tmp_path, monkeypatch):
         monkeypatch.setenv("BLUESIGNAL_STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setenv("WQM1_BOOT_ID", "boot-now")
         raised: list[tuple] = []
         state = {"ap": False, "station": False}
         monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": state["ap"])
@@ -232,13 +292,29 @@ class TestRecovery:
     def test_a_join_that_died_mid_way_raises_the_setup_network(self, radio):
         _state, raised = radio
         join._write_state({"state": "joining", "ssid": "PondHouse"})
-        assert join_service.recover_interrupted_join(lambda: 3600.0) is True
+        assert join_service.recover_interrupted_join() is True
         assert raised == [("WQM1-0001", "cedar-river-42")]
 
-    def test_early_in_a_boot_the_ap_fallback_decides(self, radio):
+    def test_right_after_boot_a_crash_in_this_boot_still_recovers(self, radio):
+        """#169 review: a fixed grace period left the unit unreachable when the
+        service died in the first ten minutes. The boot id replaces it."""
+        _state, raised = radio
+        join._write_state({"state": "joining", "ssid": "PondHouse", "at": "2024-01-01T00:00:00Z"})
+        assert join_service.recover_interrupted_join() is True
+        assert raised
+
+    def test_a_record_from_an_earlier_boot_is_the_ap_fallbacks(self, radio, monkeypatch):
         _state, raised = radio
         join._write_state({"state": "joining", "ssid": "PondHouse"})
-        assert join_service.recover_interrupted_join(lambda: 40.0) is False
+        monkeypatch.setenv("WQM1_BOOT_ID", "boot-after-a-power-cut")
+        assert join_service.recover_interrupted_join() is False
+        assert raised == []
+
+    def test_a_record_with_no_boot_id_is_left_alone(self, radio):
+        _state, raised = radio
+        join.state_path().parent.mkdir(parents=True, exist_ok=True)
+        join.state_path().write_text(json.dumps({"state": "joining", "ssid": "PondHouse"}))
+        assert join_service.recover_interrupted_join() is False
         assert raised == []
 
     @pytest.mark.parametrize("field", ["ap", "station"])
@@ -246,20 +322,20 @@ class TestRecovery:
         state, raised = radio
         state[field] = True
         join._write_state({"state": "joining", "ssid": "PondHouse"})
-        assert join_service.recover_interrupted_join(lambda: 3600.0) is False
+        assert join_service.recover_interrupted_join() is False
         assert raised == []
 
     def test_a_finished_join_is_left_alone(self, radio):
         _state, raised = radio
         join._write_state({"state": "failed", "ssid": "PondHouse", "reason": "no_dhcp"})
-        assert join_service.recover_interrupted_join(lambda: 3600.0) is False
+        assert join_service.recover_interrupted_join() is False
         assert raised == []
 
     def test_a_join_another_process_still_runs_is_left_alone(self, radio, monkeypatch):
         _state, raised = radio
         join._write_state({"state": "joining", "ssid": "PondHouse"})
         monkeypatch.setattr(join, "_lock_held", lambda: True)
-        assert join_service.recover_interrupted_join(lambda: 3600.0) is False
+        assert join_service.recover_interrupted_join() is False
         assert raised == []
 
 
@@ -302,3 +378,35 @@ def test_the_unit_runs_as_root_on_a_socket_not_a_port():
     assert f"systemctl enable {join_service.UNIT_NAME}" in setup
     src = (root / "src" / "utils" / "join_service.py").read_text()
     assert "AF_INET" not in src
+
+
+def test_the_unit_is_hardened_without_breaking_a_join():
+    """#169 review: a root service parsing local requests gets the systemd
+    hardening that cannot reach what a join does. The ones that would are
+    named in the unit and must stay off: the clock step (ProtectClock,
+    NoNewPrivileges for sudo), the boot status file (ProtectSystem) and
+    /dev/rfkill (PrivateDevices)."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    unit = (root / "systemd" / join_service.UNIT_NAME).read_text()
+    directives = {
+        line.split("=", 1)[0]: line.split("=", 1)[1]
+        for line in unit.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    for key in (
+        "PrivateTmp",
+        "ProtectKernelModules",
+        "ProtectKernelLogs",
+        "ProtectKernelTunables",
+        "ProtectControlGroups",
+        "RestrictSUIDSGID",
+        "RestrictRealtime",
+        "RestrictNamespaces",
+        "LockPersonality",
+    ):
+        assert directives.get(key) == "yes", key
+    assert directives.get("ProtectHome") == "read-only"
+    for key in ("ProtectClock", "ProtectSystem", "NoNewPrivileges", "PrivateDevices"):
+        assert key not in directives, f"{key} would break a join"
