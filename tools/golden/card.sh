@@ -58,7 +58,7 @@ ok() { echo "ok:   $*"; }
 bad() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
 files="$(mdir -b -i "$FAT" ::/ | sed 's|^::/||')"
-has() { printf '%s\n' "$files" | grep -qxF "$1"; }
+has() { grep -xF "$1" <<<"$files" >/dev/null; }
 fat_cat() { mtype -i "$FAT" "::/$1"; }
 
 need() {
@@ -96,7 +96,7 @@ cmdline="$(fat_cat cmdline.txt | tr -d '\r')"
 if [ "$(printf '%s\n' "$cmdline" | wc -l)" -ne 1 ]; then
   bad "cmdline.txt must be one line"
 fi
-if printf '%s' "$cmdline" | grep -qE "(^| )root=PARTUUID=${disk_id}-02( |$)"; then
+if grep -E "(^| )root=PARTUUID=${disk_id}-02( |$)" <<<"$cmdline" >/dev/null; then
   ok "cmdline.txt root=PARTUUID=${disk_id}-02 (this card's root)"
 else
   bad "cmdline.txt root does not match this card (disk id ${disk_id}): ${cmdline}"
@@ -108,7 +108,10 @@ for f in user-data network-config meta-data; do
     bad "$f missing (cloud-init would fall back to the image defaults)"
     continue
   fi
-  if fat_cat "$f" | grep -vE '^[[:space:]]*#' | grep -qiE '(ssid|psk|password|passwd|wifis:|access-points)'; then
+  # Read the file first: grep -q exits at its first match, and under
+  # pipefail a writer killed by that SIGPIPE turns a hit into a miss.
+  body="$(fat_cat "$f" | grep -vE '^[[:space:]]*#' || true)"
+  if grep -iE '(ssid|psk|password|passwd|wifis:|access-points)' <<<"$body" >/dev/null; then
     bad "$f has Wi-Fi or a password in it"
   else
     ok "$f has no Wi-Fi and no password"

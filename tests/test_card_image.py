@@ -122,10 +122,22 @@ def test_label_reads_this_repos_firmware(tmp_path):
 # --- card.sh check ---------------------------------------------------------
 
 _CARD_TOOLS = ("parted", "mformat", "mcopy", "mdir", "mtype", "debugfs", "mke2fs", "od")
+# Skipped on a laptop without the tools; never in CI, which installs them
+# (ci.yml "Install card-image tools"). A skip there would read as coverage.
 needs_card_tools = pytest.mark.skipif(
-    not all(shutil.which(t) for t in _CARD_TOOLS),
-    reason="needs parted, mtools and e2fsprogs; card-image.yml runs card.sh on every real image",
+    not all(shutil.which(t) for t in _CARD_TOOLS) and not os.environ.get("CI"),
+    reason="needs parted, mtools and e2fsprogs (apt install mtools parted e2fsprogs)",
 )
+
+
+def test_ci_has_the_card_tools():
+    if os.environ.get("CI"):
+        missing = [t for t in _CARD_TOOLS if not shutil.which(t)]
+        assert not missing, f"CI must install {missing}: the card.sh tests would not run"
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    runs = " ".join(step.get("run", "") for step in workflow["jobs"]["test"]["steps"])
+    assert "mtools" in runs and "parted" in runs and "e2fsprogs" in runs
+
 
 _ARMHF_BOOT = (
     "bootcode.bin",
@@ -263,6 +275,18 @@ def test_a_card_with_wifi_or_a_password_fails(tmp_path, name, body):
 
 
 @needs_card_tools
+def test_a_password_early_in_a_large_file_is_still_found(tmp_path):
+    """#171 review: grep -q exits at the first match; under pipefail the
+    writer's SIGPIPE turned that hit into "no Wi-Fi". A large file with
+    the secret on line one is where the old pipeline lost it."""
+    body = "network:\n  wifis:\n    wlan0:\n      access-points:\n        Home:\n"
+    body += "          password: hunter22\n" + "      dhcp4: true\n" * 60000
+    result = _check(_make_card(tmp_path, extra={"network-config": body}))
+    assert result.returncode == 1
+    assert "FAIL: network-config has Wi-Fi or a password in it" in result.stdout
+
+
+@needs_card_tools
 @pytest.mark.parametrize(
     ("name", "message"),
     [
@@ -367,6 +391,13 @@ def test_workflow_release_tag_cannot_start_a_firmware_release():
     # PyYAML reads the bare key `on` as True.
     trigger = release.get("on", release.get(True))
     assert trigger["push"]["tags"] == ["v*"]
+
+
+def test_a_pr_build_is_named_after_the_branch_commit():
+    """#171 review: github.sha on a pull_request is GitHub's merge commit,
+    which is on no branch; the card would carry a commit nobody can find."""
+    for step in _steps("build")[:2]:
+        assert "github.event.pull_request.head.sha" in step["with"]["ref"]
 
 
 def test_flashing_page_names_the_files_the_workflow_makes():
