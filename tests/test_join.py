@@ -179,8 +179,41 @@ class TestProvenNetworkSurvives:
         result = _join_direct(HOME, RIGHT)
         assert result["connected"] is True
         assert radio.names_for(HOME) == [HOME]
-        rename = [c for c in radio.calls if c[:2] == ["connection", "modify"]]
-        assert rename and rename[0][3:] == ["connection.id", HOME]
+        renames = [c for c in radio.calls if c[:2] == ["connection", "modify"]]
+        promoted = [c for c in renames if c[2].startswith(netctl.TRY_PROFILE_PREFIX)]
+        assert promoted and promoted[0][3:] == ["connection.id", HOME]
+
+    def test_older_profiles_are_deleted_only_after_the_new_one_has_the_name(self, radio):
+        radio.profiles = {HOME: HOME, "Smith old": HOME}
+        _join_direct(HOME, RIGHT)
+        calls = [
+            c for c in radio.calls if c[:2] in (["connection", "modify"], ["connection", "delete"])
+        ]
+        promote = next(i for i, c in enumerate(calls) if c[2].startswith(netctl.TRY_PROFILE_PREFIX))
+        deletes = [i for i, c in enumerate(calls) if c[1] == "delete"]
+        assert deletes and min(deletes) > promote
+        # Nothing was ever deleted by the SSID's name, which a second profile
+        # carrying that name would share.
+        assert all(calls[i][2].startswith(netctl.OLD_PROFILE_PREFIX) for i in deletes)
+
+    def test_a_failed_rename_keeps_the_older_profile(self, radio, monkeypatch):
+        radio.profiles = {HOME: HOME}
+        real = radio.nmcli
+
+        def nmcli(*args, timeout=15.0):
+            a = [str(x) for x in args]
+            if a[:2] == ["connection", "modify"] and a[2].startswith(netctl.TRY_PROFILE_PREFIX):
+                radio.calls.append(a)
+                return 10, "", "Error: failed to modify connection"
+            return real(*args, timeout=timeout)
+
+        monkeypatch.setattr(netctl, "_nmcli", nmcli)
+        result = _join_direct(HOME, RIGHT)
+        assert result["connected"] is True
+        # The old profile has its name back; the proven one is still saved.
+        assert HOME in radio.profiles
+        assert [n for n in radio.names_for(HOME) if n.startswith(netctl.TRY_PROFILE_PREFIX)]
+        assert not [p for p in radio.profiles if p.startswith(netctl.OLD_PROFILE_PREFIX)]
 
     def test_no_bluesignal_fails_and_keeps_the_proven_profile(self, radio):
         radio.profiles = {HOME: HOME}
@@ -327,6 +360,21 @@ class TestClockFix:
         assert second["clock"] == {"action": "refused", "reason": "once_per_boot"}
         assert second["ok"] is False
 
+    def test_a_marker_that_cannot_be_written_still_refuses_a_second_step(
+        self, monkeypatch, tmp_path
+    ):
+        # /run/bluesignal not writable: the cap must fail closed, not open.
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("")
+        monkeypatch.setenv("WQM1_CLOCK_STEP_MARKER", str(blocker / "clock-stepped"))
+        header = datetime(2027, 6, 1, 12, 0, tzinfo=UTC)
+        _first, moved, _ = _clock_case(header)
+        assert moved == [header]
+        assert not netctl.clock_step_marker().exists()
+        second, moved_again, _ = _clock_case(header)
+        assert moved_again == []
+        assert second["clock"] == {"action": "refused", "reason": "once_per_boot"}
+
     def test_a_failed_step_does_not_use_up_the_boot(self):
         result = netctl._repair_clock(
             "api.bluesignal.test",
@@ -415,14 +463,49 @@ class TestRealHttpsCheck:
 
 class TestRealDateHeader:
     def _date(self, monkeypatch, outcome):
-        def fake_urlopen(request, timeout=None):
-            assert request.full_url.startswith("http://")
-            if isinstance(outcome, BaseException):
-                raise outcome
-            return _Resp(outcome)
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                assert request.full_url.startswith("http://")
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return _Resp(outcome)
 
-        monkeypatch.setattr(netctl.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(netctl, "_DATE_OPENER", FakeOpener())
         return REAL_HTTP_DATE("http://api.bluesignal.test/")
+
+    def test_a_redirect_to_https_is_read_not_followed(self):
+        """A host that sends plain HTTP on to HTTPS answers 301 with a Date.
+
+        Following it would fail the certificate check the wrong clock is
+        failing in the first place, so the Date must come from the 301.
+        A real local server, because a redirect is the opener's business.
+        """
+        import http.server
+
+        followed: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_HEAD(self):  # noqa: N802 - http.server's name
+                if self.path != "/":
+                    followed.append(self.path)
+                self.send_response_only(301)  # no automatic Date of its own
+                self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/next")
+                self.send_header("Date", "Mon, 26 Oct 2026 12:00:00 GMT")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            got = REAL_HTTP_DATE(f"http://127.0.0.1:{server.server_port}/", timeout=2)
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert got == datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+        assert followed == [], "the redirect was followed"
 
     def test_a_good_header_is_read_as_utc(self, monkeypatch):
         got = self._date(monkeypatch, _headers(Date="Mon, 26 Oct 2026 12:00:00 GMT"))
