@@ -1,7 +1,7 @@
 """
 Captive portal for the setup hotspot (site flow v2).
 
-When a phone joins ``WQM1-xxxx``, it asks a known URL whether the network has
+When a phone joins ``BlueSignal Setup``, it asks a known URL whether the network has
 internet (iOS ``captive.apple.com/hotspot-detect.html``, Android
 ``/generate_204``, Windows ``/connecttest.txt``…). The hotspot's dnsmasq
 answers every name with 192.168.4.1 and ``utils.captive_portal`` serves port

@@ -5,6 +5,7 @@ All hardware is mocked at the sys.modules level so tests run on any
 platform without RPi.GPIO, smbus2, spidev, or w1thermsensor installed.
 """
 
+import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -80,6 +81,40 @@ def _reset_active_board():
         set_active_board(None)
     except Exception:  # noqa: BLE001 — platform_support may be unimportable mid-refactor
         pass
+
+
+@pytest.fixture(autouse=True)
+def _no_real_bluesignal_probe(monkeypatch, tmp_path):
+    """A join proves itself by reaching BlueSignal over HTTPS (install plan
+    §2). No test may make that request: BlueSignal answers, the clock is
+    synced, and no HTTP Date is read, unless a test says otherwise."""
+    try:
+        from utils import netctl
+    except Exception:  # noqa: BLE001 — netctl may be unimportable mid-refactor
+        yield
+        return
+    monkeypatch.setattr(netctl, "_https_status", lambda url, timeout=None: "ok")
+    monkeypatch.setattr(netctl, "_http_date", lambda url, timeout=None: None)
+    monkeypatch.setattr(netctl, "_ntp_synced", lambda: True)
+    # The 1.5 s head start lets a real phone get the HTTP answer before the
+    # setup network drops. Tests run the join at once; test_join pins it.
+    from utils import join
+
+    monkeypatch.setattr(join, "START_DELAY_S", 0.0)
+    # One clock step per boot is recorded under /run; never the real one.
+    monkeypatch.setenv("WQM1_CLOCK_STEP_MARKER", str(tmp_path / "clock-stepped"))
+    monkeypatch.setattr(netctl, "_STEPPED_IN_PROCESS", False)
+    # The port-80 page (§4): no test reaches the root join socket, writes
+    # the real /run/bluesignal/scan.json, or kicks a real registration.
+    from utils import captive_portal, join_service
+
+    monkeypatch.setattr(join_service, "_use_socket", lambda: False)
+    monkeypatch.setattr(captive_portal, "_kick_register", lambda: None)
+    captive_portal._watching.clear()
+    if "WQM1_SCAN_CACHE" not in os.environ:
+        monkeypatch.setenv("WQM1_SCAN_CACHE", str(tmp_path / "scan.json"))
+    yield
+    captive_portal._watching.clear()
 
 
 @pytest.fixture(autouse=True)

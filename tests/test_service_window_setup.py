@@ -61,6 +61,46 @@ def commissioned_client(tmp_path, mock_hardware):
         yield c, app
 
 
+class TestClosedToTheSetupNetwork:
+    """Install plan §3 (I1): a phone on the setup network (192.168.4.0/24)
+    reaches no Service Window page on 8080. The home network is unchanged
+    until §10 binds loopback."""
+
+    @pytest.mark.parametrize("setup_completed", [False, True])
+    @pytest.mark.parametrize("path", ["/", "/setup/", "/setup/network", "/settings/", "/x"])
+    def test_a_setup_network_client_gets_404_with_the_sentence(
+        self, tmp_path, mock_hardware, path, setup_completed
+    ):
+        from service_window.app import SETUP_NETWORK_CLOSED
+
+        app = make_app(tmp_path, mock_hardware, setup_completed=setup_completed)
+        with app.test_client() as c:
+            r = c.get(path, environ_base={"REMOTE_ADDR": "192.168.4.23"})
+        assert r.status_code == 404
+        assert r.get_data(as_text=True) == SETUP_NETWORK_CLOSED
+        assert SETUP_NETWORK_CLOSED == "This page isn't available on the setup network."
+
+    def test_a_post_from_the_setup_network_changes_nothing(self, tmp_path, mock_hardware):
+        app = make_app(tmp_path, mock_hardware, setup_completed=True)
+        before = (tmp_path / "config.yaml").read_text()
+        with app.test_client() as c:
+            r = c.post(
+                "/setup/network",
+                data={"action": "declare", "backhaul": "none"},
+                environ_base={"REMOTE_ADDR": "192.168.4.23"},
+            )
+        assert r.status_code == 404
+        assert (tmp_path / "config.yaml").read_text() == before
+
+    def test_a_home_network_client_is_not_closed_by_this_rule(self, tmp_path, mock_hardware):
+        from service_window.app import SETUP_NETWORK_CLOSED
+
+        app = make_app(tmp_path, mock_hardware, setup_completed=True)
+        with app.test_client() as c:
+            r = c.get("/setup/network", environ_base={"REMOTE_ADDR": "10.0.0.5"})
+        assert r.get_data(as_text=True) != SETUP_NETWORK_CLOSED
+
+
 class TestForcedSetup:
     def test_factory_unit_redirects_everything_to_setup(self, factory_client):
         client, _ = factory_client

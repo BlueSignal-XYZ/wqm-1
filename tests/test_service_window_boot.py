@@ -1,6 +1,6 @@
 """Service Window first-boot: no firmware wait, shipped bytecode, unit verify.
 
-A phone on WQM1-xxxx was waiting 2–3 minutes on a Pi Zero W because
+A phone on the setup network was waiting 2–3 minutes on a Pi Zero W because
 bluesignal-service-window.service ordered After= bluesignal-wqm.service
 (Type=notify, READY=1 after workers start) and the tree had no .pyc.
 """

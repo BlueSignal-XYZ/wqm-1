@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.remote import HOME_NETWORK, HOTSPOT, clients_from
+from tests.remote import HOME_NETWORK, HOTSPOT_RELAYED, clients_from
 from tests.test_service_window_setup import make_app
 
 
@@ -156,7 +156,7 @@ class TestHotspotSkipsTheFactoryPin:
 
         monkeypatch.setattr(captive, "from_hotspot", lambda: on_hotspot)
         app = make_app(tmp_path, mock_hardware, **kw)
-        return clients_from(app, HOTSPOT if on_hotspot else HOME_NETWORK)
+        return clients_from(app, HOTSPOT_RELAYED if on_hotspot else HOME_NETWORK)
 
     def test_first_setup_on_the_hotspot_opens_without_a_pin(
         self, tmp_path, mock_hardware, monkeypatch
@@ -422,7 +422,8 @@ class TestDemoUnit:
         net = json.loads(unit["netsim"].read_text())
         assert net["ap"] is True and net["station"] is None
         assert "BlueSignal-Shop" in net["saved"]
-        assert len(unit["ap_passphrase"]) >= 8  # WPA2 minimum, so card and unit agree
+        assert unit["ap_ssid"] == "BlueSignal Setup"
+        assert "ap_passphrase" not in unit  # the setup network is open (§5)
         cfg = yaml.safe_load(unit["config"].read_text())
         assert "pin" not in (cfg.get("service_window") or {})
         assert cfg["cloud_api_base"].startswith("http://127.0.0.1")
@@ -539,12 +540,14 @@ class TestSiteScenarios:
             "/setup/network",
             data={"action": "join", "ssid": "Smith-Home", "password": "not-the-one"},
         )
-        assert "LAST_JOIN" in app.config
+        from utils import join
+
+        assert join.read_state()["state"] == "failed"
         c.post(
             "/setup/network",
             data={"action": "join", "ssid": "Smith-Home", "password": netsim.DEMO_HOME_PASSWORD},
         )
-        assert "LAST_JOIN" not in app.config
+        assert join.read_state()["state"] == "joined"
         assert b"Could not join" not in c.get("/setup/network").data
 
     def test_three_wrong_passwords_never_strand_the_installer(

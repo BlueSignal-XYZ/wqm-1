@@ -91,7 +91,11 @@ def test_hostname_follows_the_board_every_boot(tmp_path):
         line for line in text.splitlines() if line and not line.lstrip().startswith("#")
     )
     assert "identity-done" not in code
-    assert "ap_name().lower()" in text
+    # Install plan §5: the SSID is "BlueSignal Setup" on every unit, so the
+    # hostname comes from host_name(). ap_name() here fails the regex and
+    # falls back to the Pi serial without a word.
+    assert "host_name()" in code
+    assert "ap_name" not in code
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -136,6 +140,52 @@ def test_hostname_follows_the_board_every_boot(tmp_path):
     assert "wqm1-e794" not in hosts.read_text().split("127.0.1.1", 1)[-1]
     assert not hostname_file.exists()
     assert "hostname set to wqm1-4fd8" in result.stdout
+
+
+def test_firstboot_names_a_labelled_unit_from_its_label(tmp_path):
+    """The real firmware, a label identity file: wqm1-0001 for WQM-10001,
+    not the Pi serial (install plan §5 trap)."""
+    import subprocess
+    import sys
+
+    script = GOLDEN / "overlay/usr/local/sbin/wqm1-firstboot"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "hostnamectl.log"
+
+    def _fake(name: str, body: str) -> None:
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(0o755)
+
+    _fake("python3", f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    _fake("hostname", "#!/bin/sh\necho raspberrypi\n")
+    _fake("hostnamectl", f'#!/bin/sh\necho "$@" >> {log}\n')
+    _fake("systemctl", "#!/bin/sh\nexit 0\n")
+    for cmd in ("rfkill", "iw", "nmcli"):
+        _fake(cmd, "#!/bin/sh\nexit 0\n")
+
+    identity = tmp_path / "identity.json"
+    identity.write_text('{"serial": "WQM-10001"}')
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text("Serial\t\t: 1000000086544fd8\n")
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "WQM1_FIRMWARE_SRC": str(ROOT / "src"),
+        "WQM1_HOSTS_FILE": str(tmp_path / "hosts"),
+        "WQM1_HOSTNAME_FILE": str(tmp_path / "hostname"),
+        "WQM1_CPUINFO": str(cpuinfo),
+        "WQM1_FIRSTBOOT_STATE": str(tmp_path / "state"),
+        "WQM1_STATUS_FILE": str(tmp_path / "wqm1-status.txt"),
+        "BLUESIGNAL_IDENTITY_FILE": str(identity),
+    }
+    result = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, env=env, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert "set-hostname wqm1-0001" in log.read_text()
+    assert "hostname from cpuinfo serial" not in result.stdout
+    assert "wqm1-4fd8" not in log.read_text()
 
 
 def test_hostname_fallback_uses_the_last_four_of_the_cpu_serial(tmp_path):

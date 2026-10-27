@@ -335,7 +335,7 @@ class TestSetupPage:
         client, _app = _client(tmp_path, mock_hardware, pin="1234")
         page = client.get("/setup/", follow_redirects=True).data.decode()
         assert "turn off mobile data" in page
-        assert "stay connected to WQM1-" in page
+        assert "stay connected to BlueSignal Setup" in page
 
     def test_network_page_shows_bars_and_a_weak_warning(self, tmp_path, mock_hardware, monkeypatch):
         from utils import netctl

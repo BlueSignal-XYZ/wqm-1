@@ -3,7 +3,7 @@ Description=BlueSignal WQM-1 Service Window
 # network.target only: bind :8080 as soon as local interfaces exist.
 # Do NOT After=/Requires=/Wants= bluesignal-wqm. That unit is Type=notify,
 # so After= waits for READY=1 after workers are started. On a Pi Zero W
-# (one ARM1176 core) that is minutes, and a phone on WQM1-xxxx sits on
+# (one ARM1176 core) that is minutes, and a phone on BlueSignal Setup sits on
 # the captive waiting page the whole time. The setup UI already degrades
 # when cmd.sock is missing; it does not need the firmware process.
 # hostapd/dnsmasq are started on demand by netctl after the fallback

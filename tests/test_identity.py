@@ -215,12 +215,30 @@ class TestHardwareIdentity:
 
 
 class TestApName:
-    def test_label_gives_last_four_digits(self):
-        from utils.identity import ap_name
+    def test_every_unit_raises_one_open_setup_network(self):
+        """Install plan §5: one name on every unit, whatever its id."""
+        from utils.identity import SETUP_SSID, ap_name
 
-        assert ap_name("WQM-10001") == "WQM1-0001"
-        assert ap_name("BS-WQM1-0000a92e4e7d") == "WQM1-4E7D"
-        assert ap_name("SIM-WQM1-00007") == "WQM1-0007"
+        assert SETUP_SSID == "BlueSignal Setup"
+        for device_id in ("WQM-10001", "BS-WQM1-0000a92e4e7d", "SIM-WQM1-00007", None):
+            assert ap_name(device_id) == "BlueSignal Setup"
+
+    def test_the_hostname_keeps_the_per_unit_rule(self):
+        from utils.identity import host_name
+
+        assert host_name("WQM-10001") == "wqm1-0001"
+        assert host_name("BS-WQM1-0000a92e4e7d") == "wqm1-4e7d"
+        assert host_name("SIM-WQM1-00007") == "wqm1-0007"
+
+    def test_the_hostname_reads_the_device_id(self, tmp_path, monkeypatch):
+        import json
+
+        from utils import identity
+
+        f = tmp_path / "id.json"
+        f.write_text(json.dumps({"serial": "WQM-10042"}))
+        monkeypatch.setenv(identity.IDENTITY_FILE_ENV, str(f))
+        assert identity.host_name() == "wqm1-0042"
 
 
 class TestLabelRegexParity:
@@ -309,3 +327,13 @@ class TestHostSerialFallbacks:
             from utils.identity import get_pi_serial
 
             assert get_pi_serial() == "567890abcdef0123"
+
+
+def test_the_cell_data_note_names_the_open_network_when_none_is_given():
+    """#170 review: the fallback still named the retired WQM1-xxxx network."""
+    from utils.identity import SETUP_SSID
+    from utils.wifi_setup import cell_data_note
+
+    assert SETUP_SSID in cell_data_note(None)
+    assert "WQM1-" not in cell_data_note(None)
+    assert "Home" in cell_data_note("Home")

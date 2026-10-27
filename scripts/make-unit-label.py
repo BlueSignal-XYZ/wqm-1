@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Print a WQM-1 setup-hotspot label from a Pi serial.
+"""Print a WQM-1 setup-network label from a Pi serial.
 
-Bench machine only. The label carries the setup SSID, the derived
-passphrase, and a Wi-Fi QR code. It writes SVG and PDF files and prints
-those paths. It does not log the passphrase, and the firmware never runs it.
+Bench machine only. The setup network is ``BlueSignal Setup`` on every unit
+and it is open (install plan §5), so the label carries that name, "No
+password", and a Wi-Fi QR code that joins it. The serial names the files
+(the unit's hostname, ``wqm1-4fd8``). It writes SVG and PDF files and prints
+those paths. The firmware never runs it.
 
     python3 scripts/make-unit-label.py 1000000086544fd8 --out-dir ./labels
 """
@@ -20,27 +22,26 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from utils.identity import _normalise, ap_name, get_derived_id  # noqa: E402
-from utils.netctl import derived_passphrase  # noqa: E402
+from utils.identity import _normalise, ap_name, get_derived_id, host_name  # noqa: E402
 from utils.wifi_setup import wifi_qr_payload  # noqa: E402
+
+NO_PASSWORD = "No password"
 
 
 def build_label(pi_serial: str) -> dict[str, str]:
-    """SSID, passphrase, and QR payload for one Pi serial.
+    """Setup network name, the unit's hostname, and the QR payload.
 
-    The serial is normalised the same way the unit reads ``/proc/cpuinfo``,
-    so the passphrase matches the hotspot that unit will raise.
+    The serial is normalised the same way the unit reads ``/proc/cpuinfo``.
     """
     serial = _normalise(pi_serial)
     if not serial or set(serial) == {"0"}:
         raise ValueError("Pass the Pi serial from /proc/cpuinfo (16 hex digits).")
-    ssid = ap_name(get_derived_id(serial))
-    passphrase = derived_passphrase(serial)
+    ssid = ap_name()
     return {
         "serial": serial,
+        "host": host_name(get_derived_id(serial)),
         "ssid": ssid,
-        "passphrase": passphrase,
-        "qr": wifi_qr_payload(ssid, passphrase),
+        "qr": wifi_qr_payload(ssid, None),
     }
 
 
@@ -58,7 +59,7 @@ def _xml(text: str) -> str:
 
 
 def render_svg(label: dict[str, str]) -> str:
-    """A printable label: name, passphrase, and the Wi-Fi QR."""
+    """A printable label: the network name, "No password", and the Wi-Fi QR."""
     matrix = _qr_matrix(label["qr"])
     module = 4
     origin = 248
@@ -73,7 +74,7 @@ def render_svg(label: dict[str, str]) -> str:
             )
     qr = "\n  ".join(rects)
     ssid = _xml(label["ssid"])
-    passphrase = _xml(label["passphrase"])
+
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="200" '
@@ -81,8 +82,7 @@ def render_svg(label: dict[str, str]) -> str:
         '<rect width="420" height="200" fill="white"/>\n'
         '<text x="16" y="36" font-family="sans-serif" font-size="14">WQM-1 setup Wi-Fi</text>\n'
         f'<text x="16" y="78" font-family="sans-serif" font-size="22">{ssid}</text>\n'
-        '<text x="16" y="112" font-family="sans-serif" font-size="12">Password</text>\n'
-        f'<text x="16" y="140" font-family="monospace" font-size="18">{passphrase}</text>\n'
+        f'<text x="16" y="112" font-family="sans-serif" font-size="14">{NO_PASSWORD}</text>\n'
         '<g fill="black">\n'
         f"  {qr}\n"
         "</g>\n"
@@ -95,7 +95,7 @@ def _pdf_escape(text: str) -> str:
 
 
 def render_pdf(label: dict[str, str]) -> bytes:
-    """A one-page label. Text is the SSID and passphrase; the QR is drawn."""
+    """A one-page label. Text is the network name; the QR is drawn."""
     matrix = _qr_matrix(label["qr"])
     module = 3
     origin_x = 300
@@ -104,8 +104,7 @@ def render_pdf(label: dict[str, str]) -> bytes:
     parts = [
         "BT /F1 12 Tf 28 200 Td (WQM-1 setup Wi-Fi) Tj ET",
         f"BT /F1 18 Tf 28 160 Td ({_pdf_escape(label['ssid'])}) Tj ET",
-        "BT /F1 11 Tf 28 128 Td (Password) Tj ET",
-        f"BT /F1 16 Tf 28 104 Td ({_pdf_escape(label['passphrase'])}) Tj ET",
+        f"BT /F1 13 Tf 28 128 Td ({NO_PASSWORD}) Tj ET",
     ]
     for y, row in enumerate(matrix):
         for x, on in enumerate(row):
@@ -153,7 +152,7 @@ def render_pdf(label: dict[str, str]) -> bytes:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Write a printable WQM-1 hotspot label (SVG and PDF) from a Pi serial."
+        description="Write a printable WQM-1 setup-network label (SVG and PDF) from a Pi serial."
     )
     parser.add_argument("serial", help="Pi serial from /proc/cpuinfo")
     parser.add_argument(
@@ -169,11 +168,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    svg_path = out / f"{label['ssid']}-hotspot-label.svg"
-    pdf_path = out / f"{label['ssid']}-hotspot-label.pdf"
+    svg_path = out / f"{label['host']}-setup-label.svg"
+    pdf_path = out / f"{label['host']}-setup-label.pdf"
     svg_path.write_text(render_svg(label), encoding="utf-8")
     pdf_path.write_bytes(render_pdf(label))
-    # Paths only. The passphrase stays in the label files, not in this output.
     print(svg_path)
     print(pdf_path)
     return 0

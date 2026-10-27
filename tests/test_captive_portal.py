@@ -1,17 +1,16 @@
 """
 Port 80 captive portal.
 
-A phone that joins WQM1-xxxx must get a captive response on port 80, not a
-redirect to :8080, and that listener must close once the unit joins the
-site network. These tests bind 127.0.0.1 only. Nothing here opens wlan0.
+A phone that joins the setup network must get a captive response on port
+80, not a redirect to :8080, and that listener must close once the unit
+joins the site network. The page itself is pinned in test_setup_page.py.
+These tests bind 127.0.0.1 only. Nothing here opens wlan0.
 """
 
 from __future__ import annotations
 
 import http.client
-import socket
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -20,23 +19,14 @@ from utils.captive_portal import (
     PORTAL_URL,
     PROBE_HOSTS,
     PROBE_PATHS,
-    READY_PATH,
-    STARTING_UP_TEXT,
-    UNAVAILABLE_HTML_BUDGET,
     arm_portal,
-    backend_ready,
     classify_request,
     disarm_portal,
     dnsmasq_shared_config,
     ensure_dnsmasq_conf,
     portal_should_bind,
-    portal_unit_id,
-    prefers_html,
     read_mode,
-    rewrite_location,
     run_loop,
-    unavailable_html,
-    unavailable_plain,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,56 +58,20 @@ PROBE_CASES = [
 ]
 
 
-class _Backend(BaseHTTPRequestHandler):
-    """Stand-in for the Service Window. Redirects advertise its own port."""
-
-    hits: list[str] = []
-
-    def log_message(self, fmt: str, *args: object) -> None:
-        return
-
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        self._answer(with_body=True)
-
-    def do_HEAD(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        self._answer(with_body=False)
-
-    def _answer(self, with_body: bool) -> None:
-        type(self).hits.append(self.path)
-        if self.path.startswith("/setup"):
-            body = b"setup-page"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            if with_body:
-                self.wfile.write(body)
-            return
-        port = self.server.server_address[1]
-        self.send_response(302)
-        self.send_header("Location", f"http://127.0.0.1:{port}/setup/")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-
 @pytest.fixture
-def servers():
-    _Backend.hits = []
-    backend = HTTPServer(("127.0.0.1", 0), _Backend)
+def portal():
     from utils.captive_portal import make_server
 
-    portal = make_server("127.0.0.1", 0, backend=backend.server_address[1])
-    threads = [
-        threading.Thread(target=backend.serve_forever, daemon=True),
-        threading.Thread(target=portal.serve_forever, daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-    yield portal, backend
-    portal.shutdown()
-    backend.shutdown()
-    for thread in threads:
-        thread.join(timeout=2)
+    server = make_server("127.0.0.1", 0)
+    server.networks_source = lambda: []
+    server.join_request = lambda *a, **k: {"error": "unavailable"}
+    server.rescan_request = lambda: {"ok": False}
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
 
 
 def _request(
@@ -142,28 +96,9 @@ def _get(port: int, path: str, host: str) -> http.client.HTTPResponse:
     return _request(port, path, host)
 
 
-@pytest.fixture
-def down_portal():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    closed = sock.getsockname()[1]
-    sock.close()
-    from utils.captive_portal import make_server
-
-    portal = make_server("127.0.0.1", 0, backend=closed)
-    thread = threading.Thread(target=portal.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield portal
-    finally:
-        portal.shutdown()
-        thread.join(timeout=2)
-
-
 class TestProbeResponses:
     @pytest.mark.parametrize(("path", "host"), PROBE_CASES)
-    def test_each_probe_redirects_to_port_80_setup(self, servers, path, host):
-        portal, _backend = servers
+    def test_each_probe_redirects_to_port_80_setup(self, portal, path, host):
         resp = _get(portal.server_address[1], path, host)
         assert resp.status == 302
         assert resp.getheader("Location") == PORTAL_URL
@@ -178,15 +113,14 @@ class TestProbeResponses:
         for host in PROBE_HOSTS:
             assert classify_request("/", host) == "redirect"
 
-    def test_ios_and_android_stay_on_the_hotspot(self, servers):
+    def test_ios_and_android_stay_on_the_hotspot(self, portal):
         """iOS 'Use Without Internet' and Android 'Stay connected'.
 
         A body of Success, or an Android 204, tells the phone the hotspot has
         internet. The phone then skips the sheet and keeps using mobile data.
         These answers stay a redirect with an empty body so the phone offers
-        to stay on WQM1-xxxx.
+        to stay on BlueSignal Setup.
         """
-        portal, _backend = servers
         ios = _get(portal.server_address[1], "/hotspot-detect.html", "captive.apple.com")
         android = _get(portal.server_address[1], "/generate_204", "connectivitycheck.gstatic.com")
         assert ios.status == 302
@@ -199,37 +133,20 @@ class TestProbeResponses:
         assert PORTAL_URL == "http://192.168.4.1/setup/"
         assert ":8080" not in PORTAL_URL
 
-    def test_a_typed_http_url_redirects_to_the_same_page(self, servers):
-        portal, backend = servers
+    def test_a_typed_http_url_redirects_to_the_same_page(self, portal):
         resp = _get(portal.server_address[1], "/", "example.com")
         assert resp.status == 302
         assert resp.getheader("Location") == PORTAL_URL
-        assert _Backend.hits == []
 
-    def test_the_hotspot_address_is_proxied_and_stays_off_8080(self, servers):
-        portal, _backend = servers
-        page = _get(portal.server_address[1], "/setup/", "192.168.4.1")
-        assert page.status == 200
-        assert page.body == b"setup-page"  # type: ignore[attr-defined]
-        bounced = _get(portal.server_address[1], "/", "192.168.4.1")
-        assert bounced.status == 302
-        assert bounced.getheader("Location") == "http://192.168.4.1/setup/"
-        assert ":8080" not in (bounced.getheader("Location") or "")
-
-    def test_a_down_service_window_does_not_loop_the_setup_page(self, down_portal):
-        resp = _get(down_portal.server_address[1], "/setup/", "192.168.4.1")
-        assert resp.status == 503
-        assert b"Success" not in resp.body  # type: ignore[attr-defined]
-        assert resp.getheader("Location") is None
-        assert resp.getheader("Retry-After") == "2"
-        assert resp.getheader("Cache-Control") == "no-store"
-
-    def test_location_rewrite_strips_the_service_window_port(self):
-        assert rewrite_location("http://192.168.4.1:8080/setup/", 8080) == PORTAL_URL
-        assert rewrite_location("http://127.0.0.1:8080/setup/network", 8080) == (
-            "http://192.168.4.1/setup/network"
-        )
-        assert rewrite_location("/setup/", 8080) == "/setup/"
+    def test_the_hotspot_address_serves_the_page_itself(self, portal):
+        """No proxy to 8080 (§4): the listener answers the page with no Service Window."""
+        for path in ("/", "/setup", "/setup/"):
+            page = _get(portal.server_address[1], path, "192.168.4.1")
+            assert page.status == 200, path
+            assert page.getheader("Content-Type") == "text/html; charset=utf-8"
+            assert page.getheader("Location") is None
+            assert b'id="status"' in page.body  # type: ignore[attr-defined]
+            assert b":8080" not in page.body  # type: ignore[attr-defined]
 
 
 class TestDnsmasqConfig:
@@ -401,136 +318,3 @@ class TestTeardown:
                 assert response.status_code == 302
                 assert response.headers["Location"] == PORTAL_URL
                 assert b"Success" not in response.data
-
-
-class TestUnavailablePage:
-    def test_html_is_branded_and_under_the_size_budget(self):
-        body = unavailable_html("WQM-10001")
-        text = body.decode()
-        assert len(body) < UNAVAILABLE_HTML_BUDGET
-        assert len(unavailable_html("W" * 64)) < UNAVAILABLE_HTML_BUDGET
-        assert "BlueSignal" in text
-        assert "Your WQM-1 is starting up." in text
-        assert "This takes about 2–3 minutes. Keep this page open." in text
-        assert "WQM-10001" in text
-        assert "https://" not in text
-        assert "http://" not in text
-        assert "<link " not in text
-        assert "src=" not in text
-        assert "cdn" not in text.lower()
-
-    def test_html_auto_retries_setup_and_polls_ready(self):
-        text = unavailable_html().decode()
-        assert 'http-equiv="refresh"' in text
-        assert 'content="3;url=/setup/"' in text
-        assert 'fetch("/ready"' in text
-        assert 'location.replace("/setup/")' in text
-
-    def test_plain_text_stays_readable_without_markup(self):
-        body = unavailable_plain("WQM-10001")
-        assert body.startswith(STARTING_UP_TEXT.encode())
-        assert b"Unit: WQM-10001\n" in body
-        assert b"<" not in body
-
-    def test_prefers_html_for_browsers_and_plain_for_curl(self):
-        assert prefers_html("text/html,application/xhtml+xml") is True
-        assert prefers_html("*/*") is True
-        assert prefers_html("") is True
-        assert prefers_html("text/plain") is False
-        assert prefers_html("*/*", "curl/8.6.0") is False
-        assert prefers_html("text/html", "curl/8.6.0") is False
-
-    def test_portal_unit_id_omits_the_all_zero_fallback(self, monkeypatch):
-        monkeypatch.setattr("utils.captive_portal.get_device_id", lambda: "WQM-10001")
-        assert portal_unit_id() == "WQM-10001"
-        monkeypatch.setattr(
-            "utils.captive_portal.get_device_id",
-            lambda: "BS-WQM1-000000000000",
-        )
-        assert portal_unit_id() == ""
-
-        def _boom() -> str:
-            raise OSError("no id")
-
-        monkeypatch.setattr("utils.captive_portal.get_device_id", _boom)
-        assert portal_unit_id() == ""
-
-    def test_html_response_from_a_phone_accept_header(self, down_portal, monkeypatch):
-        monkeypatch.setattr("utils.captive_portal.portal_unit_id", lambda: "WQM-10001")
-        resp = _request(
-            down_portal.server_address[1],
-            "/setup/",
-            "192.168.4.1",
-            headers={"Accept": "text/html"},
-        )
-        assert resp.status == 503
-        assert resp.getheader("Retry-After") == "2"
-        assert resp.getheader("Cache-Control") == "no-store"
-        assert "text/html" in (resp.getheader("Content-Type") or "")
-        body = resp.body  # type: ignore[attr-defined]
-        assert b"BlueSignal" in body
-        assert b"Your WQM-1 is starting up." in body
-        assert b"Keep this page open." in body
-        assert b"WQM-10001" in body
-        assert b'http-equiv="refresh"' in body
-        assert b'fetch("/ready"' in body
-        assert len(body) < UNAVAILABLE_HTML_BUDGET
-
-    def test_curl_gets_plain_text(self, down_portal, monkeypatch):
-        monkeypatch.setattr("utils.captive_portal.portal_unit_id", lambda: "WQM-10001")
-        resp = _request(
-            down_portal.server_address[1],
-            "/setup/",
-            "192.168.4.1",
-            headers={"User-Agent": "curl/8.6.0", "Accept": "*/*"},
-        )
-        assert resp.status == 503
-        assert resp.getheader("Retry-After") == "2"
-        assert resp.getheader("Cache-Control") == "no-store"
-        assert "text/plain" in (resp.getheader("Content-Type") or "")
-        body = resp.body  # type: ignore[attr-defined]
-        assert STARTING_UP_TEXT.encode() in body
-        assert b"Unit: WQM-10001" in body
-        assert b"<html" not in body
-
-    def test_head_keeps_headers_and_has_no_body(self, down_portal):
-        resp = _request(
-            down_portal.server_address[1],
-            "/setup/",
-            "192.168.4.1",
-            method="HEAD",
-            headers={"Accept": "text/html"},
-        )
-        assert resp.status == 503
-        assert resp.getheader("Retry-After") == "2"
-        assert resp.getheader("Cache-Control") == "no-store"
-        assert "text/html" in (resp.getheader("Content-Type") or "")
-        assert int(resp.getheader("Content-Length") or "0") > 0
-        assert resp.body == b""  # type: ignore[attr-defined]
-
-    def test_ready_is_503_while_the_service_window_is_down(self, down_portal):
-        resp = _request(down_portal.server_address[1], READY_PATH, "192.168.4.1")
-        assert resp.status == 503
-        assert resp.getheader("Retry-After") == "2"
-        assert resp.getheader("Cache-Control") == "no-store"
-        assert resp.body == b""  # type: ignore[attr-defined]
-        assert backend_ready(down_portal.backend_port) is False
-
-    def test_ready_is_204_once_the_service_window_answers(self, servers):
-        portal, _backend = servers
-        resp = _request(portal.server_address[1], READY_PATH, "192.168.4.1")
-        assert resp.status == 204
-        assert resp.getheader("Cache-Control") == "no-store"
-        assert resp.body == b""  # type: ignore[attr-defined]
-        assert backend_ready(portal.backend_port) is True
-
-    def test_ready_head_stays_empty(self, down_portal):
-        resp = _request(
-            down_portal.server_address[1],
-            READY_PATH,
-            "192.168.4.1",
-            method="HEAD",
-        )
-        assert resp.status == 503
-        assert resp.getheader("Content-Length") == "0"
-        assert resp.body == b""  # type: ignore[attr-defined]

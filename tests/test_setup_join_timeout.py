@@ -108,9 +108,11 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert response.headers["Location"].endswith("/setup/network")
         body = client.get("/setup/join-status").get_json()
         assert body["state"] == "fail"
-        notice = app.config.get("LAST_JOIN") or {}
+        from utils import join
+
+        notice = join.read_state()
         assert notice.get("ssid") == "PondHouse"
-        assert notice.get("error")
+        assert notice.get("message")
         # A later join must not be stuck on the polling page.
         monkeypatch.setattr(
             netctl,
@@ -156,7 +158,9 @@ class TestJoinDoesNotHoldTheHttpRequest:
             data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
         )
         assert state["started"] == [("WQM1-0001", "river-cedar-42")]
-        assert (app.config.get("LAST_JOIN") or {}).get("ap_restored") is True
+        from utils import join
+
+        assert join.read_state().get("ap_restored") is True
 
     def test_setup_record_error_after_join_is_not_a_failed_join(
         self, tmp_path, mock_hardware, monkeypatch
@@ -181,7 +185,7 @@ class TestJoinDoesNotHoldTheHttpRequest:
         started = []
         monkeypatch.setattr(netctl, "start_ap", lambda *a, **k: started.append(a) or {"ok": True})
 
-        def broken_finish(_ssid):
+        def broken_finish(_ssid, **_kwargs):
             raise OSError("config.yaml is read-only")
 
         monkeypatch.setattr(setup_routes, "_finish_setup", broken_finish)
@@ -192,7 +196,9 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert response.status_code == 200
         assert b"Joined PondHouse" in response.data
         assert client.get("/setup/join-status").get_json()["state"] == "ok"
-        assert "LAST_JOIN" not in app.config
+        from utils import join
+
+        assert join.read_state()["state"] == "joined"
         assert started == []
 
     def test_a_raising_register_kick_still_records_setup(
@@ -224,7 +230,7 @@ class TestJoinDoesNotHoldTheHttpRequest:
         monkeypatch.setattr(
             setup_routes,
             "_finish_setup",
-            lambda ssid: recorded.append(ssid) or {"forgotten": []},
+            lambda ssid, **_kwargs: recorded.append(ssid) or {"forgotten": []},
         )
         client.post(
             "/setup/network",
@@ -236,7 +242,6 @@ class TestJoinDoesNotHoldTheHttpRequest:
     def test_hotspot_restore_retries_a_settling_radio(self, tmp_path, mock_hardware, monkeypatch):
         """Bugbot on #157 (ce248b1): one start_ap was not enough while the
         radio settles. The restore uses join_network's AP_ATTEMPTS tries."""
-        from service_window.routes import setup as setup_routes
         from utils import netctl
 
         state = {"ap": True, "calls": 0}
@@ -256,13 +261,15 @@ class TestJoinDoesNotHoldTheHttpRequest:
         monkeypatch.setattr(netctl, "join_network", boom)
         monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": state["ap"])
         monkeypatch.setattr(netctl, "start_ap", start_ap)
-        monkeypatch.setattr(setup_routes, "_restore_sleep", lambda _s: None)
+        from utils import join
+
+        monkeypatch.setattr(join, "_sleep", lambda _s: None)
         client.post(
             "/setup/network",
             data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
         )
         assert state["calls"] == netctl.AP_ATTEMPTS
-        assert (app.config.get("LAST_JOIN") or {}).get("ap_restored") is True
+        assert join.read_state().get("ap_restored") is True
 
     def test_second_join_post_keeps_the_running_ssid(self, tmp_path, mock_hardware, monkeypatch):
         from utils import netctl
@@ -389,3 +396,57 @@ class TestJoinDoesNotHoldTheHttpRequest:
         assert result.returncode == 0, result.stderr + result.stdout
         release.set()
         worker.join(timeout=1)
+
+
+class TestDonePageWaitsForSetupToBeRecorded:
+    """#167 review: "joined" is written before the follow-up (record setup,
+    restart the firmware) runs. The done page says setup is finished, so it
+    is shown only once the follow-up has finished; until then the joining
+    page polls, and the poll keeps saying "joining"."""
+
+    def test_page_and_poll_wait_for_the_follow_up(self, tmp_path, mock_hardware, monkeypatch):
+        from service_window.routes import setup as setup_routes
+        from utils import netctl
+
+        client, _app = _authed_client(tmp_path, mock_hardware, monkeypatch)
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *_a, **_k: {
+                "ok": True,
+                "connected": True,
+                "ap_restored": False,
+                "error": None,
+                "ip": "192.168.1.50",
+            },
+        )
+        monkeypatch.setattr(setup_routes, "_kick_register", lambda: None)
+        monkeypatch.setattr(setup_routes, "_FOLLOW_UP_WAIT_S", 0.2)
+        recording = threading.Event()
+        release = threading.Event()
+
+        def slow_finish(_ssid, **_kwargs):
+            recording.set()
+            assert release.wait(timeout=5)
+
+        monkeypatch.setattr(setup_routes, "_finish_setup", slow_finish)
+        try:
+            response = client.post(
+                "/setup/network",
+                data={"action": "join", "ssid": "PondHouse", "password": "hunter22"},
+            )
+            assert recording.wait(timeout=2)
+            assert response.status_code == 200
+            assert b"Joined PondHouse" not in response.data
+            assert b"join-status" in response.data
+            assert client.get("/setup/join-status").get_json()["state"] == "joining"
+        finally:
+            release.set()
+        deadline = time.monotonic() + 2
+        body = {}
+        while time.monotonic() < deadline:
+            body = client.get("/setup/join-status").get_json()
+            if body.get("state") == "ok":
+                break
+            time.sleep(0.02)
+        assert body["state"] == "ok"

@@ -1,4 +1,4 @@
-"""Bench label: SSID, derived passphrase, and the Wi-Fi QR. No log line."""
+"""Bench label: the open setup network's name and a QR that joins it (§5)."""
 
 from __future__ import annotations
 
@@ -17,33 +17,34 @@ def _load():
     return mod
 
 
-def test_label_qr_payload_and_files_do_not_print_the_passphrase(tmp_path, capsys):
-    import hashlib
-
-    from utils.identity import ap_name, get_derived_id
-    from utils.netctl import derived_passphrase
-    from utils.wifi_setup import wifi_qr_payload
-
+def test_label_names_the_open_network_and_carries_no_password(tmp_path, capsys):
     serial = "1000000086544fd8"
     mod = _load()
     label = mod.build_label(serial)
-    expect_pass = hashlib.sha256(f"wqm1-ap:{serial}".encode()).hexdigest()[:12]
-    ssid = ap_name(get_derived_id(serial))
-    assert label["ssid"] == ssid == "WQM1-4FD8"
-    assert label["passphrase"] == expect_pass == derived_passphrase(serial)
-    assert label["qr"] == f"WIFI:T:WPA;S:{ssid};P:{expect_pass};;"
-    assert label["qr"] == wifi_qr_payload(ssid, expect_pass)
+    assert label["ssid"] == "BlueSignal Setup"
+    assert label["host"] == "wqm1-4fd8"
+    assert label["qr"] == "WIFI:T:nopass;S:BlueSignal Setup;;"
+    assert "passphrase" not in label
 
     assert mod.main([serial, "--out-dir", str(tmp_path)]) == 0
-    printed = capsys.readouterr().out
-    assert expect_pass not in printed
-    svg = (tmp_path / f"{ssid}-hotspot-label.svg").read_text(encoding="utf-8")
-    pdf = (tmp_path / f"{ssid}-hotspot-label.pdf").read_bytes()
-    assert ssid in svg and expect_pass in svg
-    assert b"WIFI:T:WPA" not in pdf  # the payload is the QR drawing, not a caption
-    assert ssid.encode("ascii") in pdf
-    assert expect_pass.encode("ascii") in pdf
+    printed = capsys.readouterr().out.split()
+    svg_path = tmp_path / "wqm1-4fd8-setup-label.svg"
+    pdf_path = tmp_path / "wqm1-4fd8-setup-label.pdf"
+    assert printed == [str(svg_path), str(pdf_path)]
+    svg = svg_path.read_text(encoding="utf-8")
+    pdf = pdf_path.read_bytes()
+    assert "BlueSignal Setup" in svg and "No password" in svg
+    assert "Password</text>" not in svg
+    assert b"WIFI:T:" not in pdf  # the payload is the QR drawing, not a caption
+    assert b"BlueSignal Setup" in pdf and b"No password" in pdf
     assert pdf.startswith(b"%PDF-1.4")
+
+
+def test_an_open_network_qr_says_nopass():
+    from utils.wifi_setup import wifi_qr_payload
+
+    assert wifi_qr_payload("BlueSignal Setup", None) == "WIFI:T:nopass;S:BlueSignal Setup;;"
+    assert wifi_qr_payload("BlueSignal Setup", "") == "WIFI:T:nopass;S:BlueSignal Setup;;"
 
 
 def test_qr_escapes_reserved_characters():

@@ -262,10 +262,11 @@ it with before/after state, a config and database backup, and a diagnostics run
 ### Step 3b — Commission from a phone (no SSH)
 
 Everything in Step 4 can be done from a phone browser instead, and on a new
-unit that is the intended path. Power the unit and join its setup hotspot
-`WQM1-xxxx`; the setup page opens by itself (or open
-`http://192.168.4.1/setup/`). Until setup is finished the unit serves only
-the wizard:
+unit that is the intended path. Power the unit and join the open network
+**BlueSignal Setup** (no password); the Wi-Fi page opens by itself (or open
+`http://192.168.4.1/setup/`). That page sets only the unit's Wi-Fi; finish
+in BlueSignal Cloud. Until setup is finished the unit serves only
+the wizard on the bench:
 
 | Step | What it settles |
 |------|-----------------|

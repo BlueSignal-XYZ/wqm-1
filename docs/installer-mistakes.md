@@ -8,18 +8,18 @@ The unit's radio is the one on a Pi Zero W: **2.4 GHz only**.
 
 ## The phone will not open the page
 
-The phone joined `WQM1-xxxx` and the browser is blank, or it keeps using
-the cell network.
+The phone joined **BlueSignal Setup** and the browser is blank, or it keeps
+using the cell network.
 
-Turn **mobile data off** and stay on `WQM1-xxxx`.
+Turn **mobile data off** and stay on **BlueSignal Setup**.
 
 - **iPhone:** if it asks, choose **Use Without Internet**. The setup page
   has no internet. That is the hotspot, not a failure.
 - **Android:** if it asks, choose **Stay connected**. Do not let the phone
-  drop `WQM1-xxxx` and go back to the cell network.
+  drop **BlueSignal Setup** and go back to the cell network.
 
-The page says this at the top: "If this page doesn't load, turn off mobile
-data and stay connected to WQM1-xxxx."
+The page says this at the top: "If your phone asks, tap Keep or Stay
+connected."
 
 ## The network is not in the list
 
@@ -94,13 +94,13 @@ bench, before the unit leaves:
 python3 scripts/make-unit-label.py <pi-serial> --out-dir ./labels
 ```
 
-That writes an SVG and a PDF: the SSID (`WQM1-` plus the last four of the
-id), the derived passphrase, and a Wi-Fi QR code
-(`WIFI:T:WPA;S:<ssid>;P:<pass>;;`). The phone camera joins the hotspot
-from the QR.
+That writes an SVG and a PDF named after the unit's hostname
+(`wqm1-4fd8-setup-label.svg`): the network name **BlueSignal Setup**,
+"No password", and a Wi-Fi QR code (`WIFI:T:nopass;S:BlueSignal Setup;;`).
+The phone camera joins the setup network from the QR. The network is the
+same on every unit and has no password (install plan §5).
 
-The script runs on the bench computer. It prints the file paths and does
-not write the passphrase into the firmware log or into `wqm1-status.txt`.
+The script runs on the bench computer and prints the file paths.
 See also [burn-in.md](burn-in.md).
 
 ## Hardware the page cannot see
@@ -110,7 +110,7 @@ These are not in the wizard. They are how units come back in the truck.
 - Seat the Pi on the HAT **CPU up**. A Pi pressed on upside down does not
   boot, and the header pins bend.
 - Do not pull power during the first boot. Wait until the hotspot
-  `WQM1-xxxx` is up. Killing power in that minute corrupts the card.
+  **BlueSignal Setup** is up. Killing power in that minute corrupts the card.
 - Use the supplied power supply and a **short** cable. A long thin cable
   sags the voltage and the unit reboots in a loop. The status file calls
   that undervoltage.

@@ -186,6 +186,13 @@ jobs:
           pip install pytest pytest-mock pytest-cov flask
           pip install smbus2 pyserial pycryptodome pyyaml qrcode
 
+      # tests/test_card_image.py builds small card images to test
+      # tools/golden/card.sh; without these its card tests fail in CI.
+      - name: Install card-image tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mtools parted e2fsprogs
+
       # No test in this suite needs a board: conftest.py fakes RPi.GPIO,
       # smbus2, spidev, serial and w1thermsensor at collection time. The old
       # `-m "not hardware"` filter excluded exactly zero of 1,324 tests while

@@ -293,6 +293,67 @@ class TestAccessPoint:
         assert "SAE" not in text
         assert "sae" not in text.lower()
 
+    def test_no_passphrase_is_an_open_network(self):
+        """Install plan §5: the setup network is open."""
+        from utils.netctl import hostapd_config
+
+        text = hostapd_config("BlueSignal Setup", None, country="US", channel=6)
+        conf = _conf(text)
+        assert conf["ssid"] == "BlueSignal Setup"
+        assert conf["auth_algs"] == "1"
+        assert conf["ieee80211w"] == "0"
+        for key in ("wpa", "wpa_key_mgmt", "wpa_passphrase", "rsn_pairwise"):
+            assert key not in conf, key
+        assert "wpa" not in text.replace("ctrl_interface", "")
+        assert hostapd_config("BlueSignal Setup", "", country="US") == text
+
+    def test_an_eight_character_passphrase_is_unchanged(self):
+        from utils.netctl import HOSTAPD_CTRL, hostapd_config
+
+        text = hostapd_config("WQM1-4FD8", "12345678", country="US", channel=6)
+        assert text.splitlines() == [
+            "interface=wlan0",
+            "driver=nl80211",
+            "ssid=WQM1-4FD8",
+            "hw_mode=g",
+            "channel=6",
+            "country_code=US",
+            "ieee80211d=1",
+            "auth_algs=1",
+            "wpa=2",
+            "wpa_key_mgmt=WPA-PSK",
+            "wpa_passphrase=12345678",
+            "rsn_pairwise=CCMP",
+            "ieee80211w=0",
+            f"ctrl_interface={HOSTAPD_CTRL}",
+            "ctrl_interface_group=0",
+        ]
+
+    def test_start_ap_raises_the_open_setup_network(self, nm):
+        import os
+        from pathlib import Path
+
+        from utils.netctl import ap_credentials, start_ap
+
+        ssid, passphrase = ap_credentials()
+        assert (ssid, passphrase) == ("BlueSignal Setup", None)
+        assert start_ap(ssid, passphrase)["ok"] is True
+        conf = _conf(Path(os.environ["WQM1_HOSTAPD_CONF"]).read_text())
+        assert conf["ssid"] == "BlueSignal Setup"
+        assert "wpa" not in conf and "wpa_passphrase" not in conf
+
+    def test_a_failed_join_brings_the_open_network_back(self, nm):
+        from utils.netctl import join_network, start_ap
+
+        assert start_ap("BlueSignal Setup")["ok"] is True
+        nm.join_rc = 4
+        result = join_network(
+            "PondHouse", "wrong-pass", ap_ssid="BlueSignal Setup", sleep=lambda _s: None
+        )
+        assert result["connected"] is False
+        assert result["ap_restored"] is True
+        assert nm.ap is True
+
     def test_country_follows_the_regulatory_domain(self, nm):
         from utils.netctl import hostapd_config, wifi_country
 
@@ -362,7 +423,7 @@ class TestAccessPoint:
 
         monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "mode"))
         assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
-        portal = make_server("127.0.0.1", 0, backend=9)
+        portal = make_server("127.0.0.1", 0)
         thread = threading.Thread(target=portal.serve_forever, daemon=True)
         thread.start()
         try:
@@ -396,13 +457,65 @@ class TestAccessPoint:
             "\tSSID: Barn\n"
         )
         assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        # start_ap scans once with nmcli before it unmanages wlan0 (§4's
+        # cached list); from here on the AP holds the radio.
+        after_ap = len(nm.calls)
         nets = scan_networks()
         assert [n["ssid"] for n in nets] == ["PondHouse", "Barn"]
         assert nets[0]["secured"] is True
         assert nets[0]["signal"] == 100
         assert nets[1]["secured"] is False
-        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in nm.calls)
-        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in nm.calls)
+        calls = nm.calls[after_ap:]
+        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in calls)
+        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in calls)
+
+    def test_start_ap_caches_the_scan_before_it_takes_the_radio(self, nm):
+        from utils.netctl import read_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        cached = read_scan_cache()
+        assert cached["at"]
+        visible = [n["ssid"] for n in cached["networks"] if not n["hidden"]]
+        assert visible == ["PondHouse", "Barn"]
+        assert any(n["hidden"] for n in cached["networks"]), "kept so the page asks for the name"
+        listed = next(i for i, c in enumerate(nm.calls) if c[1:3] == ["-t", "-f"] and "list" in c)
+        unmanaged = next(
+            i
+            for i, c in enumerate(nm.calls)
+            if c[1:6] == ["device", "set", "wlan0", "managed", "no"]
+        )
+        assert listed < unmanaged
+
+    def test_a_failed_rescan_keeps_the_cached_list(self, nm):
+        from utils.netctl import read_scan_cache, refresh_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        before = read_scan_cache()["networks"]
+        real = nm.run
+
+        def failing(argv, timeout=15.0):
+            if argv[:5] == ["iw", "dev", "wlan0", "scan", "ap-force"]:
+                nm.calls.append(argv)
+                return 240, "", "command failed: Operation not supported (-95)"
+            return real(argv, timeout)
+
+        from utils import netctl
+
+        netctl._run = failing  # restored by the nm fixture's monkeypatch
+        assert refresh_scan_cache() == {"ok": False, "count": 0}
+        assert read_scan_cache()["networks"] == before
+        assert any(c[:5] == ["iw", "dev", "wlan0", "scan", "ap-force"] for c in nm.calls)
+        assert not any(c[1:5] == ["device", "set", "wlan0", "managed"] for c in nm.calls[-3:])
+
+    def test_a_rescan_with_the_ap_up_uses_ap_force(self, nm):
+        from utils.netctl import read_scan_cache, refresh_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        nm.iw_scan = "BSS aa:bb:cc:dd:ee:09(on wlan0)\n\tsignal: -50.00 dBm\n\tSSID: Loft\n"
+        assert refresh_scan_cache() == {"ok": True, "count": 1}
+        assert [n["ssid"] for n in read_scan_cache()["networks"]] == ["Loft"]
+        assert nm.calls[-1][:5] == ["iw", "dev", "wlan0", "scan", "ap-force"]
+        assert nm.ap is True, "the setup network stayed up"
 
     def test_stop_orders_dnsmasq_then_hostapd_then_nm(self, nm):
         from utils.netctl import start_ap, stop_ap
@@ -628,8 +741,13 @@ class TestJoin:
         assert r["ap_restored"] is True
         assert "Secrets were required" in r["error"]
         assert nm.ap is True
-        # The failed profile is dropped so NM does not keep retrying it.
-        assert any(c[1:3] == ["connection", "delete"] and c[3] == "PondHouse" for c in nm.calls)
+        # The failed attempt's temporary profile is dropped so NM does not keep
+        # retrying it. The SSID's own profile is never deleted by a failure (I3).
+        deleted = [
+            c[3] for c in nm.calls if c[1:3] == ["connection", "delete"] and c[3] != "wqm1-setup-ap"
+        ]
+        assert deleted and all(name.startswith("bs-try-") for name in deleted)
+        assert "PondHouse" not in deleted
         # Stop (managed yes) happens before the join; the restore sets managed no
         # and starts hostapd again.
         connect = _at(nm.calls, lambda c: c[1:4] == ["device", "wifi", "connect"])
@@ -877,29 +995,22 @@ class TestJoinWaitsForAnAddress:
 
 
 class TestApFallbackScript:
-    def test_passphrase_is_never_a_shared_default(self):
+    def test_no_passphrase_is_derived_any_more(self):
+        """Install plan §5 deleted derived_passphrase with its callers."""
         import importlib.util
         from pathlib import Path
+
+        from utils import netctl
 
         spec = importlib.util.spec_from_file_location(
             "ap_fallback", Path(__file__).parent.parent / "scripts" / "wqm1-ap-fallback.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        a = mod.derived_passphrase("10000000abcdef01")
-        b = mod.derived_passphrase("10000000abcdef02")
-        assert a != b and len(a) == 12 and len(b) == 12
+        assert not hasattr(mod, "derived_passphrase")
+        assert not hasattr(netctl, "derived_passphrase")
 
-    def test_derived_passphrase_is_the_sha256_prefix(self):
-        import hashlib
-
-        from utils.netctl import derived_passphrase
-
-        serial = "1000000086544fd8"
-        expected = hashlib.sha256(f"wqm1-ap:{serial}".encode()).hexdigest()[:12]
-        assert derived_passphrase(serial) == expected
-
-    def test_credentials_come_from_the_identity_file_when_present(self, tmp_path, monkeypatch):
+    def test_the_setup_network_is_open_whatever_the_card_says(self, tmp_path, monkeypatch):
         import importlib.util
         import json
         from pathlib import Path
@@ -914,7 +1025,8 @@ class TestApFallbackScript:
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        assert mod.resolve_credentials() == ("WQM1-0001", "river-cedar-42")
+        # A bench card that still carries ap_passphrase does not close it.
+        assert mod.resolve_credentials() == ("BlueSignal Setup", None)
 
     def test_unit_file_runs_after_networkmanager_as_a_oneshot(self):
         from pathlib import Path

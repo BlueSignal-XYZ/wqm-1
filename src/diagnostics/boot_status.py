@@ -39,6 +39,11 @@ logger = logging.getLogger("wqm1.boot_status")
 # register shows undervoltage now or since this boot.
 WEAK_POWER_REASON = "weak power supply or cable"
 
+# The last JOIN_HISTORY Wi-Fi join attempts, newest first (W7): time, SSID,
+# reason. Never the password.
+JOIN_HISTORY = 5
+_JOIN_KEYS = tuple(f"join_{i}" for i in range(1, JOIN_HISTORY + 1))
+
 _KEYS = (
     "commission",
     "firmware",
@@ -53,6 +58,7 @@ _KEYS = (
     "hotspot",
     "station",
     "station_rssi",
+    *_JOIN_KEYS,
     "portal",
     "registration",
     "adc",
@@ -524,15 +530,21 @@ def commission_verdict(fields: dict[str, str]) -> str:
     return "FAIL: " + "; ".join(reasons)
 
 
-def render_status(fields: dict[str, str]) -> str:
+def _has_secret(line: str, secrets: tuple[str, ...]) -> bool:
+    return bool(_SECRET.search(line)) or any(s and s in line for s in secrets)
+
+
+def render_status(fields: dict[str, str], secrets: tuple[str, ...] = ()) -> str:
     """One plain-text snapshot. Every key is always present.
 
-    A line that matches a credential pattern is replaced in full. Replacing
-    only the matched token would leave the secret sitting after the colon.
+    A line that matches a credential pattern, or contains one of
+    ``secrets`` (the home Wi-Fi password while a join is being recorded),
+    is replaced in full. Replacing only the matched token would leave the
+    secret sitting after the colon.
     """
     verdict = fields.get("commission") or commission_verdict(fields)
     verdict_line = f"COMMISSION: {verdict}"
-    if _SECRET.search(verdict_line):
+    if _has_secret(verdict_line, secrets):
         verdict_line = "COMMISSION: [redacted]"
     lines = [verdict_line, _format_boot(fields.get("boot", "")), "WQM-1 boot status"]
     for key in _KEYS:
@@ -540,7 +552,7 @@ def render_status(fields: dict[str, str]) -> str:
             continue
         value = fields.get(key, "")
         line = f"{key}: {value}"
-        if _SECRET.search(line):
+        if _has_secret(line, secrets):
             line = f"{key}: [redacted]"
         lines.append(line)
     return "\n".join(lines) + "\n"
@@ -697,6 +709,8 @@ def write_boot_status(
     fatal: str | None = None,
     portal: str | None = None,
     registration: str | None = None,
+    join_attempt: str | None = None,
+    secrets: tuple[str, ...] = (),
 ) -> str:
     """Refresh the status file and return the text that was written.
 
@@ -779,8 +793,13 @@ def write_boot_status(
         card_line, reconfirm_line = prev.get("card", ""), prev.get("reconfirm", "")
     fields["card"] = card_line
     fields["reconfirm"] = reconfirm_line
+    joins = [prev.get(key, "") for key in _JOIN_KEYS]
+    if join_attempt:
+        joins = [join_attempt, *joins][:JOIN_HISTORY]
+    for key, value in zip(_JOIN_KEYS, joins, strict=True):
+        fields[key] = value
     fields["commission"] = commission_verdict(fields)
-    text = render_status(fields)
+    text = render_status(fields, secrets=tuple(s for s in secrets if s))
     wrote_state = False
     wrote_boot = False
     env = os.environ.get("WQM1_STATUS_FILE")
@@ -796,3 +815,16 @@ def write_boot_status(
     if not wrote_state and not wrote_boot:
         logger.debug("boot status not written (no writable status path)")
     return text
+
+
+def record_join_attempt(ssid: str, reason: str, *, secret: str | None = None) -> str:
+    """Add one join attempt to the card's status file, newest first.
+
+    ``reason`` is ``joined`` or a failure kind. ``secret`` is the password
+    that was typed: any line containing it is redacted for this write (I2).
+    """
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return write_boot_status(
+        join_attempt=f"{stamp} {ssid} {reason}",
+        secrets=(secret,) if secret else (),
+    )
