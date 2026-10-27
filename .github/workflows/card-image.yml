@@ -1,0 +1,237 @@
+name: Card image
+
+# Builds the WQM-1 SD card image on a GitHub runner, checks it, and uploads
+# it as one download: wqm1-pi-zero-<commit>.img.xz (boots Pi Zero W and
+# Zero 2 W) and its sha256. Flash it with Raspberry Pi Imager, which reads
+# the .img.xz as is and checks the card after writing: docs/flash-a-card.md.
+#
+# tools/golden/build-golden.sh does the build, from the firmware ref being
+# built (its overlay belongs to that firmware). tools/golden/card.sh and
+# card-label.py come from this workflow's own commit, so any ref can be
+# built and every card gets the same label and the same checks.
+#
+# Nothing here touches a unit, tags a firmware release or signs an OTA.
+# "publish" (run by hand only) adds a pre-release named card-<commit> with
+# direct download links; the release workflow ignores it (it runs on v*).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to build. Empty = the branch picked above."
+        required: false
+        default: ""
+      arch:
+        description: "armhf boots Pi Zero W and Zero 2 W. arm64 is for Pi 5."
+        type: choice
+        options: [armhf, arm64, both]
+        default: armhf
+      publish:
+        description: "Also make a pre-release with direct download links"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - tools/golden/**
+      - .github/workflows/card-image.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-image-${{ github.event_name }}-${{ github.ref }}-${{ inputs.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    outputs:
+      arches: ${{ steps.plan.outputs.arches }}
+    steps:
+      - id: plan
+        env:
+          ARCH: ${{ inputs.arch || 'armhf' }}
+        run: |
+          case "$ARCH" in
+            both) echo 'arches=["armhf","arm64"]' >> "$GITHUB_OUTPUT" ;;
+            armhf | arm64) echo "arches=[\"$ARCH\"]" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unknown arch $ARCH"; exit 1 ;;
+          esac
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    # Most of the time is setup.sh under qemu: apt and pip on an emulated CPU.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.arches) }}
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      # Outside the checkouts (build-golden.sh copies the firmware tree into
+      # the image) and with no "..": upload-artifact refuses a path with one.
+      - name: Work directory
+        run: echo "WORK=$RUNNER_TEMP/card-work" >> "$GITHUB_ENV"
+
+      - name: Check out the tooling (this workflow's commit)
+        uses: actions/checkout@v7
+        with:
+          path: tooling
+          # On a PR, the branch's own commit, not GitHub's merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Check out the firmware to build
+        uses: actions/checkout@v7
+        with:
+          path: firmware
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Name the image
+        id: name
+        working-directory: firmware
+        run: |
+          commit="$(git rev-parse HEAD)"
+          short="${commit:0:7}"
+          case "$ARCH" in
+            armhf) base="wqm1-pi-zero-${short}" ;;
+            arm64) base="wqm1-pi-5-${short}" ;;
+          esac
+          {
+            echo "commit=$commit"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $base from $commit (firmware $(cat VERSION))"
+
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install image tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static binfmt-support parted mtools zerofree e2fsprogs xz-utils
+          ls /proc/sys/fs/binfmt_misc/
+
+      - name: Download and check the Raspberry Pi OS base image
+        run: |
+          mkdir -p "$WORK"
+          read -r url sha < <(awk -v a="$ARCH" '$1 == a { print $2, $3 }' tooling/tools/golden/base-images.txt)
+          if [ -z "${url:-}" ] || [ -z "${sha:-}" ]; then
+            echo "::error::no $ARCH line in tools/golden/base-images.txt"
+            exit 1
+          fi
+          curl -fsSL --retry 4 --retry-delay 5 -o "$WORK/base.img.xz" "$url"
+          echo "$sha  $WORK/base.img.xz" | sha256sum -c -
+          xz -d -T0 "$WORK/base.img.xz"
+
+      - name: Build the card
+        run: |
+          sudo env OUT="$WORK/card.img" bash firmware/tools/golden/build-golden.sh \
+            --arch "$ARCH" "$WORK/base.img" "$PWD/firmware"
+          rm -f "$WORK/base.img"
+
+      - name: Label the card
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT: ${{ steps.name.outputs.commit }}
+        run: |
+          python3 tooling/tools/golden/card-label.py firmware "$ARCH" "$COMMIT" --run "$RUN_URL" \
+            > "$WORK/wqm1-card.txt"
+          cat "$WORK/wqm1-card.txt"
+          sudo bash tooling/tools/golden/card.sh label "$WORK/card.img" "$WORK/wqm1-card.txt"
+
+      - name: Check the card
+        run: sudo bash tooling/tools/golden/card.sh check "$WORK/card.img" "$ARCH"
+
+      - name: Compress
+        id: out
+        env:
+          BASE: ${{ steps.name.outputs.base }}
+        run: |
+          mkdir -p "$WORK/out"
+          xz -T0 -6 -c "$WORK/card.img" > "$WORK/out/$BASE.img.xz"
+          sudo rm -f "$WORK"/card.img*
+          cd "$WORK/out"
+          sha256sum "$BASE.img.xz" > "$BASE.img.xz.sha256"
+          cp "$WORK/wqm1-card.txt" "$BASE.txt"
+          ls -la
+          echo "dir=$WORK/out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the card
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.name.outputs.base }}
+          path: ${{ steps.out.outputs.dir }}
+          # Already xz; zipping it again only costs time.
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Say where it is
+        env:
+          BASE: ${{ steps.name.outputs.base }}
+        run: |
+          {
+            echo "### $BASE"
+            echo
+            echo '```'
+            cat "$WORK/out/$BASE.txt"
+            echo '```'
+            echo
+            echo "Download **$BASE** under Artifacts below. Safari unzips it; open"
+            echo "\`$BASE.img.xz\` in Raspberry Pi Imager (Choose OS, then Use custom)."
+            echo "Say **No** to OS customisation. Steps: \`docs/flash-a-card.md\`."
+            echo
+            echo "sha256: \`$(cut -d' ' -f1 "$WORK/out/$BASE.img.xz.sha256")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish pre-release
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Download this run's cards
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir cards
+      - name: Create card-<commit>
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit="$(git rev-parse HEAD)"
+          tag="card-${commit:0:7}"
+          mkdir -p assets
+          find cards -type f \( -name '*.img.xz' -o -name '*.img.xz.sha256' -o -name '*.txt' \) \
+            -exec cp {} assets/ \;
+          ls -la assets
+          {
+            echo "SD card image, not a firmware release and not an OTA."
+            echo
+            echo "- \`wqm1-pi-zero-*.img.xz\`: Pi Zero W and Zero 2 W."
+            echo "- \`wqm1-pi-5-*.img.xz\`: Pi 5 (only when built)."
+            echo
+            echo "Open the .img.xz in Raspberry Pi Imager (Choose OS, then Use custom). Say No"
+            echo "to OS customisation. Steps: docs/flash-a-card.md."
+            echo
+            echo '```'
+            cat assets/*.txt
+            echo '```'
+          } > notes.md
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --prerelease \
+            --title "Card image ${commit:0:7}" --notes-file notes.md --target "$commit" \
+            assets/*.img.xz assets/*.img.xz.sha256

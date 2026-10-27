@@ -23,10 +23,20 @@ already be present; the package install is idempotent). The distro
 copied in and not enabled. `netctl` starts them only while the hotspot
 is up.
 
+## Getting a card without building one
+
+`.github/workflows/card-image.yml` (Actions → Card image) builds the card on
+a GitHub runner, labels it (`card-label.py` writes `wqm1-card.txt` on the
+boot partition), checks it (`card.sh check`), and uploads
+`wqm1-pi-zero-<commit>.img.xz` with its sha256. Flashing it:
+[docs/flash-a-card.md](../../docs/flash-a-card.md).
+
 ## Base images
 
 Both dated 2026-10-06. The sha256 is the official sidecar
 (`*.img.xz.sha256` on downloads.raspberrypi.com), checked before the build.
+The same URLs and checksums are in `base-images.txt`, which the workflow
+reads; `tests/test_card_image.py` fails if the two disagree.
 
 Raspberry Pi OS Lite (32-bit), Trixie:
 
