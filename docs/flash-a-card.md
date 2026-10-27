@@ -22,7 +22,7 @@ From GitHub, in the wqm-1 repo:
 1. **Actions → Card image.**
 2. Open the newest green run for the branch you want. If there is none, click
    **Run workflow**, pick the branch, leave *arch* on `armhf`, and click
-   **Run workflow**. A build takes about half an hour, most of it installing
+   **Run workflow**. A build takes about ten minutes, most of it installing
    the firmware on an emulated Pi.
 3. Under **Artifacts**, download `wqm1-pi-zero-<commit>`. Safari unzips it into
    a folder with three files:

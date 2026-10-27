@@ -393,10 +393,22 @@ def test_workflow_release_tag_cannot_start_a_firmware_release():
     assert trigger["push"]["tags"] == ["v*"]
 
 
+def test_the_upload_path_has_no_dot_dot():
+    """upload-artifact refuses a path with "..": the first real run built and
+    checked a good card, then failed at the upload."""
+    job = _workflow()["jobs"]["build"]
+    assert "WORK" not in (job.get("env") or {})
+    first = job["steps"][0]["run"]
+    assert first.strip() == 'echo "WORK=$RUNNER_TEMP/card-work" >> "$GITHUB_ENV"'
+    assert ".." not in first
+
+
 def test_a_pr_build_is_named_after_the_branch_commit():
     """#171 review: github.sha on a pull_request is GitHub's merge commit,
     which is on no branch; the card would carry a commit nobody can find."""
-    for step in _steps("build")[:2]:
+    checkouts = [s for s in _steps("build") if "actions/checkout" in (s.get("uses") or "")]
+    assert len(checkouts) == 2
+    for step in checkouts:
         assert "github.event.pull_request.head.sha" in step["with"]["ref"]
 
 

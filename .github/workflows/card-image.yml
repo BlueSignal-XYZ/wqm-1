@@ -71,8 +71,12 @@ jobs:
         arch: ${{ fromJSON(needs.plan.outputs.arches) }}
     env:
       ARCH: ${{ matrix.arch }}
-      WORK: ${{ github.workspace }}/../card-work
     steps:
+      # Outside the checkouts (build-golden.sh copies the firmware tree into
+      # the image) and with no "..": upload-artifact refuses a path with one.
+      - name: Work directory
+        run: echo "WORK=$RUNNER_TEMP/card-work" >> "$GITHUB_ENV"
+
       - name: Check out the tooling (this workflow's commit)
         uses: actions/checkout@v7
         with:
