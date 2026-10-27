@@ -151,6 +151,8 @@ ADDRESS_WAIT_S = 55.0
 # BlueSignal renames it to the SSID; a failure deletes only the temporary
 # profile, so a wrong password re-typed for a proven network keeps it (I3).
 TRY_PROFILE_PREFIX = "bs-try-"
+# An older profile for the same SSID, renamed aside until the new one is in place.
+OLD_PROFILE_PREFIX = "bs-old-"
 # Success means BlueSignal answered over HTTPS through this network. A router
 # that asks the owner to approve new devices (Eero, Firewalla) is approved in
 # this window without anyone redoing the join (spec D5).
@@ -1034,12 +1036,27 @@ def _https_status(url: str, timeout: float = HTTPS_TIMEOUT_S) -> str:
         return "fail"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Stop at the first answer. A host that sends plain HTTP on to HTTPS
+    answers with a 3xx that already carries ``Date``; following it would
+    hit the very certificate check a wrong clock fails."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+        return None
+
+
+_DATE_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _http_date(url: str, timeout: float = HTTPS_TIMEOUT_S) -> datetime | None:
-    """The ``Date`` header from a plain-HTTP answer, or None. Unauthenticated."""
+    """The ``Date`` header from a plain-HTTP answer, or None. Unauthenticated.
+
+    Any status counts, a redirect included: it is not followed.
+    """
     request = urllib.request.Request(url, method="HEAD")  # noqa: S310 - Date only
     headers: Any = None
     try:
-        with urllib.request.urlopen(  # nosec B310 - fixed URL; only the Date header is read
+        with _DATE_OPENER.open(  # nosec B310 - fixed URL; only the Date header is read
             request, timeout=timeout
         ) as resp:
             headers = resp.headers
@@ -1085,17 +1102,26 @@ def clock_step_marker() -> Path:
     return Path(override) if override else CLOCK_STEP_MARKER
 
 
+# Set by a step in this process. The marker is what a reboot clears; this is
+# what still refuses a second step when the marker could not be written.
+_STEPPED_IN_PROCESS = False
+
+
 def _clock_stepped_this_boot() -> bool:
-    return clock_step_marker().exists()
+    return _STEPPED_IN_PROCESS or clock_step_marker().exists()
 
 
 def _mark_clock_stepped() -> None:
+    global _STEPPED_IN_PROCESS
+    _STEPPED_IN_PROCESS = True
     try:
         path = clock_step_marker()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
     except OSError as e:
-        logger.warning("Clock step not recorded: %s", e)
+        logger.warning(
+            "Clock step not recorded on disk; refusing further steps in this process: %s", e
+        )
 
 
 def _ntp_synced() -> bool:
@@ -1558,16 +1584,40 @@ def _failure_kind(ssid: str, snap: dict[str, Any], nm_text: str) -> str:
     return _classify_connect_error(nm_text) or "no_association"
 
 
-def _promote_try_profile(try_name: str, ssid: str, iface: str = DEFAULT_WIFI_IFACE) -> None:
-    """After a proven join: delete older profiles for ``ssid``, then rename
-    the temporary profile to the SSID. Renaming keeps the saved password;
-    re-creating the profile would drop it."""
-    for prof in saved_wifi(iface):
-        if prof["ssid"] == ssid and prof["name"] != try_name:
-            _nmcli("connection", "delete", prof["name"])
-    rc, out, err = _nmcli("connection", "modify", try_name, "connection.id", ssid)
+def _rename_profile(old: str, new: str) -> bool:
+    rc, out, err = _nmcli("connection", "modify", old, "connection.id", new)
     if rc != 0:
-        logger.warning("Could not rename %s to %s: %s", try_name, ssid, err or out)
+        logger.warning("Could not rename %s to %s: %s", old, new, err or out)
+    return rc == 0
+
+
+def _promote_try_profile(try_name: str, ssid: str, iface: str = DEFAULT_WIFI_IFACE) -> None:
+    """After a proven join, make the temporary profile the SSID's only one.
+
+    Nothing is deleted until the new profile carries the SSID's name, so a
+    failed step leaves the network saved (I3): older profiles for ``ssid``
+    are first renamed out of the way (NetworkManager allows two profiles
+    with one name, and a delete by that name would take both), the
+    temporary profile is renamed to ``ssid``, and only then are the older
+    ones deleted. If the rename fails, the older ones get their names back
+    and the temporary profile stays saved under its own name.
+    Renaming keeps the saved password; re-creating the profile would drop it.
+    """
+    older = [p["name"] for p in saved_wifi(iface) if p["ssid"] == ssid and p["name"] != try_name]
+    parked: list[tuple[str, str]] = []
+    for name in older:
+        aside = f"{OLD_PROFILE_PREFIX}{secrets.token_hex(3)}"
+        if not _rename_profile(name, aside):
+            for original, moved in reversed(parked):
+                _rename_profile(moved, original)
+            return
+        parked.append((name, aside))
+    if not _rename_profile(try_name, ssid):
+        for original, moved in reversed(parked):
+            _rename_profile(moved, original)
+        return
+    for _original, moved in parked:
+        _nmcli("connection", "delete", moved)
 
 
 def _notify_failure(
