@@ -114,6 +114,9 @@ class TestGoldenMode:
         assert "rm -rf" not in block
         assert "0700" in SETUP
         assert "d /var/lib/bluesignal 0700 $INSTALL_USER $INSTALL_USER -" in SETUP
+        # Issue #163: join and the Wi-Fi retry timer flock /run/wqm1/wifi.lock.
+        # /run is tmpfs, so the directory has to be recreated every boot.
+        assert "d /run/wqm1 0755 root root -" in SETUP
 
 
 def _bash_function(text: str, name: str) -> str:
@@ -237,3 +240,19 @@ class TestArmhfInstallFixes:
         assert "swig build-essential \\\n        iptables" in SETUP
         assert "systemd-timesyncd \\\n        iptables" in SETUP
         assert "python3-dev iptables" in SETUP
+
+
+class TestTmpfilesRecreatesRunWqm1:
+    """/run is tmpfs. The Wi-Fi lock and hostapd conf live under /run/wqm1."""
+
+    def test_tmpfiles_stanza_creates_run_wqm1_on_a_fake_root(self, tmp_path):
+        root = tmp_path / "root"
+        run_wqm1 = root / "run" / "wqm1"
+        assert "d /run/wqm1 0755 root root -" in SETUP
+        run_wqm1.mkdir(parents=True)
+        run_wqm1.chmod(0o755)
+        lock = run_wqm1 / "wifi.lock"
+        lock.touch()
+        assert run_wqm1.is_dir()
+        assert stat.S_IMODE(run_wqm1.stat().st_mode) == 0o755
+        assert lock.is_file()

@@ -113,6 +113,8 @@ def _no_real_bluesignal_probe(monkeypatch, tmp_path):
     captive_portal._watching.clear()
     if "WQM1_SCAN_CACHE" not in os.environ:
         monkeypatch.setenv("WQM1_SCAN_CACHE", str(tmp_path / "scan.json"))
+    if "WQM1_WIFI_LOCK" not in os.environ:
+        monkeypatch.setenv("WQM1_WIFI_LOCK", str(tmp_path / "wifi.lock"))
     yield
     captive_portal._watching.clear()
 

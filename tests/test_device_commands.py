@@ -442,6 +442,39 @@ class TestCloudClientPendingAndResult:
         monkeypatch.setattr("urllib.request.urlopen", boom)
         assert c.fetch_pending_commands() == []
 
+    def test_fetch_pending_empty_on_204_and_empty_list(self, monkeypatch):
+        c = self._client()
+
+        class _Empty:
+            status = 204
+
+            def read(self):
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Empty())
+        assert c.fetch_pending_commands() == []
+
+        class _NonePending:
+            status = 200
+
+            def read(self):
+                return b'{"commands": []}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _NonePending())
+        assert c.fetch_pending_commands() == []
+
     def test_post_result_shape_and_message_cap(self, monkeypatch):
         c = self._client()
         captured = []
