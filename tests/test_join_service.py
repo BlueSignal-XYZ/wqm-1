@@ -49,29 +49,49 @@ def service(tmp_path, monkeypatch):
     )
     thread.start()
     end = time.monotonic() + 3
-    while not path.exists() and time.monotonic() < end:
-        time.sleep(0.01)
+    while time.monotonic() < end:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.05)
+                probe.connect(str(path))
+            break
+        except OSError:
+            time.sleep(0.01)
+    else:
+        raise RuntimeError(f"join service did not listen at {path}")
     yield path, started
     halt.set()
     thread.join(timeout=3)
 
 
 def _raw(path, data: bytes) -> bytes:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(3)
-        conn.connect(str(path))
-        conn.sendall(data)
-        out = b""
-        while True:
-            try:
-                chunk = conn.recv(4096)
-            except ConnectionResetError:
-                # The service closed on a request it would not read.
-                break
-            if not chunk:
-                break
-            out += chunk
-    return out
+    # bind() creates the socket file before listen(); connecting in that
+    # window is ECONNREFUSED. Wait for listen rather than fail the peer check.
+    deadline = time.monotonic() + 2.0
+    last: OSError | None = None
+    while True:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                conn.settimeout(3)
+                conn.connect(str(path))
+                conn.sendall(data)
+                out = b""
+                while True:
+                    try:
+                        chunk = conn.recv(4096)
+                    except ConnectionResetError:
+                        # The service closed on a request it would not read.
+                        break
+                    if not chunk:
+                        break
+                    out += chunk
+            return out
+        except ConnectionRefusedError as exc:
+            last = exc
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+    raise last or ConnectionRefusedError("join service did not listen")
 
 
 class TestSocket:
