@@ -8,7 +8,9 @@ The older "flash Raspberry Pi OS and run `setup.sh`" path is
 Imager customisation on a card image writes Wi-Fi over the setup network.
 
 Writing the card is [flash-a-card.md](flash-a-card.md). This page is what
-to prove after that, before you leave the site.
+to prove after that, before you leave the site. The Saturday 7 Nov 2026
+bench script (expected result and recovery at each step) is
+[bench-flash-go-no-go.md](bench-flash-go-no-go.md).
 
 The WQM-1 is designed to connect with water-from-air and rainwater
 systems. It reports readings. It does not control those systems.

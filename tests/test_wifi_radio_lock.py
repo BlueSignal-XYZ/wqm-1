@@ -135,6 +135,34 @@ class TestJoinWaitsForTheLock:
         assert any(c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls)
 
 
+class TestLockFailureDoesNotBlockCommissioning:
+    def test_oserror_on_the_lock_file_still_joins(self, nm, lock_path, monkeypatch, tmp_path):
+        """A missing or read-only /run/wqm1 must not strand the phone join."""
+        from utils.netctl import join_network, wifi_radio_lock
+
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "portal-mode"))
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(tmp_path / "wqm1-status.txt"))
+        nm.ap = True
+        real_open = os.open
+
+        def open_lock(path, *args, **kwargs):
+            if Path(path) == lock_path:
+                raise OSError("Read-only file system")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", open_lock)
+        with wifi_radio_lock(blocking=True) as held:
+            assert held is True
+        result = join_network(
+            "PondHouse",
+            "hunter22",
+            ap_ssid="WQM1-0001",
+            ap_passphrase="river-cedar-42",
+            sleep=lambda _s: None,
+        )
+        assert result["ok"] is True
+
+
 class TestJoinHoldsTheLockAgainstRetry:
     def test_retry_skips_for_the_whole_join(self, nm, lock_path, monkeypatch, tmp_path):
         from utils import netctl

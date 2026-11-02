@@ -31,13 +31,18 @@ is raised again, so it is already there when the phone rejoins.
 
 ## When the join counts as success
 
-`join_network` polls for about 55 seconds. Success is all three:
+`join_network` polls for about 55 seconds. Success is all four
+(`src/utils/netctl.py`, `join_network`):
 
 1. `wlan0` is associated to the SSID the installer chose (not the setup hotspot).
 2. `wlan0` has a usable IPv4 address from the router. A link-local address
    (`169.254.x`) is not one.
 3. The unit can reach that network's gateway (TCP/443 or TCP/80, including
    a refusal, which means the host answered) or a DNS server (a UDP query).
+4. BlueSignal answers over HTTPS (`reach_bluesignal`). Gateway/DNS is
+   checked first, so `no_internet` stays distinct from `no_bluesignal`.
+
+The Saturday bench script is [bench-flash-go-no-go.md](bench-flash-go-no-go.md).
 
 Otherwise the setup page says, in plain words, which of these failed:
 
@@ -47,6 +52,7 @@ Otherwise the setup page says, in plain words, which of these failed:
 | Network not in range | `station: fail: network not found` | That network was not found |
 | Associated, no DHCP lease, or only `169.254.x` | `station: fail: no address` | The router did not give the unit an address |
 | Address, but no gateway and no DNS | `station: fail: no internet` | The unit cannot reach the router or DNS |
+| Address and gateway, BlueSignal not reached | `station: fail: no BlueSignal` | The unit cannot reach BlueSignal |
 
 On every one of those, the hotspot and the port-80 portal come back (the
 same re-arm as a wrong password, including the three AP attempts). Setup is
