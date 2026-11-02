@@ -74,9 +74,20 @@ need start_cd.elf "GPU firmware for gpu_mem=16, which config.txt sets"
 need fixup_cd.dat "GPU firmware for gpu_mem=16"
 need config.txt "boot settings"
 need cmdline.txt "kernel command line"
+# Pi 3 and Pi 4 (docs/raspberry-pi.md). A Pi 4 has no bootcode.bin stage:
+# its EEPROM loads start4.elf, or start4cd.elf under gpu_mem=16. Without
+# these a Pi 4 shows no sign of reading the card.
+need start4.elf "Pi 4 GPU firmware"
+need fixup4.dat "Pi 4 GPU firmware"
+need start4cd.elf "Pi 4 GPU firmware for gpu_mem=16, which config.txt sets"
+need fixup4cd.dat "Pi 4 GPU firmware for gpu_mem=16"
+need bcm2710-rpi-3-b.dtb "Pi 3B device tree"
+need bcm2710-rpi-3-b-plus.dtb "Pi 3B+ device tree"
+need bcm2711-rpi-4-b.dtb "Pi 4B device tree"
 if [ "$arch" = "armhf" ]; then
   need kernel.img "the only kernel a Pi Zero W runs"
   need kernel7.img "32-bit kernel for Pi Zero 2 W and 3"
+  need kernel8.img "the kernel a Pi 4 boots from this card (arm_64bit defaults to 1)"
   need bcm2708-rpi-zero-w.dtb "Pi Zero W device tree"
   need bcm2710-rpi-zero-2-w.dtb "Pi Zero 2 W device tree"
 else

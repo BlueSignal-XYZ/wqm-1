@@ -9,11 +9,15 @@ writes it and checks the write. No `dd`, no disk numbers.
 |---|---|
 | Raspberry Pi Zero W | `wqm1-pi-zero-<commit>.img.xz` |
 | Raspberry Pi Zero 2 W | the same `wqm1-pi-zero-<commit>.img.xz` |
+| Raspberry Pi 3B, 3B+ | the same `wqm1-pi-zero-<commit>.img.xz` |
+| Raspberry Pi 4B | the same `wqm1-pi-zero-<commit>.img.xz` |
 | Raspberry Pi 5 | `wqm1-pi-5-<commit>.img.xz` |
 
 The Pi Zero file is 32-bit. It is the only card a Zero W can run, and a
-Zero 2 W runs it too, so one file covers both bench boards. A Zero W given
-the Pi 5 file does not boot.
+Zero 2 W, Pi 3 and Pi 4 run it too, so one file covers every bench board
+but the Pi 5. Its name says "pi-zero" for history; the card label's *Boots*
+line lists the boards. A Zero W given the Pi 5 file does not boot. Every
+build checks that the card holds the boot files for each board it names.
 
 ## 2. Get the file
 
@@ -44,7 +48,9 @@ Install Raspberry Pi Imager from raspberrypi.com/software if the Mac doesn't
 have it.
 
 1. Put the microSD card in the Mac (16 GB is what we use).
-2. **Choose Device:** Raspberry Pi Zero for a Zero W, or Raspberry Pi Zero 2 W.
+2. **Choose Device:** the board you have: Raspberry Pi Zero (for a Zero W),
+   Raspberry Pi Zero 2 W, Raspberry Pi 3 or Raspberry Pi 4. The file is the
+   same for all four.
 3. **Choose OS:** scroll to the bottom, pick **Use custom**, and select the
    `.img.xz`.
 4. **Choose Storage:** the SD card. Check the size so it isn't another disk.
@@ -74,9 +80,18 @@ touch /Volumes/bootfs/burnin && cd ~ && diskutil eject /Volumes/bootfs
 
 ## 5. First boot
 
-1. Card into the Pi on the HAT. Power it from the 24 V screw terminal, or from
-   the Pi's own power port on the bench. **Never both at once.**
-2. Give a Pi Zero W up to 10 minutes on its first boot. It grows the file
+1. Card into the Pi. A Zero or Zero 2 W sits on the HAT. A Pi 3 or Pi 4
+   connects to P2 with a straight 40-pin cable, pin 1 to pin 1 at both ends
+   ([raspberry-pi.md](raspberry-pi.md), *The 40-pin cable*). Power it from the
+   24 V screw terminal, or from the Pi's own power port on the bench. **Never
+   both at once.**
+
+   A new Pi, or one you are not sure of: boot it once on its own, with nothing
+   on the header, from a known-good supply (5 V 3 A USB-C for a Pi 4, 5 V
+   2.5 A micro-USB for a Pi 3). The green light flickers within a few seconds
+   if the Pi is reading the card. Then cable it to the WQM-1.
+2. Give a Pi Zero W up to 10 minutes on its first boot (a Pi 3 or Pi 4 is
+   faster). It grows the file
    system, makes its keys, and starts the firmware on one slow core.
 3. The green light on the Pi stops blinking once Linux starts. `config.txt`
    turns it off. A light that isn't blinking does not mean the card isn't

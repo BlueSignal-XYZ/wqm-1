@@ -17,7 +17,7 @@ Never target or change the live field unit `BS-WQM1-0000a92e4e7d`.
 
 ## 1. Write the card
 
-1. Download the `wqm1-pi-zero-<commit>.img.xz` (Zero W / Zero 2 W) or
+1. Download the `wqm1-pi-zero-<commit>.img.xz` (Zero W, Zero 2 W, Pi 3, Pi 4) or
    `wqm1-pi-5-<commit>.img.xz` (Pi 5) from the newest green **Card image**
    run on the branch you were told to use. Master is the shipping branch.
 2. Raspberry Pi Imager → **Use custom** → that `.img.xz`.
@@ -33,8 +33,10 @@ name.
 
 ## 2. First boot
 
-1. Card into the Pi on the HAT. Power from the 24 V screw terminal, or
-   from the Pi's own port on the bench. **Never both at once.**
+1. Card into the Pi. A Zero sits on the HAT; a Pi 3 or Pi 4 connects to
+   P2 with a straight 40-pin cable, pin 1 to pin 1 at both ends
+   ([raspberry-pi.md](raspberry-pi.md)). Power from the 24 V screw terminal,
+   or from the Pi's own port on the bench. **Never both at once.**
 2. A Pi Zero W can take up to 10 minutes the first time (file system
    grow, keys, firmware on one slow core).
 3. The green light on the Pi stops blinking once Linux starts.
