@@ -139,6 +139,16 @@ def test_ci_has_the_card_tools():
     assert "mtools" in runs and "parted" in runs and "e2fsprogs" in runs
 
 
+# What a Pi 3 or Pi 4 needs on either card, besides its kernel.
+_PI3_PI4_BOOT = (
+    "start4.elf",
+    "fixup4.dat",
+    "start4cd.elf",
+    "fixup4cd.dat",
+    "bcm2710-rpi-3-b.dtb",
+    "bcm2710-rpi-3-b-plus.dtb",
+    "bcm2711-rpi-4-b.dtb",
+)
 _ARMHF_BOOT = (
     "bootcode.bin",
     "start.elf",
@@ -148,8 +158,10 @@ _ARMHF_BOOT = (
     "config.txt",
     "kernel.img",
     "kernel7.img",
+    "kernel8.img",
     "bcm2708-rpi-zero-w.dtb",
     "bcm2710-rpi-zero-2-w.dtb",
+    *_PI3_PI4_BOOT,
 )
 _CLOUD_INIT = {
     "user-data": "#cloud-config\n# users:\n#   passwd: example\n",
@@ -314,6 +326,25 @@ def test_a_card_without_firmware_fails(tmp_path):
     result = _check(_make_card(tmp_path, firmware=False))
     assert result.returncode == 1
     assert "no firmware at /opt/bluesignal/current" in result.stdout
+
+
+@needs_card_tools
+@pytest.mark.parametrize("arch", ["armhf", "arm64"])
+@pytest.mark.parametrize("missing", (*_PI3_PI4_BOOT, "kernel8.img"))
+def test_a_card_without_a_pi_3_or_pi_4_boot_file_fails(tmp_path, arch, missing):
+    # Both cards are for Pi 3 and Pi 4 benches too (docs/raspberry-pi.md). A
+    # Pi 4 missing start4*.elf shows nothing at all, like a dead board.
+    armhf_only = ("kernel.img", "kernel7.img", "bcm2708-rpi-zero-w.dtb")
+    if arch == "armhf":
+        boot = _ARMHF_BOOT
+    else:
+        boot = tuple(f for f in _ARMHF_BOOT if f not in armhf_only)
+        boot += ("kernel_2712.img", "bcm2712-rpi-5-b.dtb")
+    good = _check(_make_card(tmp_path / "a", boot=boot), arch)
+    assert good.returncode == 0, good.stdout
+    bad = _check(_make_card(tmp_path / "b", boot=tuple(f for f in boot if f != missing)), arch)
+    assert bad.returncode == 1
+    assert f"FAIL: {missing} missing" in bad.stdout
 
 
 @needs_card_tools
