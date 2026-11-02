@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import fcntl
 import ipaddress
 import json
 import logging
@@ -142,6 +143,10 @@ AP_SUBNET = "192.168.4.1/24"
 AP_ADDRESS = "192.168.4.1"
 AP_NETWORK = "192.168.4.0/24"
 DEFAULT_WIFI_IFACE = "wlan0"
+# Issue #163: join_network and retry_saved_station both drive wlan0.
+# Exclusive flock; join waits, retry skips. Created by setup.sh tmpfiles.
+WIFI_LOCK_PATH = Path("/run/wqm1/wifi.lock")
+WIFI_LOCK_MODE = 0o644
 JOIN_TIMEOUT_S = 40
 # Whole join, including association, DHCP, and a gateway or DNS probe.
 # nmcli's own activation timeout is JOIN_TIMEOUT_S and sits inside this budget.
@@ -1379,6 +1384,52 @@ def _connect(
     return rc, nm_text, stage
 
 
+def wifi_lock_path() -> Path:
+    """``/run/wqm1/wifi.lock``, or ``WQM1_WIFI_LOCK`` in tests."""
+    override = os.environ.get("WQM1_WIFI_LOCK")
+    return Path(override) if override else WIFI_LOCK_PATH
+
+
+@contextlib.contextmanager
+def wifi_radio_lock(*, blocking: bool = True) -> Any:
+    """Exclusive flock on the radio. Yields True when this caller holds it.
+
+    ``join_network`` waits (blocking). ``retry_saved_station`` skips when the
+    lock is already held so the 5-minute timer cannot sit on systemd's
+    TimeoutStartSec while a phone join runs (issue #163). A missing
+    ``/run/wqm1`` must not fail commissioning: we log and yield True without
+    a lock so a first boot still joins.
+    """
+    path = wifi_lock_path()
+    fd: int | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, WIFI_LOCK_MODE)
+        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        fcntl.flock(fd, flags)
+    except BlockingIOError:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        yield False
+        return
+    except OSError as exc:
+        logger.warning("Could not lock wlan0 (%s): %s", path, exc)
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        yield True
+        return
+    try:
+        yield True
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
 def join_network(
     ssid: str,
     password: str | None,
@@ -1451,6 +1502,38 @@ def join_network(
                 portal="up (80)" if result.get("ap_restored") else "down: hotspot down",
             )
         return result
+    with wifi_radio_lock(blocking=True):
+        return _join_network_locked(
+            ssid,
+            password,
+            ap_ssid,
+            ap_passphrase,
+            iface,
+            sleep,
+            clock,
+            address_wait_s,
+            on_failure,
+            hidden=hidden,
+            api_base=api_base,
+            reach=reach,
+        )
+
+
+def _join_network_locked(
+    ssid: str,
+    password: str | None,
+    ap_ssid: str | None,
+    ap_passphrase: str | None,
+    iface: str,
+    sleep: Any,
+    clock: Any,
+    address_wait_s: float,
+    on_failure: Callable[[dict[str, Any]], None] | None,
+    *,
+    hidden: bool,
+    api_base: str | None,
+    reach: Callable[..., dict[str, Any]] | None,
+) -> dict[str, Any]:
     had_ap = ap_active(iface)
     if had_ap:
         stop_ap(iface)
@@ -1908,6 +1991,20 @@ def retry_saved_station(
     """
     if netsim.is_virtual():
         return {"skipped": "virtual radio"}
+    with wifi_radio_lock(blocking=False) as held:
+        if not held:
+            return {"skipped": "wlan0 in use"}
+        return _retry_saved_station_locked(ap_ssid, ap_passphrase, iface, sleep, clock, wait_s)
+
+
+def _retry_saved_station_locked(
+    ap_ssid: str,
+    ap_passphrase: str | None,
+    iface: str,
+    sleep: Any,
+    clock: Any,
+    wait_s: float,
+) -> dict[str, Any]:
     if not ap_active(iface):
         return {"skipped": "hotspot not up"}
     clients = ap_clients(iface)

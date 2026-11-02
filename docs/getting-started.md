@@ -50,6 +50,11 @@ and the power budget are in [raspberry-pi.md](raspberry-pi.md).
 
 ---
 
+A customer card built from this repo's image (GitHub **Actions → Card
+image**) skips this chapter. Write it with
+[flash-a-card.md](flash-a-card.md) (no Imager customisation) and prove
+the install with [flash-and-verify.md](flash-and-verify.md).
+
 ## 1. Flash Raspberry Pi OS Lite
 
 1. Open **Raspberry Pi Imager** on your computer.

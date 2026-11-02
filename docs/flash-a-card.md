@@ -84,6 +84,9 @@ touch /Volumes/bootfs/burnin && cd ~ && diskutil eject /Volumes/bootfs
 4. The setup network appears on your phone. Its name is the *Setup network*
    line on the card label.
 
+The installer checklist from here (join the site Wi-Fi, claim, first
+reading) is [flash-and-verify.md](flash-and-verify.md).
+
 ## 6. No setup network after 10 minutes
 
 Power the Pi off, put the card in the Mac, and read what the Pi wrote:

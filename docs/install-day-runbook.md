@@ -5,13 +5,19 @@ commission on site, leave with the unit reporting. Reconciled against the code i
 this repo as of 2026-08-18 — where a step differs from the printed installer
 manual, the code is right and the manual defect is named in §6.
 
-Companions: [`getting-started.md`](getting-started.md) (first install from
-scratch), [`installer-mistakes.md`](installer-mistakes.md) (the things that
-send an installer back to the truck: 2.4 GHz only, weak signal, the phone
-on mobile data, enterprise / WPA3 / sign-in Wi-Fi, the password, and the
-probes), [`ota-runbook.md`](ota-runbook.md) §7 (field bootstrap),
-`marketplace/docs/operations/device-reflash-runbook.md` (taking a unit back to
-zero).
+Companions: [`flash-and-verify.md`](flash-and-verify.md) (customer card
+from this repo's image; do not use Imager customisation on that card),
+[`getting-started.md`](getting-started.md)
+(first install from scratch), [`installer-mistakes.md`](installer-mistakes.md)
+(the things that send an installer back to the truck: 2.4 GHz only, weak
+signal, the phone on mobile data, enterprise / WPA3 / sign-in Wi-Fi, the
+password, and the probes), [`ota-runbook.md`](ota-runbook.md) §7 (field
+bootstrap), `marketplace/docs/operations/device-reflash-runbook.md`
+(taking a unit back to zero).
+
+§1 below is the older "flash Raspberry Pi OS and run `setup.sh`" path. A
+card already built by **Actions → Card image** uses
+[`flash-and-verify.md`](flash-and-verify.md) instead.
 
 **Fill in before you go:**
 

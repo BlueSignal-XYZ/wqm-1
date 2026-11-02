@@ -580,6 +580,7 @@ echo "[7/9] Installing service window and provisioning tools..."
 sudo tee /etc/tmpfiles.d/bluesignal.conf > /dev/null <<EOF
 d /var/run/bluesignal 0755 $INSTALL_USER $INSTALL_USER -
 d /var/lib/bluesignal 0700 $INSTALL_USER $INSTALL_USER -
+d /run/wqm1 0755 root root -
 EOF
 sudo mkdir -p /var/run/bluesignal
 if [ -f "$SCRIPT_DIR/scripts/provision.py" ]; then
