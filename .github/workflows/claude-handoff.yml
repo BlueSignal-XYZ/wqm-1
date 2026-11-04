@@ -20,8 +20,8 @@ name: Claude handoff
 # token or a GitHub App token. A bot or App login must be listed in
 # allowed_bots below or claude-code-action refuses the run.
 #
-# Auth: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, draws on the
-# Claude subscription) is used when set; ANTHROPIC_API_KEY otherwise.
+# Auth: CLAUDE_CODE_OAUTH_TOKEN only (from `claude setup-token`, draws on
+# the Claude subscription). No paid-API fallback: a missing token fails the run.
 
 on:
   issues:
@@ -62,7 +62,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           github_token: ${{ github.token }}
           allowed_bots: 'cursor'
           claude_args: >-
@@ -120,7 +119,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           github_token: ${{ github.token }}
           allowed_bots: 'cursor,dependabot,renovate'
           additional_permissions: |
