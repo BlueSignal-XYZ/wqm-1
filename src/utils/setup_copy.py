@@ -31,7 +31,8 @@ en: dict[str, str] = {
     "rescan_failed": "Couldn't refresh the list. Type the network name if yours isn't here.",
     "none_found": "No networks found yet. Tap Rescan, or type the network name.",
     "only_24": (
-        "Only 2.4 GHz networks show. If yours is 5 GHz only, turn on 2.4 GHz in the router app."
+        "This scan did not hear a 2.4 GHz network. "
+        "You can still pick a name from the list, or type it."
     ),
     "hidden_nearby": "A hidden network is in range. Type its name.",
     "weak": "Weak here. Readings may drop. Move the router or add an extender.",
@@ -54,8 +55,13 @@ en: dict[str, str] = {
     "password_short": "A Wi-Fi password is 8 to 63 characters. This one is too short.",  # nosec B105 - a sentence
     "password_long": "A Wi-Fi password is 8 to 63 characters. This one is too long.",  # nosec B105 - a sentence
     "password_char": "The password has a character the unit can't type. Type it again.",  # nosec B105 - a sentence
+    "band_soft": (
+        "This scan only heard 5 GHz for that name. You can still join it. "
+        "The unit uses 2.4 GHz when it can."
+    ),
     "refused_band": (
-        "That network is 5 GHz. The unit only uses 2.4 GHz. Turn on 2.4 GHz in the router app."
+        "This scan only heard 5 GHz for that name. You can still join it. "
+        "The unit uses 2.4 GHz when it can."
     ),
     "refused_enterprise": (
         "That network needs a work login, not just a password. The unit can't join it."
@@ -100,8 +106,8 @@ es: dict[str, str] = {
     "rescan_failed": ("No se pudo actualizar la lista. Si su red no aparece, escriba su nombre."),
     "none_found": "Todavía no se encontraron redes. Toque Buscar de nuevo o escriba el nombre.",
     "only_24": (
-        "Solo aparecen redes de 2.4 GHz. Si la suya es solo de 5 GHz, "
-        "active 2.4 GHz en la app del router."
+        "Este barrido no escuchó una red de 2.4 GHz. Aun así puede elegir un "
+        "nombre de la lista o escribirlo."
     ),
     "hidden_nearby": "Hay una red oculta cerca. Escriba su nombre.",
     "weak": (
@@ -135,8 +141,13 @@ es: dict[str, str] = {
     "password_char": (  # nosec B105 - a sentence
         "La contraseña tiene un carácter que la unidad no puede escribir. Escríbala otra vez."
     ),
+    "band_soft": (
+        "Este barrido solo escuchó 5 GHz para ese nombre. Aun así puede conectarse. "
+        "La unidad usa 2.4 GHz cuando puede."
+    ),
     "refused_band": (
-        "Esa red es de 5 GHz. La unidad solo usa 2.4 GHz. Active 2.4 GHz en la app del router."
+        "Este barrido solo escuchó 5 GHz para ese nombre. Aun así puede conectarse. "
+        "La unidad usa 2.4 GHz cuando puede."
     ),
     "refused_enterprise": (
         "Esa red pide un usuario de trabajo, no solo una contraseña. La unidad no puede conectarse."

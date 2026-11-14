@@ -303,9 +303,10 @@ class TestCaptivePortalAndRadioLimits:
         assert result["reason"] == "captive_sign_in"
         assert result["ap_restored"] is True
 
-    def test_5ghz_only_is_refused_before_the_hotspot_drops(self):
-        assert block_code({"band": "5", "security": "wpa2"}) == "refused_band"
+    def test_5ghz_only_is_not_a_hard_block(self):
+        assert block_code({"band": "5", "security": "wpa2"}) is None
         assert block_code({"band": "2.4", "security": "wpa2"}) is None
+        assert block_code({"band": "5", "security": "enterprise"}) == "refused_enterprise"
 
     def test_weak_signal_is_below_minus_70(self):
         assert WEAK_RSSI_DBM == -70
