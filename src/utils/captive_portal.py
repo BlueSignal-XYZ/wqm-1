@@ -417,7 +417,7 @@ function row(n){
   r.addEventListener("change",onPick);
   var name=document.createElement("span");
   name.className="name";name.textContent=n.ssid;
-  if(!n.joinable&&n.note){
+  if(n.note){
     var why=document.createElement("span");
     why.className="why";why.textContent=C[n.note]||"";name.appendChild(why);
   }
@@ -613,7 +613,9 @@ def _networks_view(networks: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         refused = block_code(net)
         code = refused
-        if refused is None and net.get("security") == "open":
+        if refused is None and net.get("band_note"):
+            code = "band_soft"
+        elif refused is None and net.get("security") == "open":
             code = "open_network"
         rows.append(
             {

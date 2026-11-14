@@ -1,9 +1,15 @@
 """
 Installer-facing Wi-Fi facts for the setup page.
 
-The Pi Zero W radio is 2.4 GHz only, and the setup page is what a hurried
-installer sees. This module turns scan text and a typed password into the
-sentences on that page. It does not run commands and it does not log secrets.
+This module turns scan text and a typed password into the sentences on the
+setup page. It does not run commands and it does not log secrets.
+
+Scan rows are grouped by SSID across bands. A dual-band name (one SSID on
+2.4 and 5 GHz) is selectable whenever any BSS is 2.4 GHz. A name that was
+only seen on 5 GHz stays selectable with a soft note — a scan can miss the
+2.4 GHz side. The page never hard-blocks a band. Typed "Other network"
+names are always allowed. Security still refuses enterprise, WPA3-only and
+WEP.
 """
 
 from __future__ import annotations
@@ -17,13 +23,13 @@ from typing import Any
 WEAK_RSSI_DBM = -70
 
 BAND_MESSAGE = (
-    "This unit only sees 2.4 GHz WiFi. Turn on 2.4 GHz on the router or use its 2.4 GHz network."
+    "This scan did not hear a 2.4 GHz network. You can still pick a name from the list, or type it."
 )
-HIDDEN_NOTE = (
-    "A hidden network is in range. Type its name. "
-    "This unit only sees 2.4 GHz WiFi. Turn on 2.4 GHz on the router "
-    "or use its 2.4 GHz network."
+BAND_SOFT_MESSAGE = (
+    "This scan only heard 5 GHz for that name. You can still join it. "
+    "The unit uses 2.4 GHz when it can."
 )
+HIDDEN_NOTE = "A hidden network is in range. Type its name."
 WEAK_SIGNAL_MESSAGE = (
     "Weak signal here. Mount closer to the router or add an extender before leaving."
 )
@@ -252,20 +258,23 @@ def annotate_network(raw: dict[str, Any]) -> dict[str, Any]:
     else:
         security = classify_nmcli_security(str(raw.get("security_text") or ""))
     secured = bool(raw.get("secured")) if security == "unknown" else security not in ("open", "")
-    note = BAND_MESSAGE if band in _HIGH_BANDS else security_message(security)
-    joinable = security not in _UNJOINABLE and band not in _HIGH_BANDS and not hidden
+    note = security_message(security)
+    band_note = BAND_SOFT_MESSAGE if band in _HIGH_BANDS else None
+    joinable = security not in _UNJOINABLE and not hidden
     return {
         "ssid": ssid,
         "signal": signal,
         "secured": bool(secured) if security != "open" else False,
         "security": security,
-        "security_note": note,
+        "security_note": note or band_note,
+        "band_note": band_note,
         "rssi_dbm": dbm,
         "bars": bars_for_dbm(dbm if isinstance(dbm, int) else None),
         "bar_text": bar_glyphs(bars_for_dbm(dbm if isinstance(dbm, int) else None)),
         "weak": is_weak_rssi(dbm if isinstance(dbm, int) else None),
         "freq_mhz": freq if isinstance(freq, int) else None,
         "band": band,
+        "bands": [band] if band else [],
         "hidden": hidden,
         "joinable": joinable,
     }
@@ -400,9 +409,40 @@ def parse_iw_scan(text: str) -> list[dict[str, Any]]:
     return _strongest(found)
 
 
+def _merge_ssid_group(group: list[dict[str, Any]]) -> dict[str, Any]:
+    """One selectable row for a single SSID seen on one or more bands."""
+    bands = [str(row.get("band") or "unknown") for row in group]
+    known = {band for band in bands if band != "unknown"}
+    two_four = [row for row in group if row.get("band") == "2.4"]
+    if two_four:
+        chosen = dict(max(two_four, key=lambda row: int(row.get("signal") or 0)))
+        chosen["bands"] = sorted(known or set(bands))
+        chosen["band_note"] = None
+        if chosen.get("security") not in _UNJOINABLE and not chosen.get("hidden"):
+            chosen["joinable"] = True
+        # Keep a security sentence; drop a leftover 5 GHz-only soft note.
+        if chosen.get("security_note") == BAND_SOFT_MESSAGE:
+            chosen["security_note"] = security_message(str(chosen.get("security") or ""))
+        return chosen
+    chosen = dict(max(group, key=lambda row: int(row.get("signal") or 0)))
+    chosen["bands"] = sorted(known or set(bands))
+    if known and "2.4" not in known and (known & _HIGH_BANDS):
+        chosen["band_note"] = BAND_SOFT_MESSAGE
+        if chosen.get("security") not in _UNJOINABLE and not chosen.get("hidden"):
+            chosen["joinable"] = True
+            if not chosen.get("security_note"):
+                chosen["security_note"] = BAND_SOFT_MESSAGE
+    return chosen
+
+
 def _strongest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """One row per visible SSID (the strongest). Hidden rows collapse to one."""
-    best: dict[str, dict[str, Any]] = {}
+    """One row per visible SSID, grouping BSS across 2.4 and 5 GHz.
+
+    The strongest 2.4 GHz BSS is preferred for signal and frequency when
+    any 2.4 GHz BSS was seen, so a louder 5 GHz side of the same name
+    cannot hide the joinable 2.4 GHz side. Hidden rows collapse to one.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
     hidden: dict[str, Any] | None = None
     for row in rows:
         if row.get("hidden"):
@@ -412,10 +452,8 @@ def _strongest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ssid = str(row.get("ssid") or "")
         if not ssid:
             continue
-        prev = best.get(ssid)
-        if prev is None or int(prev.get("signal") or 0) < int(row.get("signal") or 0):
-            best[ssid] = row
-    out = list(best.values())
+        groups.setdefault(ssid, []).append(row)
+    out = [_merge_ssid_group(group) for group in groups.values()]
     if hidden is not None:
         out.append(hidden)
     return sorted(out, key=lambda item: -int(item.get("signal") or 0))
@@ -440,11 +478,10 @@ def band_notice(networks: list[dict[str, Any]]) -> str | None:
 
 
 def unseen_ssid_notice(networks: list[dict[str, Any]], ssid: str) -> str | None:
-    """The 2.4 GHz sentence when the typed name is not a visible network.
+    """A soft band note, never a reason to refuse the join.
 
-    A hidden SSID is not in the list on purpose. The sentence still applies:
-    the name they typed may be the router's 5 GHz network. The join is still
-    attempted so a real hidden 2.4 GHz network can be used.
+    Typed "Other network" names are always attempted. If the scan already
+    has this SSID and only heard 5 GHz, the same soft note is returned.
     """
     name = (ssid or "").strip()
     if not name:
@@ -454,10 +491,10 @@ def unseen_ssid_notice(networks: list[dict[str, Any]], ssid: str) -> str | None:
             continue
         if net.get("ssid") != name:
             continue
-        if net.get("band") in _HIGH_BANDS:
-            return BAND_MESSAGE
-        return None
-    return BAND_MESSAGE
+        return net.get("band_note") or (
+            BAND_SOFT_MESSAGE if net.get("band") in _HIGH_BANDS else None
+        )
+    return None
 
 
 def find_network(networks: list[dict[str, Any]], ssid: str) -> dict[str, Any] | None:
@@ -486,14 +523,13 @@ def blocked_networks(networks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def block_code(net: dict[str, Any] | None) -> str | None:
     """Why a scanned network cannot be joined, as a short code, or None.
 
-    ``refused_band`` (5 or 6 GHz), or ``refused_<security>`` for enterprise,
-    WPA3-only and WEP. The port-80 page maps the code to a sentence in the
-    phone's language (``utils.setup_copy``).
+    Only security refusals: ``refused_enterprise``, ``refused_sae_only``,
+    ``refused_wep``. A 5 GHz-only scan row is never a refusal — the page
+    shows ``band_soft`` and the join is still allowed. The port-80 page
+    maps the code to a sentence in the phone's language (``utils.setup_copy``).
     """
     if net is None:
         return None
-    if net.get("band") in _HIGH_BANDS:
-        return "refused_band"
     security = str(net.get("security") or "")
     if security in _UNJOINABLE:
         return f"refused_{security}"
@@ -505,8 +541,6 @@ def block_reason(net: dict[str, Any] | None) -> str | None:
     code = block_code(net)
     if code is None:
         return None
-    if code == "refused_band":
-        return BAND_MESSAGE
     return security_message(code.removeprefix("refused_"))
 
 

@@ -329,6 +329,7 @@ class TestCopy:
 
     def test_every_refusal_and_password_code_has_a_sentence(self):
         for key in (
+            "band_soft",
             "refused_band",
             "refused_enterprise",
             "refused_sae_only",
@@ -393,11 +394,12 @@ class TestNetworks:
         status, view = _json(portal, "GET", "/api/networks")
         assert status == 200
         names = [n["ssid"] for n in view["networks"]]
-        assert names[:2] == ["PondHouse", "Cafe"]
-        assert set(names[2:]) == {"Office5G", "Corp"}
+        assert names == ["Office5G", "PondHouse", "Cafe", "Corp"]
         by = {n["ssid"]: n for n in view["networks"]}
-        assert by["Office5G"]["note"] == "refused_band"
+        assert by["Office5G"]["joinable"] is True
+        assert by["Office5G"]["note"] == "band_soft"
         assert by["Corp"]["note"] == "refused_enterprise"
+        assert by["Corp"]["joinable"] is False
         assert by["Cafe"]["note"] == "open_network"
         assert by["Cafe"]["joinable"] is True
         assert view["hidden"] is True
@@ -475,7 +477,7 @@ class TestJoinValidation:
             ({"ssid": "   ", "hidden": True}, "pick_first"),
             ({"ssid": "x" * 33, "password": "hunter2222"}, "network_name_bad"),
             ({"ssid": "Bad\nName", "password": "hunter2222"}, "network_name_bad"),
-            ({"ssid": "Office5G", "password": "hunter2222"}, "refused_band"),
+            ({"ssid": "Office5G", "password": "short"}, "password_short"),
             ({"ssid": "OldRouter", "password": "hunter2222"}, "refused_wep"),
             ({"ssid": "PondHouse"}, "password_needed"),
             ({"ssid": "PondHouse", "password": "short"}, "password_short"),

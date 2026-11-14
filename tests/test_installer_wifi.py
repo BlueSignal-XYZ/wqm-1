@@ -105,8 +105,9 @@ class TestBand:
         five = _by_ssid(rows, "Home-5G")
         assert five["band"] == "5"
         assert five["freq_mhz"] == 5180
-        assert five["joinable"] is False
-        assert block_reason(five) == BAND_MESSAGE
+        assert five["joinable"] is True
+        assert block_reason(five) is None
+        assert five["band_note"]
 
     def test_no_2_4_network_uses_the_installer_sentence(self):
         only_five = parse_iw_scan(
@@ -120,8 +121,8 @@ class TestBand:
     def test_a_typed_name_that_was_not_seen_says_2_4_only(self):
         rows = parse_iw_scan(IW_MIXED)
         assert unseen_ssid_notice(rows, "Home") is None
-        assert unseen_ssid_notice(rows, "Upstairs-5G") == BAND_MESSAGE
-        assert unseen_ssid_notice(rows, "Home-5G") == BAND_MESSAGE
+        assert unseen_ssid_notice(rows, "Upstairs-5G") is None
+        assert unseen_ssid_notice(rows, "Home-5G")
 
     def test_hidden_ssid_is_kept(self):
         rows = parse_iw_scan(IW_MIXED)
@@ -411,9 +412,7 @@ class TestSetupPage:
         assert "WPA3 only" in page
         assert calls == []
 
-    def test_five_gigahertz_is_refused_with_the_sentence(
-        self, tmp_path, mock_hardware, monkeypatch
-    ):
+    def test_five_gigahertz_only_is_still_joined(self, tmp_path, mock_hardware, monkeypatch):
         from utils import netctl
 
         calls: list[tuple] = []
@@ -425,15 +424,30 @@ class TestSetupPage:
                 {"ssid": "Home-5G", "signal": 90, "secured": True, "freq_mhz": 5180}
             ],
         )
-        monkeypatch.setattr(netctl, "join_network", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(
+            netctl,
+            "join_network",
+            lambda *a, **k: (
+                calls.append(a)
+                or {
+                    "ok": False,
+                    "connected": False,
+                    "ap_restored": True,
+                    "error": "x",
+                    "message": "kept going",
+                    "reason": "no_association",
+                    "ip": None,
+                }
+            ),
+        )
+        monkeypatch.setattr(netctl, "ap_credentials", lambda: ("WQM1-0001", None))
         client, _app = _client(tmp_path, mock_hardware)
         client.post(
             "/setup/network",
             data={"action": "join", "ssid": "Home-5G", "password": "hunter22"},
             follow_redirects=True,
         )
-        assert BAND_MESSAGE in client.get("/setup/network").data.decode()
-        assert calls == []
+        assert calls, "a 5 GHz-only scan row must still start the join"
 
     def test_an_unseen_name_is_still_tried_and_the_sentence_is_kept(
         self, tmp_path, mock_hardware, monkeypatch
@@ -471,7 +485,6 @@ class TestSetupPage:
         )
         page = client.get("/setup/network").data.decode()
         assert "That network was not found" in page
-        assert BAND_MESSAGE in page
 
     def test_trailing_space_warns_before_the_join(self, tmp_path, mock_hardware, monkeypatch):
         from utils import netctl

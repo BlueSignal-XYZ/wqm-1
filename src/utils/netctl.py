@@ -301,6 +301,9 @@ def prepare_wifi_radio(iface: str = DEFAULT_WIFI_IFACE) -> None:
     # exists. start_ap turns it off again once hostapd is beaconing.
     _run(["iw", "dev", iface, "set", "power_save", "off"])
     _nmcli("device", "set", iface, "managed", "yes")
+    from utils.wifi_radio import detect_station_bands
+
+    detect_station_bands(run=_run)
 
 
 _USABLE_STATES = frozenset(
@@ -1337,6 +1340,36 @@ def wait_for_ssid(
         sleep(SCAN_POLL_S)
 
 
+def _ensure_try_profile(name: str | None, ssid: str, iface: str) -> None:
+    """Create the temporary station profile with the per-board band policy.
+
+    On a 2.4 GHz-only radio the profile is locked to band ``bg`` so
+    wpa_supplicant picks the 2.4 GHz BSS of a dual-band SSID. Dual-band
+    radios get no lock. ``device wifi connect --name`` then uses this
+    profile. A name that already exists is left as-is.
+    """
+    if not name:
+        return
+    from utils.wifi_radio import station_nm_settings
+
+    argv = [
+        "connection",
+        "add",
+        "type",
+        "wifi",
+        "con-name",
+        name,
+        "ifname",
+        iface,
+        "ssid",
+        ssid,
+        *station_nm_settings(),
+    ]
+    rc, _out, err = _nmcli(*argv)
+    if rc != 0:
+        logger.info("Try profile %s not created (%s)", name, (err or "").strip())
+
+
 def _connect(
     ssid: str,
     password: str | None,
@@ -1376,6 +1409,7 @@ def _connect(
             wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=SCAN_WAIT_S / 2)
         if i and name:
             _nmcli("connection", "delete", name)
+        _ensure_try_profile(name, ssid, iface)
         rc, out, err = _nmcli(*argv, timeout=float(JOIN_TIMEOUT_S))
         nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
         if rc == 0 or _classify_connect_error(nm_text) != "not_found":
