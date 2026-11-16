@@ -1596,7 +1596,7 @@ class TestTheProfileThatJoinsIsTheOneWeBuilt:
             kw.pop("password", "hunter22"),
             ap_ssid="WQM1-0001",
             ap_passphrase="river-cedar-42",
-            sleep=lambda _s: None,
+            sleep=kw.pop("sleep", lambda _s: None),
             **kw,
         )
 
@@ -1639,11 +1639,21 @@ class TestTheProfileThatJoinsIsTheOneWeBuilt:
         assert "wifi-sec.key-mgmt" not in adds[0] and "wifi-sec.psk" not in adds[0]
 
     def test_a_profile_nmcli_refuses_is_the_answer_and_the_hotspot_returns(self, nm, monkeypatch):
+        """Bugbot on #182: a refused profile must not wait out the address budget."""
         nm.add_rc = 2
-        r = self._join(nm, monkeypatch, {"2.4"})
+        now = [0.0]
+
+        def sleep(s):
+            now[0] += s
+
+        r = self._join(nm, monkeypatch, {"2.4"}, sleep=sleep, clock=lambda: now[0])
         assert r["ok"] is False
         assert r["ap_restored"] is True
         assert not [c for c in nm.calls if _join_up(c)]
+        # Only the scan wait; no address wait after the refusal.
+        from utils.netctl import ADDRESS_POLL_S, SCAN_WAIT_S
+
+        assert now[0] <= SCAN_WAIT_S + 3 * ADDRESS_POLL_S, now[0]
 
 
 class TestTheHotspotComesBackInAboutAMinute:

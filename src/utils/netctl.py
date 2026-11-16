@@ -160,6 +160,9 @@ JOIN_BUDGET_S = 55.0
 ADDRESS_GRACE_S = 10.0
 # Not worth starting another connect attempt with less than this left.
 MIN_ATTEMPT_S = 8.0
+# The stage `_connect` reports when NetworkManager would not create the join
+# profile. Nothing was brought up, so the join fails at once.
+PROFILE_REFUSED = "profile"
 # Whole join, including association, DHCP, and a gateway or DNS probe.
 # nmcli's own activation timeout is JOIN_TIMEOUT_S and sits inside this budget.
 ADDRESS_WAIT_S = 55.0
@@ -1461,7 +1464,7 @@ def _connect(
             # the answer: there is nothing to bring up.
             nm_text = _redact_secret(err or out or f"nmcli rc {rc}", password)
             logger.warning("Join %s: profile not created: %s", ssid, nm_text)
-            return rc, nm_text, stage
+            return rc, nm_text, PROFILE_REFUSED
         rc, out, err = _nmcli(
             "connection",
             "up",
@@ -1640,7 +1643,7 @@ def _join_network_locked(
     budget_end = clock() + JOIN_BUDGET_S
     # One argv element for the password, so a space or a quote is the
     # password and not a shell metacharacter. Nothing here logs that element.
-    rc, nm_text, _stage = _connect(
+    rc, nm_text, stage = _connect(
         ssid, password, iface, sleep, clock, name=try_name, hidden=hidden, deadline=budget_end
     )
     # The address wait fits inside the budget; a connect NetworkManager
@@ -1649,6 +1652,25 @@ def _join_network_locked(
     if rc == 0:
         deadline = max(deadline, clock() + ADDRESS_GRACE_S)
     fast = _classify_connect_error(nm_text) if rc != 0 else None
+    if rc != 0 and stage == PROFILE_REFUSED:
+        # No profile, nothing activating: waiting for an address would only
+        # keep the hotspot down (Bugbot on #182).
+        fast = fast or "no_association"
+        snap = read_iface_net(iface)
+        return _fail_join(
+            ssid=ssid,
+            password=password,
+            kind=fast,
+            nm_text=nm_text,
+            link_local=list(snap.get("link_local") or []),
+            had_ap=had_ap,
+            ap_ssid=ap_ssid,
+            ap_passphrase=ap_passphrase,
+            iface=iface,
+            sleep=sleep,
+            on_failure=on_failure,
+            profile=try_name,
+        )
     if fast in ("wrong_password", "not_found"):
         snap = read_iface_net(iface)
         # A stale error string must not undo a link that is actually up.
