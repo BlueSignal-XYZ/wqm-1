@@ -301,8 +301,8 @@ class TestPasswords:
         monkeypatch.setattr("utils.netctl.reach_gateway_or_dns", lambda *a, **k: True)
         secret = 'a b$c"d!'
         join_network("PondHouse", secret, sleep=lambda _s: None)
-        connect = next(c for c in fake.calls if c[1:4] == ["device", "wifi", "connect"])
-        assert connect[connect.index("password") + 1] == secret
+        add = next(c for c in fake.calls if c[1:3] == ["connection", "add"] and "con-name" in c)
+        assert add[add.index("wifi-sec.psk") + 1] == secret
 
 
 class TestProbes:

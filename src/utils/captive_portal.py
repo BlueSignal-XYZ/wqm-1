@@ -613,10 +613,13 @@ def _networks_view(networks: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         refused = block_code(net)
         code = refused
-        if refused is None and net.get("band_note"):
-            code = "band_soft"
-        elif refused is None and net.get("security") == "open":
+        # The open-network warning wins over the 5 GHz note: an open network
+        # is usually a sign-in page, and joining one drops the setup hotspot
+        # for a join that cannot reach BlueSignal (docs/installer-mistakes.md).
+        if refused is None and net.get("security") == "open":
             code = "open_network"
+        elif refused is None and net.get("band_note"):
+            code = "band_soft"
         rows.append(
             {
                 "ssid": ssid,

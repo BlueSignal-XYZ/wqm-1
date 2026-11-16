@@ -254,7 +254,7 @@ class TestTeardown:
         assert failed["ap_restored"] is True
         assert read_mode() == "up"
 
-    def test_listener_closes_when_the_station_joins(self, tmp_path, monkeypatch):
+    def test_listener_closes_when_the_station_joins(self, tmp_path, monkeypatch, request):
         mode = tmp_path / "mode"
         monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(mode))
         arm_portal()
@@ -265,6 +265,12 @@ class TestTeardown:
             holder["server"] = server
             started.set()
 
+        # The loop must end with the test. Left running, it kept calling
+        # check_watched_join() every 50 ms for the rest of the session and
+        # consumed a later test's watched join (test_setup_page's
+        # test_a_started_join_is_watched_for_registration failed on the #181
+        # PR run, run 43655022841, and passed alone).
+        stop_loop = threading.Event()
         thread = threading.Thread(
             target=run_loop,
             kwargs={
@@ -272,10 +278,12 @@ class TestTeardown:
                 "address_up": lambda: True,
                 "on_bind": on_bind,
                 "poll_s": 0.05,
+                "stop": stop_loop.is_set,
             },
             daemon=True,
         )
         thread.start()
+        request.addfinalizer(lambda: (stop_loop.set(), thread.join(timeout=3)))
         assert started.wait(3)
         server = holder["server"]
         port = server.server_address[1]  # type: ignore[attr-defined]
