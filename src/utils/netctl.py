@@ -103,7 +103,6 @@ from utils.wifi_setup import (
     parse_iw_link,
     parse_nmcli_wifi,
     probe_sign_in_page,
-    wifi_connect_argv,
 )
 from utils.wifi_setup import parse_iw_scan as _parse_iw_scan
 
@@ -148,6 +147,22 @@ DEFAULT_WIFI_IFACE = "wlan0"
 WIFI_LOCK_PATH = Path("/run/wqm1/wifi.lock")
 WIFI_LOCK_MODE = 0o644
 JOIN_TIMEOUT_S = 40
+# Getting onto the router — scan, association and an address — has ONE
+# budget (Jacques, 2026-11-15: "either connected or the hotspot returns
+# within ~60 s with the plain-language reason"). Before this, the three
+# connect attempts, the scan waits and the address wait could add up to about
+# four minutes with the hotspot down, which read on the phone as "it never
+# came back". The BlueSignal proof after the unit is on the router keeps its
+# own hold (BLUESIGNAL_HOLD_S, spec D5).
+JOIN_BUDGET_S = 55.0
+# A connect that NetworkManager reported as done late in the budget still gets
+# this long to show its address.
+ADDRESS_GRACE_S = 10.0
+# Not worth starting another connect attempt with less than this left.
+MIN_ATTEMPT_S = 8.0
+# The stage `_connect` reports when NetworkManager would not create the join
+# profile. Nothing was brought up, so the join fails at once.
+PROFILE_REFUSED = "profile"
 # Whole join, including association, DHCP, and a gateway or DNS probe.
 # nmcli's own activation timeout is JOIN_TIMEOUT_S and sits inside this budget.
 ADDRESS_WAIT_S = 55.0
@@ -834,7 +849,13 @@ def _classify_connect_error(text: str) -> str | None:
     low = (text or "").lower()
     if "secret" in low or "wrong password" in low or "invalid password" in low:
         return "wrong_password"
-    if "no network with ssid" in low or "ssid not found" in low:
+    if (
+        "no network with ssid" in low
+        or "ssid not found" in low
+        # `nmcli connection up` words it these ways (NetworkManager 1.52).
+        or "network could not be found" in low
+        or "no compatible access point" in low
+    ):
         return "not_found"
     return None
 
@@ -1340,16 +1361,28 @@ def wait_for_ssid(
         sleep(SCAN_POLL_S)
 
 
-def _ensure_try_profile(name: str | None, ssid: str, iface: str) -> None:
-    """Create the temporary station profile with the per-board band policy.
+def try_profile_argv(
+    name: str, ssid: str, password: str | None, iface: str, *, hidden: bool = False
+) -> list[str]:
+    """``nmcli connection add`` for the ONE profile a join activates.
 
-    On a 2.4 GHz-only radio the profile is locked to band ``bg`` so
-    wpa_supplicant picks the 2.4 GHz BSS of a dual-band SSID. Dual-band
-    radios get no lock. ``device wifi connect --name`` then uses this
-    profile. A name that already exists is left as-is.
+    Complete before it is brought up: the SSID, the security and password, and
+    on a 2.4 GHz-only radio the band lock (``802-11-wireless.band bg``), so
+    wpa_supplicant associates with the 2.4 GHz side of a dual-band name.
+
+    Why not ``nmcli device wifi connect … name <n>`` on a pre-made profile
+    (what #181 did): nmcli reuses a same-named profile only when it already
+    fits the access point (``nm_access_point_connection_valid``). A bare
+    profile with no security never fits a WPA2 router, so nmcli built a second
+    profile with the same name, the password and no band lock. The lock never
+    reached the profile that associated, and the rename after a good join
+    could pick either of the two (nmcli 1.52 ``src/nmcli/devices.c``,
+    ``do_device_wifi_connect``).
+
+    WPA-PSK covers WPA2 and WPA2/WPA3 transition networks. WPA3-only,
+    enterprise and WEP are refused before a join starts (``block_code``).
+    The password is one argv element; nothing logs this argv.
     """
-    if not name:
-        return
     from utils.wifi_radio import station_nm_settings
 
     argv = [
@@ -1365,9 +1398,11 @@ def _ensure_try_profile(name: str | None, ssid: str, iface: str) -> None:
         ssid,
         *station_nm_settings(),
     ]
-    rc, _out, err = _nmcli(*argv)
-    if rc != 0:
-        logger.info("Try profile %s not created (%s)", name, (err or "").strip())
+    if hidden:
+        argv.extend(["802-11-wireless.hidden", "yes"])
+    if password:
+        argv.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
+    return argv
 
 
 def _connect(
@@ -1379,6 +1414,7 @@ def _connect(
     *,
     name: str | None = None,
     hidden: bool = False,
+    deadline: float | None = None,
 ) -> tuple[int, str, str]:
     """Scan, connect, and retry the one failure a slow scan causes.
 
@@ -1390,27 +1426,53 @@ def _connect(
        which does not need the network to be in the list at all.
 
     A ``hidden`` network is never in a scan, so it goes straight to the
-    active probe. ``name`` is the temporary profile name; a failed attempt's
-    profile is deleted before the next one.
+    active probe. Each attempt builds one complete profile under ``name``
+    (``try_profile_argv``) and brings exactly that profile up; a failed
+    attempt's profile is deleted before the next one.
+
+    ``deadline`` (a ``clock()`` value) bounds the whole thing: waits shrink to
+    fit and no attempt starts with less than ``MIN_ATTEMPT_S`` left.
 
     Returns (rc, nmcli text with the password redacted, last stage).
     """
-    base = wifi_connect_argv(ssid, password, iface, name=name)
+    name = name or f"{TRY_PROFILE_PREFIX}{secrets.token_hex(4)}"
+
+    def left(cap: float) -> float:
+        if deadline is None:
+            return cap
+        return max(0.0, min(cap, deadline - clock()))
+
     if hidden:
-        attempts = [("hidden", [*base, "hidden", "yes"])]
+        attempts = [("hidden", True)]
     else:
-        seen = wait_for_ssid(ssid, iface, sleep=sleep, clock=clock)
+        seen = wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=left(SCAN_WAIT_S))
         if not seen:
             logger.warning("%s not seen in a scan yet; trying the join anyway", ssid)
-        attempts = [("scan", base), ("rescan", base), ("hidden", [*base, "hidden", "yes"])]
+        attempts = [("scan", False), ("rescan", False), ("hidden", True)]
     rc, nm_text, stage = 0, "", attempts[0][0]
-    for i, (stage, argv) in enumerate(attempts):
+    for i, (stage, probe_hidden) in enumerate(attempts):
+        if i and left(float(JOIN_TIMEOUT_S)) < MIN_ATTEMPT_S:
+            logger.warning("Join %s: out of time after %d attempt(s)", ssid, i)
+            break
         if i == 1:
-            wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=SCAN_WAIT_S / 2)
-        if i and name:
+            wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=left(SCAN_WAIT_S / 2))
+        if i:
             _nmcli("connection", "delete", name)
-        _ensure_try_profile(name, ssid, iface)
-        rc, out, err = _nmcli(*argv, timeout=float(JOIN_TIMEOUT_S))
+        rc, out, err = _nmcli(*try_profile_argv(name, ssid, password, iface, hidden=probe_hidden))
+        if rc != 0:
+            # A profile NetworkManager refuses (a malformed password, say) is
+            # the answer: there is nothing to bring up.
+            nm_text = _redact_secret(err or out or f"nmcli rc {rc}", password)
+            logger.warning("Join %s: profile not created: %s", ssid, nm_text)
+            return rc, nm_text, PROFILE_REFUSED
+        rc, out, err = _nmcli(
+            "connection",
+            "up",
+            name,
+            "ifname",
+            iface,
+            timeout=max(1.0, left(float(JOIN_TIMEOUT_S))),
+        )
         nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
         if rc == 0 or _classify_connect_error(nm_text) != "not_found":
             return rc, nm_text, stage
@@ -1576,15 +1638,39 @@ def _join_network_locked(
         # and a successful join cannot leave the listener up (#136).
         _disarm_portal("joining")
     try_name = f"{TRY_PROFILE_PREFIX}{secrets.token_hex(4)}"
+    # Scan, association and address share one budget, so the hotspot is back
+    # within about a minute of a join that cannot get onto the router.
+    budget_end = clock() + JOIN_BUDGET_S
     # One argv element for the password, so a space or a quote is the
     # password and not a shell metacharacter. Nothing here logs that element.
-    rc, nm_text, _stage = _connect(
-        ssid, password, iface, sleep, clock, name=try_name, hidden=hidden
+    rc, nm_text, stage = _connect(
+        ssid, password, iface, sleep, clock, name=try_name, hidden=hidden, deadline=budget_end
     )
-    # The address budget starts once NetworkManager has the network, so a
-    # slow scan does not eat the DHCP wait.
-    deadline = clock() + address_wait_s
+    # The address wait fits inside the budget; a connect NetworkManager
+    # finished late still gets ADDRESS_GRACE_S to show its address.
+    deadline = min(clock() + address_wait_s, budget_end)
+    if rc == 0:
+        deadline = max(deadline, clock() + ADDRESS_GRACE_S)
     fast = _classify_connect_error(nm_text) if rc != 0 else None
+    if rc != 0 and stage == PROFILE_REFUSED:
+        # No profile, nothing activating: waiting for an address would only
+        # keep the hotspot down (Bugbot on #182).
+        fast = fast or "no_association"
+        snap = read_iface_net(iface)
+        return _fail_join(
+            ssid=ssid,
+            password=password,
+            kind=fast,
+            nm_text=nm_text,
+            link_local=list(snap.get("link_local") or []),
+            had_ap=had_ap,
+            ap_ssid=ap_ssid,
+            ap_passphrase=ap_passphrase,
+            iface=iface,
+            sleep=sleep,
+            on_failure=on_failure,
+            profile=try_name,
+        )
     if fast in ("wrong_password", "not_found"):
         snap = read_iface_net(iface)
         # A stale error string must not undo a link that is actually up.

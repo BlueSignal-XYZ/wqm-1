@@ -406,6 +406,16 @@ class TestNetworks:
         assert view["only_24"] is False
         assert "" not in names
 
+    def test_an_open_network_heard_only_on_5ghz_keeps_its_open_warning(self, portal):
+        """Bugbot on #181 (medium): the 5 GHz note replaced the open-network
+        warning, so an installer could join a sign-in network, drop the
+        setup hotspot, and fail."""
+        _cached(portal, [{"ssid": "HotelFree", "signal": 70, "secured": False, "freq_mhz": 5745}])
+        _status, view = _json(portal, "GET", "/api/networks")
+        row = view["networks"][0]
+        assert row["note"] == "open_network"
+        assert row["joinable"] is True
+
     def test_only_5ghz_in_range_says_so(self, portal):
         _cached(portal, [{"ssid": "Office5G", "signal": 90, "secured": True, "freq_mhz": 5180}])
         _status, view = _json(portal, "GET", "/api/networks")

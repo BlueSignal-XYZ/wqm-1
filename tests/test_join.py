@@ -50,6 +50,8 @@ class Radio:
         self.ap = True
         self.calls: list[list[str]] = []
         self.echo_password = False
+        # The password each `connection add` stored (profile name -> psk).
+        self.psks: dict[str, str | None] = {}
 
     def nmcli(self, *args, timeout=15.0):
         a = [str(x) for x in args]
@@ -67,8 +69,25 @@ class Radio:
             if self.echo_password and password:
                 err = f"{err} (tried {password})"
             return 4, "", err
+        if a[:2] == ["connection", "add"] and "con-name" in a:
+            name = a[a.index("con-name") + 1]
+            self.profiles[name] = a[a.index("ssid") + 1]
+            self.psks[name] = a[a.index("wifi-sec.psk") + 1] if "wifi-sec.psk" in a else None
+            return 0, "", ""
+        if a[:2] == ["connection", "up"] and len(a) > 2 and a[2] in self.psks:
+            name = a[2]
+            ssid = self.profiles[name]
+            password = self.psks[name]
+            if self.networks.get(ssid) == password:
+                self.station = ssid
+                return 0, "Connection successfully activated", ""
+            err = "Error: Connection activation failed: Secrets were required, but not provided."
+            if self.echo_password and password:
+                err = f"{err} (tried {password})"
+            return 4, "", err
         if a[:2] == ["connection", "delete"]:
             self.profiles.pop(a[2], None)
+            self.psks.pop(a[2], None)
             return 0, "", ""
         if a[:2] == ["connection", "modify"] and a[3] == "connection.id":
             ssid = self.profiles.pop(a[2])
@@ -169,10 +188,12 @@ class TestProvenNetworkSurvives:
 
     def test_the_join_is_tried_under_a_temporary_profile(self, radio):
         _join_direct(HOME, RIGHT)
-        connect = next(c for c in radio.calls if c[:3] == ["device", "wifi", "connect"])
-        name = connect[connect.index("name") + 1]
+        add = next(c for c in radio.calls if c[:2] == ["connection", "add"])
+        name = add[add.index("con-name") + 1]
         assert name.startswith(netctl.TRY_PROFILE_PREFIX)
-        assert connect[connect.index("password") + 1] == RIGHT
+        assert add[add.index("wifi-sec.psk") + 1] == RIGHT
+        up = next(c for c in radio.calls if c[:2] == ["connection", "up"])
+        assert up[2] == name
 
     def test_success_renames_the_profile_and_drops_older_ones_for_that_ssid(self, radio):
         radio.profiles = {HOME: HOME, "Smith old": HOME}
@@ -225,10 +246,12 @@ class TestProvenNetworkSurvives:
 
     def test_a_hidden_network_is_probed_directly_under_the_temporary_name(self, radio):
         _join_direct(HOME, RIGHT, hidden=True)
-        connects = [c for c in radio.calls if c[:3] == ["device", "wifi", "connect"]]
-        assert len(connects) == 1
-        assert connects[0][-2:] == ["hidden", "yes"]
-        assert connects[0][connects[0].index("name") + 1].startswith(netctl.TRY_PROFILE_PREFIX)
+        adds = [c for c in radio.calls if c[:2] == ["connection", "add"]]
+        ups = [c for c in radio.calls if c[:2] == ["connection", "up"]]
+        assert len(adds) == 1 and len(ups) == 1
+        assert adds[0][adds[0].index("802-11-wireless.hidden") + 1] == "yes"
+        assert adds[0][adds[0].index("con-name") + 1].startswith(netctl.TRY_PROFILE_PREFIX)
+        assert ups[0][2] == adds[0][adds[0].index("con-name") + 1]
 
 
 # -- Success means BlueSignal answered ---------------------------------------
