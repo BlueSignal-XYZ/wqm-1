@@ -107,6 +107,29 @@ class TestProbeResponses:
         assert b"Microsoft Connect Test" not in resp.body  # type: ignore[attr-defined]
         assert resp.status != 204
 
+    def test_a_phone_that_leaves_and_rejoins_is_sent_back_to_setup(self, portal):
+        """Bench, Nov 15: closing the setup page and rejoining BlueSignal Setup
+        must bring the page back every time, not only on the first join.
+
+        Each round is one rejoin: the phone's probe must be redirected to the
+        setup page again, and the setup page itself must still load. The
+        listener keeps no "already sent" state between requests.
+        """
+        port = portal.server_address[1]
+        rejoin_probes = [
+            ("/hotspot-detect.html", "captive.apple.com"),
+            ("/generate_204", "connectivitycheck.gstatic.com"),
+            ("/connecttest.txt", "www.msftconnecttest.com"),
+        ]
+        for _round in range(3):
+            for path, host in rejoin_probes:
+                probe = _get(port, path, host)
+                assert probe.status == 302, (path, host, _round)
+                assert probe.getheader("Location") == PORTAL_URL
+                page = _get(port, "/setup/", "192.168.4.1")
+                assert page.status == 200, (path, host, _round)
+                assert b"<html" in page.body  # type: ignore[attr-defined]
+
     def test_every_probe_path_and_host_is_classified_as_a_redirect(self):
         for path in PROBE_PATHS:
             assert classify_request(path, "192.168.4.1") == "redirect"
