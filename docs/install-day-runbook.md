@@ -11,7 +11,7 @@ from this repo's image; do not use Imager customisation on that card),
 (first install from scratch), [`installer-mistakes.md`](installer-mistakes.md)
 (the things that send an installer back to the truck: 2.4 GHz only, weak
 signal, the phone on mobile data, enterprise / WPA3 / sign-in Wi-Fi, the
-password, and the probes), [`ota-runbook.md`](ota-runbook.md) §7 (field
+password, and what the page says after Connect), [`ota-runbook.md`](ota-runbook.md) §7 (field
 bootstrap), `marketplace/docs/operations/device-reflash-runbook.md`
 (taking a unit back to zero).
 
@@ -341,19 +341,19 @@ antenna position, not patience. At the default cadence 100,000 rows is ~69 days,
 so a dark site is safe for two months; it is the *partially* connected site that
 silently falls behind.
 
-**T14 — the unit raises its own Wi-Fi when it cannot find yours.** Since the AP
-fallback shipped, a unit that cannot associate with any known network within 45 s
-of NetworkManager starting raises `WQM1-<last four of the serial>` (WPA2, the
-per-unit passphrase from the bench print-out or the enclosure label) with the
-Service Window opens by itself at `http://192.168.4.1/setup/` (the phone's
-captive-portal sheet; port 80). `http://192.168.4.1:8080/setup/` still works
-if the sheet does not. That is how you reach a unit whose flashed SSID does
-not exist at this site, and how service reaches it next year. After the unit
-joins the site network, the local page answers nobody on that network; use
+**T14 — the unit raises its own Wi-Fi when it cannot find yours.** A unit with
+no site network saved raises **BlueSignal Setup** (open, no password) as soon as
+its radio is up; one with a site network saved tries it for 90 s first. The
+phone's captive sheet opens the Wi-Fi page at `http://192.168.4.1/setup/` (port
+80). That page sets only Wi-Fi; port 8080 answers nothing on the setup network.
+That is how you reach a unit whose saved network does not exist at this site,
+and how service reaches it next year. Joining from that page turns the setup
+network off for the join; a failed join brings it back within five minutes with
+the reason. A unit that later loses both networks raises it again by itself:
+within about a minute with nothing saved, after five minutes with a site network
+saved (a router reboot gets that long to come back). While no phone is on the
+setup network, the saved network is retried every five minutes. After the unit
+joins the site network, the local pages answer nobody on that network; use
 BlueSignal Cloud, or an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<unit-ip>`,
-then `http://localhost:8080`) for bench work.
-Joining the site network from that page turns the AP off for the join; a failed
-join brings it straight back — reconnect and try again. Declare on the same page
-what the unit IS (Wi-Fi / LTE / no network; LoRa and GPS fitted or not): the
-finish screen grades only what you declare, and "no network here" is a valid
-answer, not a failure.
+then `http://localhost:8080`) for bench work. Probes are confirmed in Cloud on
+the unit's page.
