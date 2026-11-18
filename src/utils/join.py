@@ -274,11 +274,13 @@ def _failed(ssid: str, result: dict[str, Any], password: str | None) -> dict[str
     }
 
 
-def _record_attempt(ssid: str, reason: str, password: str | None) -> None:
+def _record_attempt(
+    ssid: str, reason: str, password: str | None, detail: str | None = None
+) -> None:
     try:
         from diagnostics.boot_status import record_join_attempt
 
-        record_join_attempt(ssid, reason, secret=password)
+        record_join_attempt(ssid, reason, secret=password, detail=detail)
     except Exception as e:  # noqa: BLE001 - the status file never decides the join
         logger.error("Could not record the join attempt: %s", e)
 
@@ -356,7 +358,7 @@ def _run(
         else:
             failed = _failed(ssid, result, password)
             _write_state(failed)
-            _record_attempt(ssid, str(failed["reason"]), password)
+            _record_attempt(ssid, str(failed["reason"]), password, result.get("error"))
     except Exception:
         logger.exception("Join %s failed in the background", ssid)
         if not joined:

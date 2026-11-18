@@ -258,6 +258,11 @@ def _run(argv: list[str], timeout: float = 15.0) -> tuple[int, str, str]:
             timeout=timeout,
             check=False,
         )
+    except subprocess.TimeoutExpired:
+        # str() of the exception carries the whole argv, which for
+        # `nmcli connection add` holds the password. The first three words
+        # say what timed out.
+        return 124, "", f"{' '.join(argv[:3])} timed out after {timeout:.0f} s"
     except (OSError, subprocess.SubprocessError) as e:
         return 1, "", str(e)
     return out.returncode, out.stdout.strip(), out.stderr.strip()
