@@ -41,9 +41,27 @@ en: dict[str, str] = {
         "This network is open. If it has a sign-in page, the unit can't use it. "
         "A network with a normal password works."
     ),
-    "drop_warning": ("Your phone will leave this network when you tap Connect. Watch the lights."),
-    "joining": "Connecting to {ssid}. Watch the lights.",
-    "busy": "Already connecting to {ssid} — watch the lights",
+    "drop_warning": "Your phone leaves this network when you tap Connect.",
+    "joining": "Connecting to {ssid}.",
+    "busy": "The unit is already connecting to {ssid}.",
+    "handover_title": "Connecting to {ssid}",
+    "handover_off": (
+        "BlueSignal Setup turns off while the unit joins, and your phone leaves it. "
+        "That is expected."
+    ),
+    "handover_back": (
+        "If the unit can't join, BlueSignal Setup comes back within five minutes. "
+        "Join it again to see why."
+    ),
+    "handover_joined": (
+        "If BlueSignal Setup does not come back, the unit is on your Wi-Fi. "
+        "Finish in BlueSignal Cloud."
+    ),
+    "handover_away": "BlueSignal Setup is off now. This page updates if it comes back.",
+    "handover_done": (
+        "BlueSignal Setup has not come back, so the unit is most likely on {ssid}. "
+        "Finish in BlueSignal Cloud."
+    ),
     "joined": "{ssid} is connected. Finish in BlueSignal Cloud.",
     "pick_first": "Pick a network, or type its name.",
     "network_name_bad": "That network name can't be used. Pick one from the list.",
@@ -121,9 +139,26 @@ es: dict[str, str] = {
         "Esta red está abierta. Si pide iniciar sesión en una página, la unidad no puede usarla. "
         "Una red con contraseña normal sí funciona."
     ),
-    "drop_warning": ("Su teléfono saldrá de esta red cuando toque Conectar. Mire las luces."),
-    "joining": "Conectando a {ssid}. Mire las luces.",
-    "busy": "Ya se está conectando a {ssid} — mire las luces",
+    "drop_warning": "Su teléfono sale de esta red cuando toca Conectar.",
+    "joining": "Conectando a {ssid}.",
+    "busy": "La unidad ya se está conectando a {ssid}.",
+    "handover_title": "Conectando a {ssid}",
+    "handover_off": (
+        "La red BlueSignal Setup se apaga mientras la unidad se conecta, y su teléfono "
+        "sale de ella. Es normal."
+    ),
+    "handover_back": (
+        "Si la unidad no puede conectarse, BlueSignal Setup vuelve en menos de cinco "
+        "minutos. Conéctese a ella otra vez para ver por qué."
+    ),
+    "handover_joined": (
+        "Si BlueSignal Setup no vuelve, la unidad ya está en su Wi-Fi. Termine en BlueSignal Cloud."
+    ),
+    "handover_away": "BlueSignal Setup está apagada ahora. Esta página se actualiza si vuelve.",
+    "handover_done": (
+        "BlueSignal Setup no ha vuelto, así que lo más probable es que la unidad esté "
+        "en {ssid}. Termine en BlueSignal Cloud."
+    ),
     "joined": "{ssid} está conectada. Termine en BlueSignal Cloud.",
     "pick_first": "Elija una red o escriba su nombre.",
     "network_name_bad": "Ese nombre de red no se puede usar. Elija una de la lista.",
