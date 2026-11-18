@@ -40,7 +40,7 @@ logger = logging.getLogger("wqm1.boot_status")
 WEAK_POWER_REASON = "weak power supply or cable"
 
 # The last JOIN_HISTORY Wi-Fi join attempts, newest first (W7): time, SSID,
-# reason. Never the password.
+# reason, and for a failure NetworkManager's own words. Never the password.
 JOIN_HISTORY = 5
 _JOIN_KEYS = tuple(f"join_{i}" for i in range(1, JOIN_HISTORY + 1))
 
@@ -817,14 +817,43 @@ def write_boot_status(
     return text
 
 
-def record_join_attempt(ssid: str, reason: str, *, secret: str | None = None) -> str:
+# NetworkManager's own words after the reason, cut to this many characters.
+JOIN_DETAIL_MAX = 80
+
+
+def join_detail(detail: str | None, secret: str | None = None) -> str:
+    """One short line of NetworkManager's text for the join history, or "".
+
+    The typed password is removed, and a line that still looks like a secret
+    is dropped rather than written.
+    """
+    text = " ".join(str(detail or "").split())
+    if secret and len(secret) >= 4:
+        text = text.replace(secret, "[redacted]")
+    if not text or _SECRET.search(text):
+        return ""
+    if len(text) > JOIN_DETAIL_MAX:
+        text = text[: JOIN_DETAIL_MAX - 3].rstrip() + "..."
+    return text
+
+
+def record_join_attempt(
+    ssid: str, reason: str, *, secret: str | None = None, detail: str | None = None
+) -> str:
     """Add one join attempt to the card's status file, newest first.
 
-    ``reason`` is ``joined`` or a failure kind. ``secret`` is the password
-    that was typed: any line containing it is redacted for this write (I2).
+    ``reason`` is ``joined`` or a failure kind. ``detail`` is NetworkManager's
+    text for a failure (Jacques, 2026-11-17: ``no_association`` alone could
+    not say why a Pi 4 never got onto the router). ``secret`` is the password
+    that was typed: it is removed from the detail, and any line containing it
+    is redacted for this write (I2).
     """
     stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"{stamp} {ssid} {reason}"
+    said = join_detail(detail, secret) if reason != "joined" else ""
+    if said:
+        line = f"{line} - {said}"
     return write_boot_status(
-        join_attempt=f"{stamp} {ssid} {reason}",
+        join_attempt=line,
         secrets=(secret,) if secret else (),
     )
