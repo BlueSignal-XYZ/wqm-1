@@ -175,6 +175,16 @@ JOIN_BUDGET_S = 55.0
 ADDRESS_GRACE_S = 10.0
 # Not worth starting another connect attempt with less than this left.
 MIN_ATTEMPT_S = 8.0
+# A radio that can join 5 GHz (Pi 3B+, 4, 5) lets wpa_supplicant pick either
+# side of a dual-band name. When that first try cannot get on, the same name
+# is tried once more locked to 2.4 GHz (Jacques, 2026-11-17: a Pi 4 on a
+# Spectrum router never associated). The first try is capped so the second
+# fits inside JOIN_BUDGET_S.
+FIRST_BAND_ATTEMPT_S = 25.0
+# The 2.4 GHz retry runs on these failures. A network that is not in the scan
+# at all has its own path (rescan, then a hidden probe); a profile NetworkManager
+# refused is the answer.
+_BAND_RETRY_KINDS = frozenset({None, "wrong_password"})
 # The stage `_connect` reports when NetworkManager would not create the join
 # profile. Nothing was brought up, so the join fails at once.
 PROFILE_REFUSED = "profile"
@@ -1474,7 +1484,13 @@ def wait_for_ssid(
 
 
 def try_profile_argv(
-    name: str, ssid: str, password: str | None, iface: str, *, hidden: bool = False
+    name: str,
+    ssid: str,
+    password: str | None,
+    iface: str,
+    *,
+    hidden: bool = False,
+    lock_2g4: bool = False,
 ) -> list[str]:
     """``nmcli connection add`` for the ONE profile a join activates.
 
@@ -1494,6 +1510,9 @@ def try_profile_argv(
     WPA-PSK covers WPA2 and WPA2/WPA3 transition networks. WPA3-only,
     enterprise and WEP are refused before a join starts (``block_code``).
     The password is one argv element; nothing logs this argv.
+
+    ``lock_2g4`` adds the 2.4 GHz lock on any radio: the second try a
+    dual-band radio makes when the first could not get on.
     """
     from utils.wifi_radio import station_nm_settings
 
@@ -1508,13 +1527,40 @@ def try_profile_argv(
         iface,
         "ssid",
         ssid,
-        *station_nm_settings(),
+        *station_nm_settings(frozenset({"2.4"}) if lock_2g4 else None),
     ]
     if hidden:
         argv.extend(["802-11-wireless.hidden", "yes"])
     if password:
         argv.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
     return argv
+
+
+def _radio_allows_5ghz() -> bool:
+    try:
+        from utils.wifi_radio import allows_5ghz
+
+        return allows_5ghz()
+    except Exception:  # noqa: BLE001 - an unknown radio is treated as 2.4 GHz only
+        logger.exception("Could not read the radio's bands")
+        return False
+
+
+def _iw_link_ssid(iface: str) -> str | None:
+    """SSID ``iw`` says the radio is associated to, or None."""
+    rc, out, _ = _run(["iw", "dev", iface, "link"], timeout=5)
+    if rc != 0:
+        return None
+    for line in (out or "").splitlines():
+        key, sep, val = line.strip().partition(":")
+        if sep and key.strip() == "SSID":
+            return val.strip() or None
+    return None
+
+
+def _associated_to(ssid: str, iface: str) -> bool:
+    """True when the radio is on ``ssid`` already (an address may still be coming)."""
+    return _iw_link_ssid(iface) == ssid or associated_ssid(iface) == ssid
 
 
 def _connect(
@@ -1528,7 +1574,7 @@ def _connect(
     hidden: bool = False,
     deadline: float | None = None,
 ) -> tuple[int, str, str]:
-    """Scan, connect, and retry the one failure a slow scan causes.
+    """Scan, connect, and retry the failures a slow scan or a band causes.
 
     1. Wait for the SSID to appear in a fresh scan (a just-released radio
        has an empty list).
@@ -1536,6 +1582,13 @@ def _connect(
        retry.
     3. Then try it as a hidden network (an active probe for this SSID),
        which does not need the network to be in the list at all.
+
+    A radio that can join 5 GHz makes its first try with no band lock, capped
+    at ``FIRST_BAND_ATTEMPT_S``. If that try fails for any reason but "not
+    found", and the radio is not on the network (an address can still be
+    coming), the same name is tried once more locked to 2.4 GHz, and every
+    later try keeps the lock. A 2.4 GHz-only radio is locked from the start
+    and never makes that extra try.
 
     A ``hidden`` network is never in a scan, so it goes straight to the
     active probe. Each attempt builds one complete profile under ``name``
@@ -1561,34 +1614,57 @@ def _connect(
         if not seen:
             logger.warning("%s not seen in a scan yet; trying the join anyway", ssid)
         attempts = [("scan", False), ("rescan", False), ("hidden", True)]
+    band_retry_left = _radio_allows_5ghz()
+    lock_2g4 = False
     rc, nm_text, stage = 0, "", attempts[0][0]
-    for i, (stage, probe_hidden) in enumerate(attempts):
+    i = 0
+    while i < len(attempts):
+        stage, probe_hidden = attempts[i]
         if i and left(float(JOIN_TIMEOUT_S)) < MIN_ATTEMPT_S:
             logger.warning("Join %s: out of time after %d attempt(s)", ssid, i)
             break
-        if i == 1:
+        if stage == "rescan":
             wait_for_ssid(ssid, iface, sleep=sleep, clock=clock, wait_s=left(SCAN_WAIT_S / 2))
         if i:
             _nmcli("connection", "delete", name)
-        rc, out, err = _nmcli(*try_profile_argv(name, ssid, password, iface, hidden=probe_hidden))
+        rc, out, err = _nmcli(
+            *try_profile_argv(name, ssid, password, iface, hidden=probe_hidden, lock_2g4=lock_2g4)
+        )
         if rc != 0:
             # A profile NetworkManager refuses (a malformed password, say) is
             # the answer: there is nothing to bring up.
             nm_text = _redact_secret(err or out or f"nmcli rc {rc}", password)
             logger.warning("Join %s: profile not created: %s", ssid, nm_text)
             return rc, nm_text, PROFILE_REFUSED
+        cap = FIRST_BAND_ATTEMPT_S if band_retry_left else float(JOIN_TIMEOUT_S)
         rc, out, err = _nmcli(
             "connection",
             "up",
             name,
             "ifname",
             iface,
-            timeout=max(1.0, left(float(JOIN_TIMEOUT_S))),
+            timeout=max(1.0, left(cap)),
         )
         nm_text = _redact_secret(err or out or (f"nmcli rc {rc}" if rc else ""), password)
-        if rc == 0 or _classify_connect_error(nm_text) != "not_found":
+        if rc == 0:
+            return rc, nm_text, stage
+        kind = _classify_connect_error(nm_text)
+        if band_retry_left and kind in _BAND_RETRY_KINDS:
+            band_retry_left = False
+            if _associated_to(ssid, iface):
+                # On the network, waiting for an address: the address wait decides.
+                return rc, nm_text, stage
+            logger.warning(
+                "Join %s: %s (radio's own band choice) — trying the 2.4 GHz side", ssid, nm_text
+            )
+            lock_2g4 = True
+            attempts.insert(i + 1, ("2.4ghz", probe_hidden))
+            i += 1
+            continue
+        if kind != "not_found":
             return rc, nm_text, stage
         logger.warning("Join %s: %s (attempt %d/%d)", ssid, nm_text, i + 1, len(attempts))
+        i += 1
     return rc, nm_text, stage
 
 
