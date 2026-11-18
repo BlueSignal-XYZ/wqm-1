@@ -7,6 +7,10 @@ Description=BlueSignal WQM-1 Wi-Fi join helper (root, local socket for the port-
 # /run/bluesignal/wifi-join.sock (mode 0600, owned by the install user, peer
 # uid checked). It listens on no network port. No RuntimeDirectory= here:
 # a root unit declaring it would take /run/bluesignal from the install user.
+# Never give up restarting: a page that stops answering while BlueSignal
+# Setup is on the air leaves the installer with nothing. The default start
+# limit (5 in 10 s) would refuse every restart until a reboot.
+StartLimitIntervalSec=0
 After=NetworkManager.service
 Wants=NetworkManager.service
 

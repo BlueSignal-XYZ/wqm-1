@@ -95,6 +95,7 @@ from utils.captive_portal import (
     ensure_dnsmasq_conf,
     wait_until_reachable,
 )
+from utils.captive_portal import read_mode as read_portal_mode
 from utils.cardmove import confirm_binding, wifi_reconfirm_required
 from utils.wifi_setup import (
     CAPTIVE_JOIN_MESSAGE,
@@ -2483,6 +2484,13 @@ def _guard_hotspot_locked(
 ) -> dict[str, Any]:
     if ap_active(iface):
         _clear_guard()
+        if read_portal_mode() != "up":
+            # BlueSignal Setup is on the air, so the page must answer. Its mode
+            # file can go missing (an older unit file let a firmware restart
+            # delete /run/bluesignal), and the page reads that as "down".
+            logger.warning("Setup hotspot is up but the page was not armed; arming it")
+            _arm_portal()
+            return {"skipped": "hotspot up", "rearmed": True}
         return {"skipped": "hotspot up"}
     if _station_ready(iface):
         _clear_guard()

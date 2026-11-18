@@ -115,6 +115,8 @@ def _no_real_bluesignal_probe(monkeypatch, tmp_path):
         monkeypatch.setenv("WQM1_SCAN_CACHE", str(tmp_path / "scan.json"))
     if "WQM1_WIFI_LOCK" not in os.environ:
         monkeypatch.setenv("WQM1_WIFI_LOCK", str(tmp_path / "wifi.lock"))
+    if "WQM1_PORTAL_MODE_FILE" not in os.environ:
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "captive-portal.mode"))
     if "WQM1_HOTSPOT_GUARD_STATE" not in os.environ:
         monkeypatch.setenv("WQM1_HOTSPOT_GUARD_STATE", str(tmp_path / "hotspot-guard.json"))
     yield
