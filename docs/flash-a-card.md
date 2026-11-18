@@ -115,6 +115,10 @@ cat /Volumes/bootfs/wqm1-status.txt
 | No `wqm1-status.txt` | The Pi never started Linux from this card. | Write it again with Imager, which verifies the write. Check it's the `wqm1-pi-zero` file for a Zero W. Try a second card and a known-good power supply. |
 | `BOOT: stage=boot` and little else | Linux started, but the firmware didn't get far. | Paste the file to the firmware team. |
 | `hotspot: failed: <reason>` | The radio couldn't raise the setup network. | Paste the file. |
+| `hotspot: down`, `station: fail: …` | A join failed and the setup network didn't come back yet. The unit keeps trying to raise it by itself. | Power it on again and wait five minutes. Still missing: paste `wqm1-status.txt` and `wqm1-apfail.txt`. |
+| `wqm1-apfail.txt` next to it | The setup network would not come back. It holds hostapd's and NetworkManager's last lines. | Paste both files. |
+| `join_1: <time> <network> <reason> - <words>` | The last joins, newest first, with NetworkManager's own words. | Read the reason; the fix is in [installer-mistakes.md](installer-mistakes.md). |
+| `COMMISSION: FAIL: adc faulted` | The analog board did not answer. | Expected on a bench Pi with no HAT, or a HAT with no 24 V. On a full unit: reseat the HAT and power it from 24 V. |
 | `station: ok <ip>` | The unit joined a Wi-Fi saved on the card, so it doesn't raise the setup network. | The card was customised in Imager. Write it again and choose **No** to customisation. |
 | `power: undervoltage seen` | Weak supply or cable. | Use a better supply and a short cable. |
 | `COMMISSION: READY` | The unit is fine. | Look for the network name from the card label again, and give the phone a minute to rescan. |

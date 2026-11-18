@@ -55,14 +55,15 @@ If the network is missing after 10 minutes, power off, read
 
 1. The Wi-Fi page should open by itself (captive portal). If it does not,
    open `http://192.168.4.1/setup/`.
-2. There is no PIN. The page sets only this unit's Wi-Fi.
-3. Confirm the probes that are actually fitted.
-4. Pick the site Wi-Fi, type the password, tap Join. The setup network
-   will drop. That is expected.
-5. Success: the phone lands on the site Wi-Fi, and the setup network is
-   gone. Failure: the setup network comes back within about a minute and
-   the page says which check failed (password, not found, no address, no
-   internet, or BlueSignal not reached).
+2. There is no PIN. The page sets only this unit's Wi-Fi; the probes are
+   confirmed in Cloud in §4.
+3. Pick the site Wi-Fi, type the password, tap **Connect**. The page shows
+   "Connecting to …" and the setup network drops. That is expected.
+4. Success: the setup network stays gone. Failure: it comes back within
+   five minutes, usually within one. Join it again and the page says which
+   check failed (password, not found, no address, no internet, sign-in
+   page, or the router blocking new devices). The full list is in
+   [installer-mistakes.md](installer-mistakes.md), *After you tap Connect*.
 
 A join is success only when `wlan0` is on that SSID, has a real IPv4
 lease (not `169.254.x`), and the unit reached BlueSignal over HTTPS.
@@ -70,17 +71,19 @@ lease (not `169.254.x`), and the unit reached BlueSignal over HTTPS.
 ## 4. Claim and first reading
 
 1. Scan the box-label QR and claim the unit in BlueSignal Cloud.
-2. On Cloud, wait one sample interval (default 60 s) for the first
+2. On the unit's page in Cloud, tick the probes that are actually fitted.
+3. Wait one sample interval (default 60 s) for the first
    reading. pH, TDS, turbidity and temperature appear once those probes
    are fitted and the HAT is on 24 V. USB-C on the Pi alone will not
    power the analog rails.
-3. If Cloud is empty, pull the card and read `wqm1-status.txt`:
+4. If Cloud is empty, pull the card and read `wqm1-status.txt`:
 
 | Line | Meaning |
 |---|---|
 | `station: ok <ip>` | The unit joined the site Wi-Fi. Cloud claim or the ingest URL is the next check. |
-| `station: fail: …` | The join did not hold. Repeat §3. |
+| `station: fail: …` | The last join did not hold. `join_1:` gives the reason and NetworkManager's own words. Repeat §3. |
 | `hotspot: up` | Still on the setup network. Join did not finish. |
+| `hotspot: down` | On neither network. The unit raises the setup network again within a few minutes by itself; if it never does, send `wqm1-status.txt` and `wqm1-apfail.txt`. |
 | `COMMISSION: READY` | First-boot checks passed. Look at Cloud and the journal. |
 
 On a bench with SSH (optional): `journalctl -u bluesignal-wqm -n 80`

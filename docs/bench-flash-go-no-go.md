@@ -115,20 +115,21 @@ tolerated in software; a dead card is not.
 
 1. The captive portal should open the Wi-Fi page. If it does not, type
    `http://192.168.4.1/setup/` (no `:8080`).
-2. There is no PIN. The page sets only this unit's Wi-Fi.
-3. Confirm the probes that are actually fitted. USB-C alone will not
-   power the analog rails; 24 V will.
+2. There is no PIN. The page sets only this unit's Wi-Fi. The probes are
+   confirmed in Cloud after the claim. USB-C alone will not power the
+   analog rails; 24 V will.
 
-**Expected:** a list of 2.4 GHz networks, four bars, English (or
-Spanish) sentences. A 5 GHz-only router is named and refused before
-Join. A signal below −70 dBm is warned.
+**Expected:** a list of networks, four bars, English (or Spanish)
+sentences. A name heard only on 5 GHz carries a note and can still be
+joined. Enterprise, WPA3-only and WEP rows are greyed out with the reason.
+A signal below −70 dBm is warned.
 
 **Blank page / phone bounced to cell:** mobile data still on, or the
 phone dropped **BlueSignal Setup**. Turn data off, rejoin, type the
 address. See [installer-mistakes.md](installer-mistakes.md).
 
 **Phone leaves mid-join:** the join keeps running. Wait. If it failed,
-the setup network comes back with the reason. Do not tap Join again
+the setup network comes back with the reason. Do not tap Connect again
 until the page says failed or the setup network is back.
 
 **Only 5 GHz in range:** turn 2.4 GHz on at the router, or pick the
@@ -141,8 +142,10 @@ normal WPA2 password network. Same card.
 
 1. Pick the 2.4 GHz WPA2 network. Type the password. Use **Show
    password**. A trailing space is stripped unless you tick the box.
-2. Tap Join. The setup network **will drop**. That is expected.
-3. Wait up to about a minute.
+2. Tap **Connect**. The page shows "Connecting to …" and the setup
+   network **will drop**. That is expected.
+3. Wait. A failure brings the setup network back within five minutes,
+   usually within one.
 
 A join is success only when all four are true (`utils/netctl.py`
 `join_network`):

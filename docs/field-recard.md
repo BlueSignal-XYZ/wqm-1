@@ -107,7 +107,7 @@ two minutes the unit joins the saved network by itself. Check, in order:
 2. If not: the open setup network **BlueSignal Setup** comes up (firmware
    with install plan §5; older firmware names it after the label,
    `WQM1-0001`). Join it from a phone. The page that opens is the Wi-Fi
-   page, with no PIN and no password. Pick the network and tap Join; the join now scans
+   page, with no PIN and no password. Pick the network and tap Connect; the join now scans
    before connecting.
 3. If you need to leave: the unit retries the saved network every five
    minutes while no phone is on its hotspot. A router that comes back
