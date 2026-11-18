@@ -25,6 +25,10 @@ SupplementaryGroups=dialout gpio i2c spi
 ReadWritePaths=/etc/bluesignal
 RuntimeDirectory=bluesignal
 RuntimeDirectoryMode=0755
+# Keep /run/bluesignal when this unit stops or restarts. Three units share
+# it, and systemd otherwise deletes it on any one stop, taking the setup
+# page's mode file and the scan list from the units still running.
+RuntimeDirectoryPreserve=yes
 WorkingDirectory=/opt/bluesignal/src
 ExecStart=/usr/bin/python3 -m service_window
 Restart=on-failure

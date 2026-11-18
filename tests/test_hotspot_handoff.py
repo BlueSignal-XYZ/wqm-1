@@ -229,7 +229,10 @@ class TestTheGuardRaisesTheHotspot:
         assert nm.ap is True
 
     def test_it_leaves_a_hotspot_that_is_up_alone(self, nm, clock):
+        from utils import captive_portal
+
         nm.ap = True
+        captive_portal.arm_portal()
         assert self._guard(clock) == {"skipped": "hotspot up"}
         assert not _hostapd_starts(nm)
 

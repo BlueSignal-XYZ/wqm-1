@@ -1278,6 +1278,9 @@ def ensure_packaged_unit(name: str, *, as_service_user: bool) -> dict[str, Any]:
         rc, _out, err = _systemctl("daemon-reload")
         if rc != 0:
             return {"ok": False, "error": err or f"daemon-reload rc {rc}"}
+    # A unit that crashed past its start limit refuses `start` until this
+    # clears it. Harmless on a unit that never failed.
+    _systemctl("reset-failed", name)
     rc, _out, err = _systemctl("enable", "--now", name)
     if rc != 0:
         return {"ok": False, "error": err or f"systemctl rc {rc}"}
