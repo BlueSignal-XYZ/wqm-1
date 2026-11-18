@@ -122,7 +122,7 @@ def radio(monkeypatch, tmp_path):
     monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": r.ap)
     monkeypatch.setattr(netctl, "stop_ap", lambda iface="wlan0": setattr(r, "ap", False))
 
-    def start_ap(ssid, passphrase, iface="wlan0"):
+    def start_ap(ssid, passphrase, iface="wlan0", **_kw):
         r.ap = True
         return {"ok": True}
 

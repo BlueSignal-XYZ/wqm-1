@@ -13,4 +13,6 @@ WorkingDirectory=/opt/bluesignal/current/src
 ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-ap-fallback.py --retry
 Environment=PYTHONPATH=/opt/bluesignal/current/src
 Environment=PYTHONUNBUFFERED=1
-TimeoutStartSec=150
+# RETRY_BUDGET_S (110) plus a hotspot restore that keeps trying for
+# AP_RESTORE_S (45) and one more start.
+TimeoutStartSec=210
