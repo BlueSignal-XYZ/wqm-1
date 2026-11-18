@@ -1,0 +1,16 @@
+[Unit]
+Description=BlueSignal WQM-1 raise the setup hotspot on a unit that is on neither network
+# Started by bluesignal-hotspot-guard.timer. Does nothing while a join or the
+# saved-network retry holds the radio, while bluesignal-ap-fallback is still
+# running, when the hotspot is up, or when the unit is on its site Wi-Fi.
+# A unit with a site network saved waits five minutes for it first.
+After=NetworkManager.service bluesignal-ap-fallback.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/bluesignal/current/src
+ExecStart=/usr/bin/python3 /opt/bluesignal/current/scripts/wqm1-ap-fallback.py --guard
+Environment=PYTHONPATH=/opt/bluesignal/current/src
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=150

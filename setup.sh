@@ -517,6 +517,10 @@ sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system
 # (router slower than the Pi after a power cut). Never while a phone is on it.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.service" /etc/systemd/system/
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.timer" /etc/systemd/system/
+# Once a minute: a unit on neither its site Wi-Fi nor its own hotspot gets
+# the hotspot back (a restore that failed after a join used to strand it).
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-hotspot-guard.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-hotspot-guard.timer" /etc/systemd/system/
 # Not enabled. OnFailure= of bluesignal-ap-fallback.service starts it.
 sudo cp "$SCRIPT_DIR/systemd/wqm1-apfail.service" /etc/systemd/system/
 # Setup AP processes. Not enabled: netctl starts and stops them. The distro
@@ -558,6 +562,7 @@ sudo systemctl enable bluesignal-wifi-join.service
 sudo systemctl enable bluesignal-ota.service
 sudo systemctl enable bluesignal-ap-fallback.service
 sudo systemctl enable bluesignal-wifi-retry.timer
+sudo systemctl enable bluesignal-hotspot-guard.timer
 sudo systemctl enable bluesignal-burnin.service
 sudo systemctl enable bluesignal-card.service
 
