@@ -125,10 +125,10 @@ SCENARIOS = [
     Scenario("no_dhcp", "Router hands out no address", "no_dhcp", dhcp=False),
     Scenario(
         "no_bluesignal",
-        "Internet up, BlueSignal unreachable (held 180 s for device approval, spec D5)",
+        "Internet up, BlueSignal unreachable (held 60 s for device approval, spec D5)",
         "no_bluesignal",
         https=False,
-        answer_within_s=215,
+        answer_within_s=90,
     ),
     Scenario(
         "captive_sign_in", "Guest network with a sign-in page", "captive_sign_in", probe="portal"

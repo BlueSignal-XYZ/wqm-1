@@ -158,11 +158,14 @@ keeps working in the meantime" on BlueSignal Setup: it does not, once
    counts; it proves DNS, routing and TLS through this network. Keep the
    gateway/DNS probe as the first step, so `no_internet` stays a distinct
    reason.
-3. **Three-minute hold (D5).** If the unit has an address but BlueSignal does
-   not answer, keep trying every 10 s for 180 s before failing with
+3. **One-minute hold (D5).** If the unit has an address but BlueSignal does
+   not answer, keep trying every 10 s for 60 s before failing with
    `no_bluesignal`. A router that asks the owner to approve new devices
    (Eero, Firewalla) is approved in that window without anyone redoing the
-   join.
+   join. A slower approval fails as `no_bluesignal`, and the page tells the
+   installer to approve the unit in the router app and tap Connect again.
+   (It was 180 s until 2026-11-23. The hotspot is down for the whole hold,
+   so Jacques shortened it.)
 4. **Clock fix (D6).** If TLS fails with a certificate-time error and
    timesyncd has not synced, fetch `http://<api host>/` over plain HTTP,
    read the `Date` header, and set the clock forward only, through the
@@ -226,8 +229,8 @@ keeps working in the meantime" on BlueSignal Setup: it does not, once
   `join.read_state()` in a fresh import (simulated restart) still says so.
 - Same SSID already proven, wrong password typed: the proven profile still
   exists afterwards (I3). This test fails on master.
-- Address but BlueSignal blocked for 120 s, then reachable: joined, no
-  failure written. Blocked for 200 s: `no_bluesignal` after 180 s.
+- Address but BlueSignal blocked for 40 s, then reachable: joined, no
+  failure written. Blocked for 80 s: `no_bluesignal` after 60 s.
 - Clock 1 year 11 months behind, TLS time error: clock set forward
   from the Date header, retry succeeds. Clock exactly two years
   behind: clock set forward (the cap is inclusive). Clock two years

@@ -264,29 +264,33 @@ class TestReachBlueSignal:
         assert result["ok"] is True
         assert seen == ["https://api.bluesignal.test/"]
 
-    def test_blocked_for_two_minutes_then_reachable_joins(self):
+    def test_the_hold_is_one_minute(self):
+        # Jacques, 2026-11-23: the hotspot is down for the whole hold.
+        assert netctl.BLUESIGNAL_HOLD_S == 60.0
+
+    def test_blocked_for_forty_seconds_then_reachable_joins(self):
         c = FakeClock()
         result = netctl.reach_bluesignal(
             API,
             sleep=c.sleep,
             clock=c.clock,
-            probe=lambda url: "ok" if c.t >= 120 else "fail",
+            probe=lambda url: "ok" if c.t >= 40 else "fail",
         )
         assert result["ok"] is True
-        assert 120 <= c.t < 180
+        assert 40 <= c.t < 60
 
-    def test_blocked_past_three_minutes_gives_up_at_three(self):
+    def test_blocked_past_a_minute_gives_up_at_one(self):
         c = FakeClock()
         result = netctl.reach_bluesignal(
             API,
             sleep=c.sleep,
             clock=c.clock,
-            probe=lambda url: "ok" if c.t >= 200 else "fail",
+            probe=lambda url: "ok" if c.t >= 80 else "fail",
         )
         assert result["ok"] is False
-        assert 180 <= c.t < 200
+        assert 60 <= c.t < 80
 
-    def test_blocked_for_two_hundred_seconds_fails_the_join_as_no_bluesignal(self, radio):
+    def test_blocked_for_eighty_seconds_fails_the_join_as_no_bluesignal(self, radio):
         c = FakeClock()
         result = netctl.join_network(
             HOME,
@@ -297,7 +301,7 @@ class TestReachBlueSignal:
             clock=c.clock,
             api_base=API,
             reach=lambda base, **k: netctl.reach_bluesignal(
-                base, probe=lambda url: "ok" if c.t >= 200 else "fail", **k
+                base, probe=lambda url: "ok" if c.t >= 80 else "fail", **k
             ),
         )
         assert result["reason"] == "no_bluesignal"
