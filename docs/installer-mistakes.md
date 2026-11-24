@@ -4,7 +4,12 @@ Written for the person holding the phone at the tank, not for the shop.
 The setup page says the same things. This page is the longer version, for
 the night before and for the drive back when something did not join.
 
-The unit's radio is the one on a Pi Zero W: **2.4 GHz only**.
+The phone on **BlueSignal Setup** sees one page: pick the Wi-Fi, type its
+password, tap **Connect**. That page sets only the unit's Wi-Fi. The probes
+are confirmed afterwards in BlueSignal Cloud, on the unit's page.
+
+The production unit (Pi Zero 2 W) hears **2.4 GHz only**. A Pi 4 or Pi 5
+bench unit hears 5 GHz too.
 
 ## The phone will not open the page
 
@@ -23,23 +28,27 @@ connected."
 
 ## The network is not in the list
 
-The unit only sees **2.4 GHz** Wi-Fi.
+Most home routers broadcast one name on both 2.4 and 5 GHz. The unit joins
+the 2.4 GHz side of that name by itself.
 
-If the scan is empty, or the name you typed is not in the list, the page
-says: "This unit only sees 2.4 GHz WiFi. Turn on 2.4 GHz on the router or
-use its 2.4 GHz network."
+If the scan heard no 2.4 GHz network at all, the page says: "This scan did
+not hear a 2.4 GHz network. You can still pick a name from the list, or type
+it." Next to a name heard only on 5 GHz it says: "This scan only heard 5 GHz
+for that name. You can still join it. The unit uses 2.4 GHz when it can."
 
-On the router, turn 2.4 GHz on, or use the network whose name is the 2.4 GHz
-one (often the name without `-5G`).
+If the join then fails as "not found", the router's 2.4 GHz side is off or
+out of reach. In the router app, turn 2.4 GHz on, or use the network whose
+name is the 2.4 GHz one (often the name without `-5G`). A router that runs
+5 GHz only cannot be joined by a Pi Zero 2 W.
 
-A **hidden** network does not show its name. If the scan says a hidden
-network is in range, type the name in "Hidden network name". The unit still
-cannot see a hidden network that is 5 GHz only.
+A **hidden** network does not show its name. If the page says "A hidden
+network is in range. Type its name.", pick **Other network (type its
+name)** and type it.
 
 ## The bars are short
 
 Each network shows four bars. Below about -70 dBm the page says: "Weak
-signal here. Mount closer to the router or add an extender before leaving."
+here. Readings may drop. Move the router or add an extender."
 
 Check this with the lid closed, where the unit will actually sit. A join
 that worked on the tailgate can be too weak once the enclosure is shut.
@@ -48,13 +57,14 @@ After a join the unit writes the signal to `station_rssi` in
 
 ## The network will not take a normal password
 
-The unit joins a normal Wi-Fi password (WPA2). It cannot join these, and
-the page says which one it is instead of a generic failure:
+The unit joins a normal Wi-Fi password (WPA2, or WPA2/WPA3 together). It
+cannot join these, and the page greys the network out and says why:
 
-- **WPA2-Enterprise** — the router wants a username and a company login.
-  Ask for a guest network with a normal password.
-- **WPA3 only** — on the router, turn on WPA2 and WPA3 together, or use the
-  WPA2 network.
+- **WPA2-Enterprise** — "That network needs a work login, not just a
+  password." Ask for a guest network with a normal password.
+- **WPA3 only** — "That network is WPA3 only. Turn on WPA2/WPA3 in the router
+  app, or use another network."
+- **WEP** — "That network uses old WEP security." Use another network.
 - **Open, with a sign-in page** — the unit can get an address and still be
   stuck on a page that says Agree or asks for an email. It cannot tap that
   page. Use a network with a password, or ask the site to allow this unit
@@ -67,23 +77,40 @@ Type it as the owner says it, including spaces and symbols in the middle.
 Use **Show password** to check it.
 
 A space at the **end** is almost always a slip of the thumb. The page
-removes that space and tells you before it joins. If the password really
-does end with a space, tick "The password ends with a space".
+stops and says so before it joins. If the password really does end with a
+space, tick "The password really ends with a space" and tap **Connect**
+again.
 
 A WPA password is **8 to 63 characters**. Shorter and longer are refused
 before the unit drops the hotspot.
 
-## Probes, before you tap Finish
+## After you tap Connect
 
-The finish step shows what the unit actually detected:
+The page changes to "Connecting to <your Wi-Fi>", with a spinner, and says
+what happens next:
 
-- **ADC** — the analog board (pH, TDS, turbidity).
-- **1-Wire** — the temperature probe.
+1. **BlueSignal Setup turns off** while the unit joins, and the phone
+   leaves it. That is expected. The phone usually goes back to the cell
+   network or the home Wi-Fi.
+2. **If the unit can't join, BlueSignal Setup comes back within five
+   minutes**, usually within one. Join it again and the page says why:
 
-If one of those was not detected, Finish stays put until you tick
-**Finish without probe ADC** or **Finish without probe 1-Wire**. That tick
-is the record that you meant to leave it off. Do not tick it to get out of
-the driveway and plan to come back.
+   | The page says | Do this |
+   |---|---|
+   | The password was not accepted. | Check it with **Show password** and try again. |
+   | That network wasn't found. Move the unit closer to the router. | Closer, or turn the router's 2.4 GHz on. |
+   | Your router didn't give the unit an address. | Restart the router, or check its device limit. |
+   | The unit joined, but the router isn't connected to the internet. | Fix the router's internet. |
+   | Your router may be blocking new devices. | Approve the unit in the router app (Eero, Firewalla, Spectrum and others ask), then **Connect** again. |
+   | This network needs a sign-in page the unit can't do. | Use a network with a normal password. |
+   | The unit couldn't join that network. | Check the password, move closer, and try again. |
+
+3. **If BlueSignal Setup does not come back, the unit is on the Wi-Fi.**
+   Finish in BlueSignal Cloud: claim the unit and confirm the probes that
+   are fitted on its page.
+
+Do not power the unit off while it joins. A unit that did not join keeps
+BlueSignal Setup on, so you, or the next visit, can set the Wi-Fi later.
 
 ## The label on the box
 
@@ -117,6 +144,6 @@ These are not in the wizard. They are how units come back in the truck.
 - Do not put the unit in a metal box with the antenna inside. Use a
   plastic enclosure, or mount it so the antenna side faces out of the metal.
 - Check the probe ports before you leave. A probe in the wrong port reads
-  as a plausible number that is not the water. The ADC and 1-Wire lines on
-  the finish step are the check that the board and the temperature probe
-  answered.
+  as a plausible number that is not the water. A first reading for each
+  fitted probe in BlueSignal Cloud is the check that the board and the
+  temperature probe answered.

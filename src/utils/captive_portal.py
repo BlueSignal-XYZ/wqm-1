@@ -26,6 +26,18 @@ works with the firmware and the Service Window stopped (I7).
 No page this process serves reloads itself or replaces its form (I5): the
 page polls ``/api/state`` every 3 s and edits one status line.
 
+From Connect until the join's result, the form is hidden and a handover panel
+says what happens next: BlueSignal Setup turns off and the phone leaves it;
+it comes back within five minutes if the unit cannot join; if it does not
+come back, the unit joined. A poll that does not answer within
+``POLL_TIMEOUT_MS`` reads as "BlueSignal Setup is off", and after
+``HANDOVER_GIVE_UP_S`` the panel says the unit is most likely on the network.
+A failure the page sees when the phone is back puts the form back with the
+reason and the network still picked. Jacques, 2026-11-17: the page used to
+say "Already connecting … watch the lights" for its own join, then froze on
+that line once the hotspot went away; no light shows a join yet (install
+plan §7 is not built).
+
 The process runs as the install user with ``CAP_NET_BIND_SERVICE``. It does
 not run as root, and a join needs root, so ``/api/join`` and
 ``/api/rescan`` go to ``utils.join_service`` over a local socket. It binds
@@ -77,6 +89,16 @@ MAX_BODY = 4096
 MAX_CLIENTS = 16
 CLIENT_TIMEOUT_S = 15.0
 POLL_MS = 3000
+# A poll that has not answered in this long counts as "BlueSignal Setup is
+# gone": the phone has left it, and a fetch to it can otherwise hang for a
+# minute or more.
+POLL_TIMEOUT_MS = 4000
+# How long after Connect the page keeps saying "comes back if it can't join".
+# A failed join gives the hotspot back after the join budget (55 s), or after
+# BlueSignal's proof window (180 s) when the router answers and BlueSignal
+# does not, plus the restore itself. Past this, a hotspot that has not come
+# back means the unit joined.
+HANDOVER_GIVE_UP_S = 300
 # A failure older than this is not news to a phone that opens the page.
 STATE_FRESH_S = 30 * 60
 # While a join runs, the run loop checks its result this often.
@@ -368,6 +390,18 @@ border:1px solid #9fb1c1;border-radius:.5rem;background:#fff;color:#14202b}
 button{font-size:1.05rem;border-radius:.6rem;padding:.8rem 1rem;border:0;cursor:pointer}
 #connect{width:100%;background:#0b5cad;color:#fff;font-weight:650;margin-top:1rem}
 #rescan{background:#e3eaf0;color:#14202b;margin:.4rem 0}
+#handover{margin:1rem 0;padding:1rem 1.1rem;border-radius:.6rem;background:#fff;
+border:1px solid #d3dde6}
+#handover h2{display:flex;align-items:center;gap:.6rem;font-size:1.2rem;margin:0 0 .5rem;
+overflow-wrap:anywhere}
+.spin{flex:none;width:1.1rem;height:1.1rem;border-radius:50%;border:.17rem solid #c9d8e6;
+border-top-color:#0b5cad;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+#ho-now{font-weight:600;color:#0d2f4f;overflow-wrap:anywhere}
+#ho-now:empty{display:none}
+#handover ol{margin:.6rem 0 0;padding-left:1.2rem}
+#handover li{margin:.35rem 0}
 [hidden]{display:none!important}
 """
 
@@ -385,6 +419,15 @@ var keep=document.getElementById("keep");
 var note=document.getElementById("pick-note");
 var notice=document.getElementById("notice");
 var status=document.getElementById("status");
+var form=document.getElementById("form");
+var intro=document.getElementById("intro");
+var hoBox=document.getElementById("handover");
+var hoTitle=document.getElementById("ho-title");
+var hoNow=document.getElementById("ho-now");
+var spin=document.getElementById("ho-spin");
+var GIVE_UP_MS=%(give_up_ms)d;
+var ho={ssid:null,since:0,away:false};
+var polling=false;
 var nets={};
 var trimAck=false;
 var lastKey=null;
@@ -448,9 +491,35 @@ function choose(ssid){
   }
   return false;
 }
-function get(path){
-  return fetch(path,{cache:"no-store",credentials:"same-origin"})
-    .then(function(r){return r.json();});
+function handover(ssid){
+  if(ho.ssid!==ssid){ho.since=Date.now();ho.away=false;}
+  ho.ssid=ssid;
+  form.hidden=true;intro.hidden=true;hoBox.hidden=false;
+  hoTitle.textContent=fmt(C.handover_title,ssid);
+  hoNow.textContent="";spin.hidden=false;
+  say("");
+}
+function handback(){
+  var was=ho.ssid;
+  ho.ssid=null;ho.away=false;
+  hoBox.hidden=true;form.hidden=false;intro.hidden=false;
+  return was;
+}
+function gone(){
+  ho.away=true;
+  var done=Date.now()-ho.since>GIVE_UP_MS;
+  spin.hidden=done;
+  hoNow.textContent=fmt(done?C.handover_done:C.handover_away,ho.ssid);
+}
+function get(path,ms){
+  var ctl=window.AbortController?new AbortController():null;
+  var t=ctl&&ms?setTimeout(function(){ctl.abort();},ms):null;
+  var opts={cache:"no-store",credentials:"same-origin"};
+  if(ctl){opts.signal=ctl.signal;}
+  return fetch(path,opts).then(function(r){
+    if(t){clearTimeout(t);}
+    return r.json();
+  },function(e){if(t){clearTimeout(t);}throw e;});
 }
 function post(path,body){
   return fetch(path,{method:"POST",cache:"no-store",credentials:"same-origin",
@@ -462,19 +531,31 @@ function load(){
 }
 function showState(s){
   var key=[s.state,s.ssid,s.reason,s.at].join("|");
+  if(s.state==="joining"){
+    // The page's own join, a join started from another phone, or a page
+    // opened while one runs: the same screen, never "already connecting".
+    handover(s.ssid);
+    lastKey=key;first=false;return;
+  }
   if(key===lastKey){return;}
   lastKey=key;
-  if(s.state==="joining"){say(fmt(C.busy,s.ssid));}
-  else if(s.state==="joined"){say(fmt(C.joined,s.ssid));}
+  if(s.state==="joined"){
+    if(ho.ssid){spin.hidden=true;hoNow.textContent=fmt(C.joined,s.ssid);}
+    else{say(fmt(C.joined,s.ssid));}
+  }
   else if(s.state==="failed"){
+    var mine=handback();
     say((C[s.reason]||C.no_association));
-    if(first&&s.ssid&&!choose(s.ssid)){other.checked=true;nameIn.value=s.ssid;}
+    if((first||mine)&&s.ssid&&!choose(s.ssid)){other.checked=true;nameIn.value=s.ssid;}
     onPick();
   }
   first=false;
 }
 function poll(){
-  get("/api/state").then(showState).catch(function(){});
+  if(polling){return;}
+  polling=true;
+  get("/api/state",%(poll_timeout_ms)d).then(function(s){polling=false;showState(s);})
+    .catch(function(){polling=false;if(ho.ssid){gone();}});
 }
 other.addEventListener("change",onPick);
 show.addEventListener("change",function(){pw.type=show.checked?"text":"password";});
@@ -492,8 +573,8 @@ document.getElementById("form").addEventListener("submit",function(ev){
   if(!p.ssid){say(C.pick_first);return;}
   post("/api/join",{ssid:p.ssid,password:pw.value,hidden:p.hidden,
     keep_space:keep.checked,trim_ack:trimAck}).then(function(r){
-    if(r.state==="joining"){lastKey=null;say(fmt(C.joining,r.ssid||p.ssid));return;}
-    if(r.state==="busy"){say(fmt(C.busy,r.ssid||p.ssid));return;}
+    if(r.state==="joining"){lastKey=null;handover(r.ssid||p.ssid);return;}
+    if(r.state==="busy"){handover(r.ssid||p.ssid);hoNow.textContent=fmt(C.busy,r.ssid||p.ssid);return;}
     if(r.error==="trailing_space"){trimAck=true;keepBox.hidden=false;say(C.trailing_space);return;}
     say(C[r.error]||C.try_again);
   }).catch(function(){say(C.try_again);});
@@ -536,7 +617,11 @@ def render_page(lang: str = "en") -> bytes:
         return cached
     c = setup_copy.LANGUAGES[lang]
     e = {key: html.escape(value, quote=True) for key, value in c.items()}
-    script = _PAGE_JS % {"poll_ms": POLL_MS}
+    script = _PAGE_JS % {
+        "poll_ms": POLL_MS,
+        "poll_timeout_ms": POLL_TIMEOUT_MS,
+        "give_up_ms": HANDOVER_GIVE_UP_S * 1000,
+    }
     copy_json = _script_json(c)
     page = f"""<!DOCTYPE html>
 <html lang="{e["lang"]}">
@@ -550,9 +635,20 @@ def render_page(lang: str = "en") -> bytes:
 <main>
 <div class="brand">{_BRAND_SVG}BlueSignal</div>
 <h1>{e["title"]}</h1>
+<div id="intro">
 <p>{e["lead"]}</p>
 <p class="muted">{e["stay_connected"]}</p>
+</div>
 <p id="status" role="status" aria-live="polite"></p>
+<section id="handover" hidden>
+<h2><span class="spin" id="ho-spin" aria-hidden="true"></span><span id="ho-title"></span></h2>
+<p id="ho-now" role="status" aria-live="polite"></p>
+<ol>
+<li>{e["handover_off"]}</li>
+<li>{e["handover_back"]}</li>
+<li>{e["handover_joined"]}</li>
+</ol>
+</section>
 <form id="form" novalidate>
 <fieldset>
 <legend>{e["networks"]}</legend>
@@ -1182,6 +1278,9 @@ def ensure_packaged_unit(name: str, *, as_service_user: bool) -> dict[str, Any]:
         rc, _out, err = _systemctl("daemon-reload")
         if rc != 0:
             return {"ok": False, "error": err or f"daemon-reload rc {rc}"}
+    # A unit that crashed past its start limit refuses `start` until this
+    # clears it. Harmless on a unit that never failed.
+    _systemctl("reset-failed", name)
     rc, _out, err = _systemctl("enable", "--now", name)
     if rc != 0:
         return {"ok": False, "error": err or f"systemctl rc {rc}"}

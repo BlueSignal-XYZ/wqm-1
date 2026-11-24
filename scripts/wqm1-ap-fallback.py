@@ -117,9 +117,46 @@ def retry() -> int:
     return 0
 
 
+def guard() -> int:
+    """bluesignal-hotspot-guard.timer, about once a minute: a unit on neither
+    its site Wi-Fi nor its own hotspot gets the hotspot back. Always exits 0
+    — a timer that fails stops being scheduled."""
+    from utils.netctl import guard_hotspot
+
+    def _stop(_signum: int, _frame: object) -> None:
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    ssid, passphrase = resolve_credentials()
+    try:
+        result = guard_hotspot(ssid, passphrase)
+    except Exception as e:  # noqa: BLE001 — never leave the timer failed
+        logger.error("Hotspot guard failed: %s", e)
+        return 0
+    if result.get("skipped"):
+        logger.debug("Hotspot guard: %s", result["skipped"])
+        return 0
+    logger.warning("Hotspot guard: %s", result)
+    if result.get("raised"):
+        from utils.captive_portal import ensure_portal_service, wait_until_reachable
+        from utils.join_service import ensure_join_service
+
+        for name, ensure in (
+            ("captive portal", ensure_portal_service),
+            ("join", ensure_join_service),
+        ):
+            started = ensure()
+            if not started.get("ok"):
+                logger.warning("%s service: %s", name, started.get("error"))
+        _write_status(hotspot="up", ssid=ssid, portal=wait_until_reachable())
+    return 0
+
+
 def main() -> int:
     if "--retry" in sys.argv[1:]:
         return retry()
+    if "--guard" in sys.argv[1:]:
+        return guard()
     # Before the radio wait. A card pulled while hostapd is still coming
     # up would otherwise show a stale hotspot line, or none.
     _write_status(hotspot="starting", portal="down: starting")

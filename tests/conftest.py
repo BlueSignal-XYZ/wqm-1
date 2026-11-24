@@ -115,6 +115,10 @@ def _no_real_bluesignal_probe(monkeypatch, tmp_path):
         monkeypatch.setenv("WQM1_SCAN_CACHE", str(tmp_path / "scan.json"))
     if "WQM1_WIFI_LOCK" not in os.environ:
         monkeypatch.setenv("WQM1_WIFI_LOCK", str(tmp_path / "wifi.lock"))
+    if "WQM1_PORTAL_MODE_FILE" not in os.environ:
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "captive-portal.mode"))
+    if "WQM1_HOTSPOT_GUARD_STATE" not in os.environ:
+        monkeypatch.setenv("WQM1_HOTSPOT_GUARD_STATE", str(tmp_path / "hotspot-guard.json"))
     yield
     captive_portal._watching.clear()
 
@@ -263,6 +267,15 @@ def _no_real_status_files(monkeypatch, tmp_path):
     # The writer falls back to `sudo -n wqm1-publish-status.sh` when no boot
     # path is writable. Point it at a script that does not exist.
     monkeypatch.setenv("WQM1_STATUS_PUBLISH", str(status_dir / "no-publish-helper"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_journal_reads(monkeypatch):
+    """A hotspot that will not come back puts journalctl's lines on the card.
+    journal_tail runs journalctl itself, not through netctl's blocked shell."""
+    from utils import netctl
+
+    monkeypatch.setattr(netctl, "_journal_for_clue", lambda unit, lines: f"({unit} journal)\n")
 
 
 @pytest.fixture(autouse=True)

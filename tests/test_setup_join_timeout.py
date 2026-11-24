@@ -147,7 +147,7 @@ class TestJoinDoesNotHoldTheHttpRequest:
         monkeypatch.setattr(netctl, "join_network", boom)
         monkeypatch.setattr(netctl, "ap_active", lambda iface="wlan0": state["ap"])
 
-        def start_ap(ssid, passphrase, iface="wlan0"):
+        def start_ap(ssid, passphrase, iface="wlan0", **_kw):
             state["started"].append((ssid, passphrase))
             state["ap"] = True
             return {"ok": True}
@@ -250,7 +250,7 @@ class TestJoinDoesNotHoldTheHttpRequest:
             state["ap"] = False
             raise RuntimeError("nmcli missing")
 
-        def start_ap(ssid, passphrase, iface="wlan0"):
+        def start_ap(ssid, passphrase, iface="wlan0", **_kw):
             state["calls"] += 1
             if state["calls"] < netctl.AP_ATTEMPTS:
                 return {"ok": False}
