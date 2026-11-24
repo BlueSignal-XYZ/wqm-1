@@ -88,8 +88,10 @@ class HapAdapter:
         self._chars: dict[str, Any] = {}
         for svc in SERVICES:
             if svc["type"] == "TemperatureSensor":
+                # "Name" is optional on HAP services, so it must be added
+                # before configure_char("Name") or HAP-python raises.
                 s = acc.add_preload_service(
-                    "TemperatureSensor", chars=["StatusActive", "StatusFault"]
+                    "TemperatureSensor", chars=["Name", "StatusActive", "StatusFault"]
                 )
                 s.configure_char("Name", value=svc["name"])
                 self._chars["temperature"] = s.get_characteristic("CurrentTemperature")
@@ -111,7 +113,9 @@ class HapAdapter:
                     s.add_characteristic(ch)
                     self._chars[f"custom:{key}"] = ch
             elif svc["type"] == "ContactSensor":
-                s = acc.add_preload_service("ContactSensor", chars=["StatusActive", "StatusFault"])
+                s = acc.add_preload_service(
+                    "ContactSensor", chars=["Name", "StatusActive", "StatusFault"]
+                )
                 s.configure_char("Name", value=svc["name"])
                 self._chars["contact"] = s.get_characteristic("ContactSensorState")
                 self._chars["contact_active"] = s.get_characteristic("StatusActive")
