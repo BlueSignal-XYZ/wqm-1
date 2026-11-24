@@ -74,7 +74,13 @@ def _raw(path, data: bytes) -> bytes:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
                 conn.settimeout(3)
                 conn.connect(str(path))
-                conn.sendall(data)
+                try:
+                    conn.sendall(data)
+                except BrokenPipeError:
+                    # The service closed before the request was written: a
+                    # refused peer is dropped without being read. CI hit
+                    # this on #191 (Python 3.11).
+                    return b""
                 out = b""
                 while True:
                     try:
