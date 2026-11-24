@@ -185,6 +185,9 @@ jobs:
         run: |
           pip install pytest pytest-mock pytest-cov flask
           pip install smbus2 pyserial pycryptodome pyyaml qrcode
+          # The pinned HAP-python, so tests/test_apple_home_real_hap.py builds
+          # a real accessory instead of skipping.
+          pip install -r requirements-apple-home.txt
 
       # tests/test_card_image.py builds small card images to test
       # tools/golden/card.sh; without these its card tests fail in CI.
