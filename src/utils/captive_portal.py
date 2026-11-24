@@ -95,7 +95,7 @@ POLL_MS = 3000
 POLL_TIMEOUT_MS = 4000
 # How long after Connect the page keeps saying "comes back if it can't join".
 # A failed join gives the hotspot back after the join budget (55 s), or after
-# BlueSignal's proof window (180 s) when the router answers and BlueSignal
+# BlueSignal's proof window (60 s) when the router answers and BlueSignal
 # does not, plus the restore itself. Past this, a hotspot that has not come
 # back means the unit joined.
 HANDOVER_GIVE_UP_S = 300

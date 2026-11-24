@@ -84,11 +84,11 @@ Compared with a real Pi on a real router, the simulator doesn't show:
 | `network_gone` | Router switched off after the list was shown | `not_found` |
 | `dual_band_5ghz_refuses` | One SSID on both bands, Pi 4 radio, 5 GHz never answers | joined on 2.4 GHz |
 | `no_dhcp` | Router hands out no address | `no_dhcp` |
-| `no_bluesignal` | Internet up, BlueSignal unreachable | `no_bluesignal` after the 180 s device-approval hold (spec D5) |
+| `no_bluesignal` | Internet up, BlueSignal unreachable | `no_bluesignal` after the 60 s device-approval hold (spec D5) |
 | `captive_sign_in` | Guest network with a sign-in page | `captive_sign_in` |
 
 For each failure, the checks confirm four things: the unit stored the reason,
-the hotspot came back in time (about a minute, or 215 s for `no_bluesignal`),
+the hotspot came back in time (about a minute, or 90 s for `no_bluesignal`),
 the phone rejoined it, and the page shows the reason and offers a retry.
 
 A slow DHCP server is modelled by starting the router's DHCP late, not with

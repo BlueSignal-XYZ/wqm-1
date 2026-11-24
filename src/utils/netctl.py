@@ -200,8 +200,11 @@ TRY_PROFILE_PREFIX = "bs-try-"
 OLD_PROFILE_PREFIX = "bs-old-"
 # Success means BlueSignal answered over HTTPS through this network. A router
 # that asks the owner to approve new devices (Eero, Firewalla) is approved in
-# this window without anyone redoing the join (spec D5).
-BLUESIGNAL_HOLD_S = 180.0
+# this window without anyone redoing the join (spec D5). One minute, not
+# three: the hotspot is down for all of it (Jacques, 2026-11-23: "Shorten
+# it"). A slower approval fails as no_bluesignal, whose page sentence says to
+# approve the unit in the router app and tap Connect again.
+BLUESIGNAL_HOLD_S = 60.0
 BLUESIGNAL_POLL_S = 10.0
 HTTPS_TIMEOUT_S = 8.0
 # The HTTP Date header is unauthenticated. It may move a stuck clock forward
