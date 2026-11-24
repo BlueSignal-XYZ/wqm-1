@@ -1702,3 +1702,88 @@ class TestTheHotspotComesBackInAboutAMinute:
         )
         assert r["ok"] is False and r["ap_restored"] is True
         assert restored_at and restored_at[0] <= JOIN_BUDGET_S + 1, restored_at
+
+    def test_a_connect_cut_off_by_the_budget_while_associated_still_gets_its_lease(
+        self, nm, monkeypatch
+    ):
+        """nmcli is cut off at the budget while the radio is already on the
+        router and DHCP is still running. NetworkManager keeps activating, so
+        the lease that lands a few seconds later is a join, not "no address".
+        """
+        from utils import netctl
+        from utils.netctl import ADDRESS_GRACE_S, JOIN_BUDGET_S, join_network
+
+        monkeypatch.setattr(netctl, "_radio_allows_5ghz", lambda: False)
+        now = [0.0]
+        real = nm.run
+        nm.ipv4_script = ["", "", "192.168.1.50"]
+        # A slow first scan (a radio just handed back from the hotspot), so
+        # the connect runs to the end of the budget.
+        nm.realistic_scan = True
+        nm.rescans_before_seen = 7
+
+        def cut_off(argv, timeout=15.0):
+            a = argv[1:] if argv and argv[0] == "nmcli" else argv
+            if a[:2] == ["connection", "up"] and len(a) > 2 and a[2].startswith("bs-try-"):
+                now[0] += timeout  # nmcli waits out the rest of the budget
+                nm.station = True  # associated; the lease has not arrived yet
+                return 124, "", "nmcli connection up timed out after 40 s"
+            return real(argv, timeout=timeout)
+
+        monkeypatch.setattr(netctl, "_run", cut_off)
+
+        def sleep(s):
+            now[0] += s
+
+        r = join_network(
+            "PondHouse",
+            "hunter22",
+            sleep=sleep,
+            clock=lambda: now[0],
+            reach=lambda *a, **k: {"ok": True},
+        )
+        assert r["ok"] is True, r
+        assert r["ip"] == "192.168.1.50"
+        assert now[0] > JOIN_BUDGET_S, "the scenario must outrun the budget"
+        assert now[0] <= JOIN_BUDGET_S + ADDRESS_GRACE_S + 1, now[0]
+
+    def test_a_connect_cut_off_with_no_association_gets_no_grace(self, nm, monkeypatch):
+        """The grace is for a radio already on the network. One that never
+        associated still gives the hotspot back inside the budget."""
+        from utils import netctl
+        from utils.netctl import JOIN_BUDGET_S, join_network
+
+        monkeypatch.setattr(netctl, "_radio_allows_5ghz", lambda: False)
+        now = [0.0]
+        real = nm.run
+
+        def cut_off(argv, timeout=15.0):
+            a = argv[1:] if argv and argv[0] == "nmcli" else argv
+            if a[:2] == ["connection", "up"] and len(a) > 2 and a[2].startswith("bs-try-"):
+                now[0] += timeout
+                return 124, "", "nmcli connection up timed out after 40 s"
+            return real(argv, timeout=timeout)
+
+        monkeypatch.setattr(netctl, "_run", cut_off)
+        nm.ap = True
+        restored_at = []
+        real_start = netctl.start_ap
+
+        def start_ap(*a, **k):
+            restored_at.append(now[0])
+            return real_start(*a, **k)
+
+        monkeypatch.setattr(netctl, "start_ap", start_ap)
+
+        def sleep(s):
+            now[0] += s
+
+        r = join_network(
+            "PondHouse",
+            "hunter22",
+            ap_ssid="WQM1-0001",
+            sleep=sleep,
+            clock=lambda: now[0],
+        )
+        assert r["ok"] is False and r["ap_restored"] is True
+        assert restored_at and restored_at[0] <= JOIN_BUDGET_S + 1, restored_at

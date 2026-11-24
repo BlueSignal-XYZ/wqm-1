@@ -1843,9 +1843,15 @@ def _join_network_locked(
     # The address wait fits inside the budget; a connect NetworkManager
     # finished late still gets ADDRESS_GRACE_S to show its address.
     deadline = min(clock() + address_wait_s, budget_end)
+    fast = _classify_connect_error(nm_text) if rc != 0 else None
     if rc == 0:
         deadline = max(deadline, clock() + ADDRESS_GRACE_S)
-    fast = _classify_connect_error(nm_text) if rc != 0 else None
+    elif fast is None and stage != PROFILE_REFUSED and _associated_to(ssid, iface):
+        # nmcli gave up at the budget (its own timeout) while the radio is
+        # already on this network and only the lease is still coming.
+        # NetworkManager keeps activating after nmcli exits, so the address
+        # gets the same grace a connect that finished late gets.
+        deadline = max(deadline, clock() + ADDRESS_GRACE_S)
     if rc != 0 and stage == PROFILE_REFUSED:
         # No profile, nothing activating: waiting for an address would only
         # keep the hotspot down (Bugbot on #182).
