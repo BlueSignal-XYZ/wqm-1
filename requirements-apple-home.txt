@@ -2,4 +2,4 @@
 # Installed by setup.sh on every host; the feature stays off until the owner
 # enables apple_home_enabled. HAP-python is Apache-2.0 and pure Python; its
 # dependencies (cryptography, zeroconf, h11) are the only new packages.
-HAP-python==4.9.2
+HAP-python==5.0.0
