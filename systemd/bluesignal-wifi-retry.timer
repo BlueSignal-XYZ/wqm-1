@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry the saved site Wi-Fi every 5 minutes while the setup hotspot is idle
+
+[Timer]
+OnBootSec=6min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

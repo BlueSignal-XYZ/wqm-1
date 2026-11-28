@@ -13,12 +13,21 @@ No secrets. The hotspot passphrase is not an input to this check.
 
 from __future__ import annotations
 
-import contextlib
 import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from diagnostics.boot_status import (
+    WEAK_POWER_REASON,
+    _run_text,
+    read_power,
+    text_has_undervoltage,
+    undervoltage_seen_count,
+    write_boot_status,
+)
+from utils.atomic import atomic_write_text
 
 DURATION_S = 600
 INTERVAL_S = 30
@@ -45,7 +54,10 @@ class Sample:
         if not self.adc_ok:
             found.append("adc not answering")
         if self.undervoltage:
-            found.append(f"undervoltage ({self.power})")
+            if text_has_undervoltage(self.power):
+                found.append(WEAK_POWER_REASON)
+            else:
+                found.append(f"undervoltage ({self.power})")
         if self.restarting:
             found.append("restarting " + ",".join(self.restarting))
         return found
@@ -61,7 +73,11 @@ def evaluate(samples: list[Sample]) -> tuple[str, str]:
         if reasons:
             bad.append(f"check {index}: " + "; ".join(reasons))
     if bad:
-        return "FAIL", f"{len(bad)}/{len(samples)} checks failed; " + " | ".join(bad)
+        total = sum(
+            undervoltage_seen_count(sample.power) for sample in samples if sample.undervoltage
+        )
+        suffix = f"; undervoltage seen ({total})" if total else ""
+        return "FAIL", f"{len(bad)}/{len(samples)} checks failed; " + " | ".join(bad) + suffix
     return "PASS", f"{len(samples)} checks, hotspot stayed up, adc answered, no undervoltage"
 
 
@@ -77,6 +93,7 @@ def run_burnin(
     dest: Path,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    on_samples: Callable[[list[Sample]], None] | None = None,
 ) -> str:
     """Sample until ``duration_s`` has elapsed and write the result."""
     samples: list[Sample] = []
@@ -86,6 +103,8 @@ def run_burnin(
         if clock() - start >= duration_s:
             break
         sleep(interval_s)
+    if on_samples is not None:
+        on_samples(samples)
     status, detail = evaluate(samples)
     text = render_result(status, detail)
     _write(dest, text)
@@ -93,12 +112,7 @@ def run_burnin(
 
 
 def _write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    with contextlib.suppress(OSError):
-        os.chmod(tmp, 0o644)
-    tmp.replace(path)
+    atomic_write_text(path, text, mode=0o644)
 
 
 def parse_systemctl_show(text: str) -> tuple[int, str]:
@@ -153,14 +167,25 @@ def hotspot_active() -> bool:
 
 
 def undervoltage_now(power_text: str | None = None) -> tuple[bool, str]:
-    """Current undervoltage or throttle, from ``parse_throttled`` text."""
-    if power_text is None:
-        from diagnostics.boot_status import read_power
+    """Undervoltage or a current throttle, from the power line.
 
+    Since-boot undervoltage fails the run. A since-boot frequency cap with
+    no undervoltage does not. A current throttle (the line starts with
+    ``now``) still fails, undervoltage or not.
+    """
+    if power_text is None:
         power_text = read_power()
     text = power_text.strip()
-    # "now undervoltage" / "now throttled,freq-capped". since-boot alone is not.
-    return text.startswith("now "), text or "unknown"
+    if text_has_undervoltage(text) or text.startswith("now "):
+        return True, text or "unknown"
+    return False, text or "unknown"
+
+
+def _publish_undervoltage(samples: list[Sample]) -> None:
+    """Put the burn-in count on the status file so COMMISSION fails with it."""
+    total = sum(undervoltage_seen_count(sample.power) for sample in samples if sample.undervoltage)
+    if total:
+        write_boot_status(power=f"undervoltage seen ({total})")
 
 
 class RestartTracker:
@@ -181,8 +206,6 @@ class RestartTracker:
 
 def live_probe(tracker: RestartTracker | None = None) -> Sample:
     """One sample against the real unit. Tests pass their own probe."""
-    from diagnostics.boot_status import _run_text
-
     undervoltage, power = undervoltage_now()
     snapshots: dict[str, tuple[int, str]] = {}
     for name in WATCHED_SERVICES:
@@ -211,6 +234,7 @@ def main() -> int:
         interval_s=interval,
         probe=lambda: live_probe(tracker),
         dest=dest,
+        on_samples=_publish_undervoltage,
     )
     return 0 if text.startswith("BURN-IN: PASS") else 1
 

@@ -124,7 +124,7 @@ class TestConfigEditorErrorPath:
             _atomic_yaml_write(target, {"key": "val"})
 
         # .tmp file should have been cleaned up
-        tmp_file = tmp_path / "config.tmp"
+        tmp_file = tmp_path / "config.yaml.tmp"
         assert not tmp_file.exists()
 
 
@@ -360,27 +360,3 @@ class TestDownlinkProcessing:
         frame = bytes([0x60]) + dev_addr + bytes([0x00]) + struct.pack("<H", 0) + bytes(4)
         result = mac._process_downlink(frame)
         assert result is None
-
-
-class TestAuthRateLimiting:
-    """Cover auth.py rate limiting paths."""
-
-    def test_rate_limiting_blocks_after_max_attempts(self, mock_hardware):
-        """After _MAX_ATTEMPTS failed logins from same IP, further attempts are blocked."""
-        from service_window.app import create_app
-        from service_window.auth import _attempts
-
-        app = create_app({"pin": "9999", "db_path": ":memory:", "config_path": "/dev/null"})
-        app.config["TESTING"] = True
-        client = app.test_client()
-
-        _attempts.clear()
-
-        try:
-            for _ in range(6):
-                client.post("/login", data={"pin": "wrong"})
-
-            resp = client.post("/login", data={"pin": "wrong"})
-            assert b"Too many" in resp.data or resp.status_code == 200
-        finally:
-            _attempts.clear()

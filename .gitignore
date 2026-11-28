@@ -41,6 +41,7 @@ Thumbs.db
 .coverage
 htmlcov/
 coverage.xml
+coverage.json
 
 # pytest
 .pytest_cache/

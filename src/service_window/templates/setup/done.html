@@ -3,7 +3,10 @@
 {% block title %}Setup — Finish{% endblock %}
 {% block content %}
 <h1 class="setup-h1">Go / no-go checklist</h1>
-{% if overall == 'ok' %}
+{% if firmware_starting %}
+<p class="lead">The unit is still starting. Checking sensors… You can wait for
+the cards to go green, or finish and the unit keeps monitoring.</p>
+{% elif overall == 'ok' %}
 <p class="lead">Everything checks out. Finish setup and this unit is on its own.</p>
 {% else %}
 <p class="lead">You can finish now and fix the flagged items later — the unit
@@ -14,6 +17,8 @@ keeps monitoring either way.</p>
     {{ health_card(name|capitalize, card) }}
     {% endfor %}
 </div>
+
+{% include "setup/_probes_status.html" %}
 
 <div class="id-block">
     <div class="id-label">Readings waiting to upload</div>
@@ -27,10 +32,21 @@ keeps monitoring either way.</p>
     {% endif %}
 </div>
 <form method="post">
+    {% for row in probe_rows if row.kind == 'missing' %}
+    <label class="inline-check">
+        <input type="checkbox" name="confirm_{{ row.id }}" value="yes">
+        {{ row.confirm }}
+    </label>
+    {% endfor %}
     <div class="setup-actions">
         <button type="submit" class="btn btn-primary btn-lg">Finish setup</button>
     </div>
-    <p class="skip-note">Finishing restarts the monitoring service so everything you
-    entered (cloud key, PIN) takes effect immediately.</p>
+    {% if registration %}
+    <div class="flash {{ 'success' if registration.status == 'registered' else ('error' if registration.status in ('conflict', 'error') else 'info') }}">
+        Registration: <b>{{ registration.status }}</b> — {{ registration.message }}
+    </div>
+    {% endif %}
+    <p class="skip-note">Finishing restarts the monitoring service so the
+    unit&rsquo;s self-registration takes effect immediately.</p>
 </form>
 {% endblock %}

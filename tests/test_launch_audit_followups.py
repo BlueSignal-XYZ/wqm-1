@@ -4,8 +4,8 @@ What each pins: relay on-periods are bounded by the controller itself, a
 flat-but-alive sensor no longer drops relays, an uncalibrated pH electrode
 publishes a status instead of a number, an OTA can pass on a probe-less unit,
 the AWG compressor cannot be short-cycled, an un-gatewayed unit backs off its
-joins and never reuses a DevNonce, a dead session is rejoined, an offline
-buffer is capped, and a brute-forced PIN locks the address out.
+joins and never reuses a DevNonce, a dead session is rejoined, and an offline
+buffer is capped.
 """
 
 import struct
@@ -399,28 +399,6 @@ class TestPendingRotation:
         assert db.get_count() == 10
         assert db.get_latest()["timestamp"] == "2026-01-01T00:00:29Z"
         db.close()
-
-
-# --------------------------------------------------------------------------
-# PIN lockout
-# --------------------------------------------------------------------------
-
-
-class TestPinLockout:
-    def test_hourly_budget_locks_the_address(self, mock_hardware):
-        from service_window import auth
-
-        auth._failures.clear()
-        auth._lockouts.clear()
-        now = 1_000_000.0
-        for _ in range(auth._LOCKOUT_AFTER - 1):
-            auth._record_failure("10.0.0.9", now)
-        assert auth._is_locked_out("10.0.0.9", now) == 0
-        auth._record_failure("10.0.0.9", now)
-        assert auth._is_locked_out("10.0.0.9", now) == pytest.approx(auth._LOCKOUT_S)
-        assert auth._is_locked_out("10.0.0.9", now + auth._LOCKOUT_S + 1) == 0
-        auth._clear_failures("10.0.0.9")
-        assert "10.0.0.9" not in auth._failures
 
 
 # --------------------------------------------------------------------------

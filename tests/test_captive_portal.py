@@ -1,16 +1,16 @@
 """
 Port 80 captive portal.
 
-A phone that joins WQM1-xxxx must get a captive response on port 80, not a
-redirect to :8080, and that listener must close once the unit joins the
-site network. These tests bind 127.0.0.1 only. Nothing here opens wlan0.
+A phone that joins the setup network must get a captive response on port
+80, not a redirect to :8080, and that listener must close once the unit
+joins the site network. The page itself is pinned in test_setup_page.py.
+These tests bind 127.0.0.1 only. Nothing here opens wlan0.
 """
 
 from __future__ import annotations
 
 import http.client
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,6 @@ from utils.captive_portal import (
     ensure_dnsmasq_conf,
     portal_should_bind,
     read_mode,
-    rewrite_location,
     run_loop,
 )
 
@@ -59,64 +58,47 @@ PROBE_CASES = [
 ]
 
 
-class _Backend(BaseHTTPRequestHandler):
-    """Stand-in for the Service Window. Redirects advertise its own port."""
-
-    hits: list[str] = []
-
-    def log_message(self, fmt: str, *args: object) -> None:
-        return
-
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        type(self).hits.append(self.path)
-        if self.path.startswith("/setup"):
-            body = b"setup-page"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        port = self.server.server_address[1]
-        self.send_response(302)
-        self.send_header("Location", f"http://127.0.0.1:{port}/setup/")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-
 @pytest.fixture
-def servers():
-    _Backend.hits = []
-    backend = HTTPServer(("127.0.0.1", 0), _Backend)
+def portal():
     from utils.captive_portal import make_server
 
-    portal = make_server("127.0.0.1", 0, backend=backend.server_address[1])
-    threads = [
-        threading.Thread(target=backend.serve_forever, daemon=True),
-        threading.Thread(target=portal.serve_forever, daemon=True),
-    ]
-    for thread in threads:
-        thread.start()
-    yield portal, backend
-    portal.shutdown()
-    backend.shutdown()
-    for thread in threads:
-        thread.join(timeout=2)
+    server = make_server("127.0.0.1", 0)
+    server.networks_source = lambda: []
+    server.join_request = lambda *a, **k: {"error": "unavailable"}
+    server.rescan_request = lambda: {"ok": False}
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
 
 
-def _get(port: int, path: str, host: str) -> http.client.HTTPResponse:
+def _request(
+    port: int,
+    path: str,
+    host: str,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+) -> http.client.HTTPResponse:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-    conn.request("GET", path, headers={"Host": host, "Connection": "close"})
+    sent = {"Host": host, "Connection": "close"}
+    if headers:
+        sent.update(headers)
+    conn.request(method, path, headers=sent)
     resp = conn.getresponse()
     resp.body = resp.read()  # type: ignore[attr-defined]
     conn.close()
     return resp
 
 
+def _get(port: int, path: str, host: str) -> http.client.HTTPResponse:
+    return _request(port, path, host)
+
+
 class TestProbeResponses:
     @pytest.mark.parametrize(("path", "host"), PROBE_CASES)
-    def test_each_probe_redirects_to_port_80_setup(self, servers, path, host):
-        portal, _backend = servers
+    def test_each_probe_redirects_to_port_80_setup(self, portal, path, host):
         resp = _get(portal.server_address[1], path, host)
         assert resp.status == 302
         assert resp.getheader("Location") == PORTAL_URL
@@ -125,60 +107,69 @@ class TestProbeResponses:
         assert b"Microsoft Connect Test" not in resp.body  # type: ignore[attr-defined]
         assert resp.status != 204
 
+    def test_a_phone_that_leaves_and_rejoins_is_sent_back_to_setup(self, portal):
+        """Bench, Nov 15: closing the setup page and rejoining BlueSignal Setup
+        must bring the page back every time, not only on the first join.
+
+        Each round is one rejoin: the phone's probe must be redirected to the
+        setup page again, and the setup page itself must still load. The
+        listener keeps no "already sent" state between requests.
+        """
+        port = portal.server_address[1]
+        rejoin_probes = [
+            ("/hotspot-detect.html", "captive.apple.com"),
+            ("/generate_204", "connectivitycheck.gstatic.com"),
+            ("/connecttest.txt", "www.msftconnecttest.com"),
+        ]
+        for _round in range(3):
+            for path, host in rejoin_probes:
+                probe = _get(port, path, host)
+                assert probe.status == 302, (path, host, _round)
+                assert probe.getheader("Location") == PORTAL_URL
+                page = _get(port, "/setup/", "192.168.4.1")
+                assert page.status == 200, (path, host, _round)
+                assert b"<html" in page.body  # type: ignore[attr-defined]
+
     def test_every_probe_path_and_host_is_classified_as_a_redirect(self):
         for path in PROBE_PATHS:
             assert classify_request(path, "192.168.4.1") == "redirect"
         for host in PROBE_HOSTS:
             assert classify_request("/", host) == "redirect"
 
+    def test_ios_and_android_stay_on_the_hotspot(self, portal):
+        """iOS 'Use Without Internet' and Android 'Stay connected'.
+
+        A body of Success, or an Android 204, tells the phone the hotspot has
+        internet. The phone then skips the sheet and keeps using mobile data.
+        These answers stay a redirect with an empty body so the phone offers
+        to stay on BlueSignal Setup.
+        """
+        ios = _get(portal.server_address[1], "/hotspot-detect.html", "captive.apple.com")
+        android = _get(portal.server_address[1], "/generate_204", "connectivitycheck.gstatic.com")
+        assert ios.status == 302
+        assert b"Success" not in ios.body  # type: ignore[attr-defined]
+        assert android.status != 204
+        assert android.status == 302
+        assert android.getheader("Location") == PORTAL_URL
+
     def test_redirect_target_is_the_setup_page_on_port_80(self):
         assert PORTAL_URL == "http://192.168.4.1/setup/"
         assert ":8080" not in PORTAL_URL
 
-    def test_a_typed_http_url_redirects_to_the_same_page(self, servers):
-        portal, backend = servers
+    def test_a_typed_http_url_redirects_to_the_same_page(self, portal):
         resp = _get(portal.server_address[1], "/", "example.com")
         assert resp.status == 302
         assert resp.getheader("Location") == PORTAL_URL
-        assert _Backend.hits == []
 
-    def test_the_hotspot_address_is_proxied_and_stays_off_8080(self, servers):
-        portal, _backend = servers
-        page = _get(portal.server_address[1], "/setup/", "192.168.4.1")
-        assert page.status == 200
-        assert page.body == b"setup-page"  # type: ignore[attr-defined]
-        bounced = _get(portal.server_address[1], "/", "192.168.4.1")
-        assert bounced.status == 302
-        assert bounced.getheader("Location") == "http://192.168.4.1/setup/"
-        assert ":8080" not in (bounced.getheader("Location") or "")
-
-    def test_a_down_service_window_does_not_loop_the_setup_page(self):
-        import socket
-
-        from utils.captive_portal import make_server
-
-        sock = socket.socket()
-        sock.bind(("127.0.0.1", 0))
-        closed = sock.getsockname()[1]
-        sock.close()
-        portal = make_server("127.0.0.1", 0, backend=closed)
-        thread = threading.Thread(target=portal.serve_forever, daemon=True)
-        thread.start()
-        try:
-            resp = _get(portal.server_address[1], "/setup/", "192.168.4.1")
-        finally:
-            portal.shutdown()
-            thread.join(timeout=2)
-        assert resp.status == 503
-        assert b"Success" not in resp.body  # type: ignore[attr-defined]
-        assert resp.getheader("Location") is None
-
-    def test_location_rewrite_strips_the_service_window_port(self):
-        assert rewrite_location("http://192.168.4.1:8080/setup/", 8080) == PORTAL_URL
-        assert rewrite_location("http://127.0.0.1:8080/setup/pin", 8080) == (
-            "http://192.168.4.1/setup/pin"
-        )
-        assert rewrite_location("/setup/", 8080) == "/setup/"
+    def test_the_hotspot_address_serves_the_page_itself(self, portal):
+        """No proxy to 8080 (§4): the listener answers the page with no Service Window."""
+        for path in ("/", "/setup", "/setup/"):
+            page = _get(portal.server_address[1], path, "192.168.4.1")
+            assert page.status == 200, path
+            assert page.getheader("Content-Type") == "text/html; charset=utf-8"
+            assert page.getheader("Location") is None
+            assert b'id="status"' in page.body  # type: ignore[attr-defined]
+            assert b":8080" not in page.body  # type: ignore[attr-defined]
 
 
 class TestDnsmasqConfig:
@@ -286,7 +277,7 @@ class TestTeardown:
         assert failed["ap_restored"] is True
         assert read_mode() == "up"
 
-    def test_listener_closes_when_the_station_joins(self, tmp_path, monkeypatch):
+    def test_listener_closes_when_the_station_joins(self, tmp_path, monkeypatch, request):
         mode = tmp_path / "mode"
         monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(mode))
         arm_portal()
@@ -297,6 +288,12 @@ class TestTeardown:
             holder["server"] = server
             started.set()
 
+        # The loop must end with the test. Left running, it kept calling
+        # check_watched_join() every 50 ms for the rest of the session and
+        # consumed a later test's watched join (test_setup_page's
+        # test_a_started_join_is_watched_for_registration failed on the #181
+        # PR run, run 43655022841, and passed alone).
+        stop_loop = threading.Event()
         thread = threading.Thread(
             target=run_loop,
             kwargs={
@@ -304,10 +301,12 @@ class TestTeardown:
                 "address_up": lambda: True,
                 "on_bind": on_bind,
                 "poll_s": 0.05,
+                "stop": stop_loop.is_set,
             },
             daemon=True,
         )
         thread.start()
+        request.addfinalizer(lambda: (stop_loop.set(), thread.join(timeout=3)))
         assert started.wait(3)
         server = holder["server"]
         port = server.server_address[1]  # type: ignore[attr-defined]

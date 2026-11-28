@@ -5,6 +5,7 @@ All hardware is mocked at the sys.modules level so tests run on any
 platform without RPi.GPIO, smbus2, spidev, or w1thermsensor installed.
 """
 
+import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -83,6 +84,46 @@ def _reset_active_board():
 
 
 @pytest.fixture(autouse=True)
+def _no_real_bluesignal_probe(monkeypatch, tmp_path):
+    """A join proves itself by reaching BlueSignal over HTTPS (install plan
+    §2). No test may make that request: BlueSignal answers, the clock is
+    synced, and no HTTP Date is read, unless a test says otherwise."""
+    try:
+        from utils import netctl
+    except Exception:  # noqa: BLE001 — netctl may be unimportable mid-refactor
+        yield
+        return
+    monkeypatch.setattr(netctl, "_https_status", lambda url, timeout=None: "ok")
+    monkeypatch.setattr(netctl, "_http_date", lambda url, timeout=None: None)
+    monkeypatch.setattr(netctl, "_ntp_synced", lambda: True)
+    # The 1.5 s head start lets a real phone get the HTTP answer before the
+    # setup network drops. Tests run the join at once; test_join pins it.
+    from utils import join
+
+    monkeypatch.setattr(join, "START_DELAY_S", 0.0)
+    # One clock step per boot is recorded under /run; never the real one.
+    monkeypatch.setenv("WQM1_CLOCK_STEP_MARKER", str(tmp_path / "clock-stepped"))
+    monkeypatch.setattr(netctl, "_STEPPED_IN_PROCESS", False)
+    # The port-80 page (§4): no test reaches the root join socket, writes
+    # the real /run/bluesignal/scan.json, or kicks a real registration.
+    from utils import captive_portal, join_service
+
+    monkeypatch.setattr(join_service, "_use_socket", lambda: False)
+    monkeypatch.setattr(captive_portal, "_kick_register", lambda: None)
+    captive_portal._watching.clear()
+    if "WQM1_SCAN_CACHE" not in os.environ:
+        monkeypatch.setenv("WQM1_SCAN_CACHE", str(tmp_path / "scan.json"))
+    if "WQM1_WIFI_LOCK" not in os.environ:
+        monkeypatch.setenv("WQM1_WIFI_LOCK", str(tmp_path / "wifi.lock"))
+    if "WQM1_PORTAL_MODE_FILE" not in os.environ:
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "captive-portal.mode"))
+    if "WQM1_HOTSPOT_GUARD_STATE" not in os.environ:
+        monkeypatch.setenv("WQM1_HOTSPOT_GUARD_STATE", str(tmp_path / "hotspot-guard.json"))
+    yield
+    captive_portal._watching.clear()
+
+
+@pytest.fixture(autouse=True)
 def mock_hardware():
     """Provide access to mock hardware objects and reset between tests."""
     _gpio.reset_mock()
@@ -158,6 +199,9 @@ def no_outbound_http(monkeypatch):
         raise netinfo.urllib.error.URLError("outbound HTTP blocked in tests")
 
     monkeypatch.setattr(netinfo.urllib.request, "urlopen", blocked)
+    import urllib.request as urllib_request
+
+    monkeypatch.setattr(urllib_request, "urlopen", blocked)
 
 
 @pytest.fixture(autouse=True)
@@ -175,13 +219,79 @@ def _no_real_network_mutation(monkeypatch, tmp_path):
     from utils import netctl
 
     monkeypatch.setattr(netctl, "_run", lambda argv, timeout=15.0: (127, "", "blocked in tests"))
+    # A successful join asks whether a sign-in page ate the internet. That
+    # probe is a real HTTP GET. The suite must not make it.
+    monkeypatch.setattr(netctl, "probe_sign_in_page", lambda *a, **k: "unknown")
     monkeypatch.delenv("WQM1_VIRTUAL_NET", raising=False)
     # hostapd.conf holds the setup passphrase. Tests must not write it under /run.
     monkeypatch.setenv("WQM1_HOSTAPD_CONF", str(tmp_path / "hostapd.conf"))
     monkeypatch.setenv("WQM1_DNSMASQ_CONF", str(tmp_path / "dnsmasq-ap.conf"))
+    monkeypatch.setenv("BLUESIGNAL_STATE_DIR", str(tmp_path / "var-lib-bluesignal"))
+    monkeypatch.delenv("BLUESIGNAL_ROOT", raising=False)
     try:
         from service_window import captive
 
         captive.reset_cache()
     except ImportError:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _no_real_status_files(monkeypatch, tmp_path):
+    """No test may read or write the unit's real status or card files.
+
+    ``wqm1-status.txt`` lives at fixed paths (``/var/lib/bluesignal`` and the
+    boot partition). Run as root — a bench Pi, a container — the netctl and
+    AP-layout tests wrote those real files, and a later setup-wizard test
+    read the leftover ``onewire`` line as a missing probe and refused Finish.
+    On a non-root CI runner the write fails quietly, so the leak only shows
+    where it does the most harm. A test that needs its own paths patches
+    them again; the later setattr wins.
+    """
+    from diagnostics import ap_fail, boot_status
+
+    status_dir = tmp_path / "status-files"
+    monkeypatch.setattr(boot_status, "_STATE_PATH", status_dir / "var-lib" / "wqm1-status.txt")
+    boot_paths = (
+        status_dir / "boot-firmware" / "wqm1-status.txt",
+        status_dir / "boot" / "wqm1-status.txt",
+    )
+    monkeypatch.setattr(boot_status, "_BOOT_PATHS", boot_paths)
+    monkeypatch.setattr(
+        ap_fail,
+        "_BOOT_PATHS",
+        (status_dir / "boot-firmware" / "wqm1-apfail.txt", status_dir / "boot" / "wqm1-apfail.txt"),
+    )
+    monkeypatch.delenv("WQM1_STATUS_FILE", raising=False)
+    monkeypatch.setenv("WQM1_CARD_STATE", str(status_dir / "card-binding"))
+    # The writer falls back to `sudo -n wqm1-publish-status.sh` when no boot
+    # path is writable. Point it at a script that does not exist.
+    monkeypatch.setenv("WQM1_STATUS_PUBLISH", str(status_dir / "no-publish-helper"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_journal_reads(monkeypatch):
+    """A hotspot that will not come back puts journalctl's lines on the card.
+    journal_tail runs journalctl itself, not through netctl's blocked shell."""
+    from utils import netctl
+
+    monkeypatch.setattr(netctl, "_journal_for_clue", lambda unit, lines: f"({unit} journal)\n")
+
+
+@pytest.fixture(autouse=True)
+def _join_register_kicks(monkeypatch):
+    """Wait for background self-register attempts before the env is restored.
+
+    The setup wizard starts a ``wqm1-register-kick`` daemon thread after a
+    join. If it outlives its test, it runs after monkeypatch has put
+    BLUESIGNAL_STATE_DIR back, and writes ``device-register.json`` into the
+    real ``/var/lib/bluesignal`` (as root) — intermittently, depending on
+    timing. This fixture depends on ``monkeypatch`` so it tears down first.
+    """
+    import threading
+
+    before = set(threading.enumerate())
+    yield
+    for thread in threading.enumerate():
+        if thread.name in {"wqm1-register-kick", "wqm1-wifi-join"} and thread not in before:
+            thread.join(timeout=5)

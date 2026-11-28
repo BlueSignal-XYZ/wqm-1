@@ -2,13 +2,16 @@
 {% from "_health.html" import health_card %}
 {% block title %}Setup — Network{% endblock %}
 {% block content %}
-<h1 class="setup-h1">Last step: connect it</h1>
+<h1 class="setup-h1">Connect it to Wi-Fi</h1>
+{% if cell_note %}<p class="setup-alert" role="note">{{ cell_note }}</p>{% endif %}
+<p class="lead">That is the only thing to do here. Probes, alerts and the owner are set up in BlueSignal Cloud once the unit is online.</p>
 
 {% if last_join %}
 <div class="flash error" role="alert">
     Could not join <b>{{ last_join.ssid }}</b>. {{ last_join.error }}
 </div>
 {% endif %}
+
 
 <form method="post" id="network-form">
     {% if station_ssid %}
@@ -21,46 +24,80 @@
     <div class="id-block">
         <div class="id-label">Signal</div>
         <div class="id-row"><code class="id-value">{{ (wifi.rssi_dbm ~ ' dBm') if wifi.rssi_dbm is not none else '—' }}</code></div>
+        {% if station_weak %}<p class="weak-note">{{ weak_message }}</p>{% endif %}
     </div>
     <div class="id-block">
         <div class="id-label">Address on this network</div>
         <div class="id-row"><code class="id-value">{{ wifi.ip or '—' }}</code></div>
     </div>
     <div class="setup-actions">
-        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg btn-block">Keep {{ station_ssid }} and finish</button>
+        <button type="submit" name="action" value="keep" class="btn btn-primary btn-lg btn-block">Keep {{ station_ssid }}</button>
     </div>
     {% endif %}
 
     {% if on_ap or not station_ssid %}
     {% if not station_ssid %}
-    <p class="lead">Have the owner pick their Wi-Fi and type the password. Do this where
-    the unit will live, lid closed.</p>
+    <p class="skip-note">Do this standing where the unit lives, lid closed.</p>
     {% if not on_ap %}<p class="skip-note">Not connected to any network yet.</p>{% endif %}
     {% else %}
     <h2>Or join a different network</h2>
+    {% endif %}
+    {% if band_notice %}
+    <div class="flash error" role="alert">{{ band_notice }}</div>
+    {% endif %}
+    {% if hidden_note %}
+    <p class="setup-alert">{{ hidden_note }}</p>
+    {% endif %}
+    {% if networks or blocked %}
+    <ul class="net-list">
+        {% for n in networks %}
+        <li>
+            <span class="bars" aria-label="{{ n.bars }} of 4 bars">{% for i in range(4) %}<i class="{{ 'on' if i < n.bars else '' }}"></i>{% endfor %}</span>
+            <span class="net-name">{{ n.ssid }}{% if not n.secured %} (open){% endif %}</span>
+            {% if n.weak %}<span class="weak-note">{{ weak_message }}</span>{% endif %}
+            {% if n.security_note and n.security != 'wpa_psk' %}<span class="skip-note">{{ n.security_note }}</span>{% endif %}
+        </li>
+        {% endfor %}
+        {% for n in blocked %}
+        <li>
+            <span class="bars" aria-label="{{ n.bars }} of 4 bars">{% for i in range(4) %}<i class="{{ 'on' if i < n.bars else '' }}"></i>{% endfor %}</span>
+            <span class="net-name">{{ n.ssid }}</span>
+            <span class="skip-note">{{ n.security_note or band_notice }}</span>
+        </li>
+        {% endfor %}
+    </ul>
     {% endif %}
     <label for="ssid">Wi-Fi network</label>
     {% if networks %}
     <select id="ssid" name="ssid">
         {% for n in networks %}
-        <option value="{{ n.ssid }}" {{ 'selected' if last_join and last_join.ssid == n.ssid }}>{{ n.ssid }}{{ ' (open)' if not n.secured }} &middot; {{ n.signal }}%</option>
+        <option value="{{ n.ssid }}" {{ 'selected' if (selected_ssid or (last_join.ssid if last_join else '')) == n.ssid }}>{{ n.bar_text }} {{ n.ssid }}{{ ' (open)' if not n.secured }} &middot; {{ n.signal }}%</option>
         {% endfor %}
     </select>
     {% else %}
-    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" autocapitalize="off" autocorrect="off">
-    <p class="skip-note">No networks found. <button type="submit" class="link-button" form="rescan-form">Scan again</button></p>
+    <input id="ssid" name="ssid" type="text" maxlength="32" placeholder="Network name" autocapitalize="off" autocorrect="off" value="{{ selected_ssid or '' }}">
+    <p class="skip-note">No networks found. <button type="submit" class="link-button" form="rescan-form">Scan again</button>
+    {% if band_notice %} {{ band_notice }}{% endif %}</p>
+    {% endif %}
+    <label for="hidden-ssid">Hidden network name</label>
+    <input id="hidden-ssid" name="hidden_ssid" type="text" maxlength="32" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Only if the name is not in the list" value="{{ hidden_prefill or '' }}">
+    {% if trim_warning %}
+    <div class="flash error" role="alert">{{ trim_warning }}</div>
+    <input type="hidden" name="trim_ack" value="yes">
     {% endif %}
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Leave blank for an open network">
+    <input id="password" name="password" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Leave blank for an open network" value="{{ password or '' }}">
     <label class="inline-check"><input type="checkbox" id="show-password"> Show password</label>
+    <label class="inline-check"><input type="checkbox" name="keep_trailing_space" value="on"> The password ends with a space</label>
     {% if on_ap %}
     <p class="skip-note">This page goes away when you tap Join: the unit turns off its
     setup network and your phone drops back to its usual connection. If the password
     is wrong, the router does not give the unit an address, or the unit cannot reach
-    the router, this page comes back within a minute and says which one happened.</p>
+    the router, this page comes back and says which one happened. A join can take a
+    couple of minutes; the unit keeps working after this request ends.</p>
     {% endif %}
     <div class="setup-actions">
-        <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join and finish</button>
+        <button type="submit" name="action" value="join" id="join-button" class="btn btn-primary btn-lg btn-block">Join</button>
     </div>
     {% if networks %}<p class="skip-note center"><button type="submit" class="link-button" form="rescan-form">Don&rsquo;t see it? Scan again</button></p>{% endif %}
     {% endif %}
@@ -75,13 +112,6 @@
         <button type="submit" name="action" value="declare" class="btn btn-secondary">Continue without Wi-Fi</button>
     </details>
 
-    <details class="setup-details">
-        <summary>Radios fitted <span class="summary-hint">{{ ['LoRa' if lora_enabled, 'GPS' if gps_enabled]|select|join(' + ') or 'none' }}</span></summary>
-        <label><input type="checkbox" name="lora_enabled" {{ 'checked' if lora_enabled }}> LoRa radio (long-range backup to a gateway)</label>
-        <label><input type="checkbox" name="gps_enabled" {{ 'checked' if gps_enabled }}> GPS receiver</label>
-        <p class="skip-note">Saved with whichever button you tap above. Monitoring and
-        fail-safe control run on the unit whatever the network does.</p>
-    </details>
 </form>
 <form method="post" id="rescan-form"><input type="hidden" name="action" value="rescan"></form>
 {% endblock %}
@@ -96,8 +126,9 @@
   if (form && join) {
     form.addEventListener('submit', function (e) {
       if (e.submitter !== join) return;
-      // The join takes up to about a minute and usually takes this page with it.
-      // Say so, and stop a second tap from starting a second join.
+      // The join can take a couple of minutes and usually takes this page with it.
+      // The POST returns a status page that polls /setup/join-status.
+      // Stop a second tap from starting a second join.
       setTimeout(function () {
         join.disabled = true;
         join.textContent = 'Joining… your phone will reconnect by itself';

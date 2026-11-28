@@ -190,7 +190,7 @@ class TestAtomicJsonWrite:
 
         target = tmp_path / "out.json"
         atomic_json_write(str(target), {"a": 1})
-        tmp = target.with_suffix(".tmp")
+        tmp = target.with_name(target.name + ".tmp")
         assert not tmp.exists()
 
     def test_handles_datetime_via_default_str(self, tmp_path, mock_hardware):

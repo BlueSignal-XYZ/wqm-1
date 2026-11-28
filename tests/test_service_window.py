@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from service_window.app import create_app
+from tests.remote import HOME_NETWORK, from_addr
 
 
 @pytest.fixture
@@ -41,13 +42,13 @@ def db_path(tmp_path):
 @pytest.fixture
 def app(db_path, tmp_path):
     """Create test Flask app."""
-    config_path = str(tmp_path / "config.yaml")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("service_window:\n  setup_completed: true\n")
     cal_path = str(tmp_path / "calibration.yaml")
     return create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
-            "config_path": config_path,
+            "config_path": str(config_path),
             "cal_path": cal_path,
             "cmd_sock": str(tmp_path / "cmd.sock"),
         }
@@ -62,39 +63,38 @@ def client(app):
 
 
 @pytest.fixture
-def authed_client(client):
-    """Flask test client with authenticated session."""
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
+def authed_client(app, client):
+    """Flask test client with the test-only window open."""
+    app.config["TEST_OPEN_WINDOW"] = True
     return client
 
 
 class TestAuth:
-    def test_login_page_renders(self, client):
+    def test_login_is_closed(self, client):
         resp = client.get("/login")
-        assert resp.status_code == 200
-        assert b"PIN" in resp.data
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
+        assert b"BlueSignal Cloud" in resp.data
 
-    def test_login_redirect_on_unauthenticated(self, client):
-        resp = client.get("/")
-        assert resp.status_code == 302
-        assert "/login" in resp.headers["Location"]
+    def test_unauthenticated_lan_is_refused(self, client):
+        resp = from_addr(client, HOME_NETWORK).get("/")
+        assert resp.status_code == 403
+        assert b'name="pin"' not in resp.data
 
-    def test_login_with_correct_pin(self, client):
+    def test_login_does_not_accept_a_pin(self, client):
         resp = client.post("/login", data={"pin": "9999"}, follow_redirects=False)
-        assert resp.status_code == 302
+        assert resp.status_code == 403
+        with client.session_transaction() as sess:
+            assert not sess.get("pin_verified")
 
-    def test_login_with_wrong_pin(self, client):
-        resp = client.post("/login", data={"pin": "0000"})
-        assert resp.status_code == 200
-        assert b"Incorrect" in resp.data
-
-    def test_logout(self, authed_client):
+    def test_logout(self, app, authed_client):
         resp = authed_client.get("/logout", follow_redirects=False)
         assert resp.status_code == 302
-        # After logout, dashboard should redirect to login
-        resp = authed_client.get("/")
-        assert resp.status_code == 302
+        with authed_client.session_transaction() as sess:
+            assert not sess.get("pin_verified")
+        app.config["TEST_OPEN_WINDOW"] = False
+        resp = from_addr(authed_client, HOME_NETWORK).get("/")
+        assert resp.status_code == 403
 
 
 class TestDashboard:

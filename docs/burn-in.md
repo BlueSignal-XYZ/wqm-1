@@ -35,16 +35,40 @@ BURN-IN: PASS
 - hostapd was not beaconing (`hostapd_cli status` did not report
   `state=ENABLED`)
 - the ADS1115 did not answer on I2C
-- `vcgencmd get_throttled` showed a current undervoltage, frequency cap,
-  or throttle (a since-boot flag alone does not fail)
+- `vcgencmd get_throttled` (or the firmware sysfs node) showed
+  undervoltage now or since this boot. The result says
+  `weak power supply or cable` and appends `undervoltage seen (N)`.
+  The same count is written to `wqm1-status.txt` as
+  `power: undervoltage seen (N)`, and that boot's `COMMISSION` line
+  fails with `weak power supply or cable`. A since-boot frequency cap
+  with no undervoltage does not fail. A current throttle that is not
+  undervoltage still fails.
 - `bluesignal-wqm`, `bluesignal-service-window`, `bluesignal-ap-fallback`,
   or NetworkManager was not active, or its restart count climbed during
   the ten minutes
 
 The same boot also writes `wqm1-status.txt`. Its first line is
 `COMMISSION: READY` or `COMMISSION: FAIL: <reason>`, including the last
-hotspot error when the AP did not come up. Neither file contains the
-hotspot passphrase.
+hotspot error when the AP did not come up. The setup network is open
+(install plan §5), so there is no passphrase to leak.
+
+## Setup-network label
+
+Print the setup-network label on the bench computer, from the Pi serial,
+before the unit ships. The installer scans it to join **BlueSignal Setup**.
+
+```bash
+python3 scripts/make-unit-label.py <pi-serial> --out-dir ./labels
+```
+
+The serial is the `Serial` line in `/proc/cpuinfo` (16 hex digits). The
+script writes `<hostname>-setup-label.svg` and `<hostname>-setup-label.pdf`
+(for example `wqm1-4fd8-setup-label.pdf`): **BlueSignal Setup**, "No
+password", and a Wi-Fi QR code (`WIFI:T:nopass;S:BlueSignal Setup;;`).
+
+It prints the two file paths and nothing else. Do not run it on a field
+unit as part of boot. Details for the installer are in
+[`installer-mistakes.md`](installer-mistakes.md).
 
 ## Where it is installed
 

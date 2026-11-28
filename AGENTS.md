@@ -1,4 +1,30 @@
-Never merge, deploy, push to main, delete data, change pricing, or send email or messages. Open a PR and stop.
+# Engineering rules for agents (set by the Captain, Oct 19, 2026)
+
+## Before writing code
+1. **Read what the work touches before changing it.** That means the repo's rules file, the security doc for the area, and any test that pins the behavior. Most breakage came from a refactor that ignored a caller somewhere else.
+2. **Write down what must always be true before building a security or money flow.** For example: one owner per device, a claim token works once, nothing locks without a release path. Test those first, then build the handlers.
+3. **Read values by importing them, never by searching file text.** A script that regex-searches a source file breaks silently when the value moves.
+
+## Before opening a PR
+4. **Any new required setting must already exist before merge.** If a change makes the deploy refuse to run without a variable, confirm the variable is set first, or every deploy behind it is blocked.
+5. **Prove it the way CI will.** Run the same commands CI runs, every test group included, and say which ones ran. "Tests pass" with no command listed doesn't count.
+6. **One change per PR.** A fix, a refactor and new tests in one PR means a failure in one holds back the other two.
+7. **Bring the branch up to date with master before asking for review.**
+
+## After merge
+8. **Confirm it actually reached production.** A green check on the PR is not a deploy. Check that the deploy finished and the new code is live.
+9. **Never let the website ship ahead of its backend.** If the backend deploy fails, the website deploy stops too.
+10. **A failure that makes no noise is the worst kind.** Any check or job whose purpose is to warn must fail visibly when it can't run. A job that skips itself and shows green is not allowed.
+
+## Ownership
+11. **An agent finishes its own PRs or closes them.** Anything still a draft three days later gets folded into another PR or closed with a reason.
+12. **Red CI never merges, whoever authored the PR,** Dependabot included. Enforced by branch protection.
+13. **Agents never take hard-to-undo actions:** no merging, deploying, deleting data, changing prices or sending email. Only the Captain does those.
+14. **When an agent can't verify something, it says so.** A list of what it didn't check is worth more than a confident summary.
+
+## Enforcement
+- CI or branch protection enforces rules 4, 5, 9, 10 and 12.
+- Review enforces rules 1, 2, 6 and 14.
 
 # AGENTS.md — WQM-1 firmware
 
@@ -37,6 +63,41 @@ CI (`.github/workflows/ci.yml`) runs ruff, the tests, and the signing checks. `r
 - Never commit a key. The OTA private key exists only as the `OTA_SIGNING_KEY` Actions secret.
 - Wording in docs and the README follows the marketplace `AGENTS.md`: the WQM-1 is "designed to connect with" water-from-air and rainwater systems, never "controls" or "integrates"; no safe/potable claims; no UL/ETL/NSF/FCC claim for our own unit; never the factory supplier's name.
 - Verify before claiming: call something "done" only with proof attached (test output, a log, a photo of the bench). Anything not checked is "unverified".
+
+## AI staff
+
+The Captain (Jacques) runs a small AI staff: one Claude seat and a team of Grok bots. Every one of them follows this file, the rules above and the repo's `CLAUDE.md`. None of them merges, deploys, sends a message or moves money.
+
+| Bot | Code | Owns | In these repos |
+|---|---|---|---|
+| Benjamin Franklin | FUND | Leads the team. Funding, dilutive and non-dilutive. | Investor and grant material, traction facts. Reads the cap table; never edits it. |
+| Dale Carnegie | SELL | The sales team. Reports to Franklin. | Deals, quotes, lead routing, sales copy. Never messages a lead. |
+| Leonardo da Vinci | FIELD | Installation and deployment. | Bench and site commissioning, runbooks, installer training, the Units tracker. |
+| Florence Nightingale | CARE | Customer support and device pre-mortems. | Alerts, field failures, warranty and support paths. A field failure ends as a test and a runbook line. |
+| Steve Jobs | MARKET | Marketing and customer experience. | Site pages, copy, product photos, the claims rules. |
+| AIR | — | Comms and message delivery: the voice coach for every agent. | Reads anything a person outside the team will see (page copy, email drafts, PR bodies) for plain, accurate wording. |
+| Jesse Livermore | — | The Captain's own trading strategy. | **No role here.** Never touches company money, Stripe, the cap table or the WaterQuality.Trading market. WQT credits are not his. |
+| Claude | — | Plans and reviews code. | For every code change: writes the plan before it is built and reviews the PR before the Captain merges. Takes over only when a bot has failed twice. |
+
+How they work together:
+
+1. **For code, Claude plans and Grok builds.** This applies to code changes only; funding, sales, support and marketing work stays in each bot's own lane. Any code change bigger than a copy edit starts as a plan from Claude: the files to touch, the tests that prove it, what "done" looks like, and the traps to avoid. The plan goes in the PR description or `docs/`. The owning bot builds against it.
+2. **Claude reviews every Grok PR before the Captain merges.** The review checks the change against the plan and the tests against the code, and says what was not verified.
+3. **Two failures go back to Claude.** When a bot's fix has failed twice, it stops and hands the problem back with what it tried.
+4. **Nobody reviews their own PR.**
+5. **Field failures go into the repo, not chat.** A test, a runbook line, or both, so the next agent does not relearn it.
+6. **AIR before anything leaves the team.** Customer-facing words go past AIR, then the Captain.
+
+The handoff runs on GitHub labels (`.github/workflows/claude-handoff.yml`), so the Captain only talks to Grok:
+
+1. Grok opens an issue describing the change and adds the label `needs-plan`.
+2. Claude posts a comment starting `## Plan` and swaps the label to `plan-ready`.
+3. Grok builds on a branch and opens a PR whose body says `Plan: #<issue>`. Then it adds the label `needs-review`.
+4. Claude posts a comment starting `## Review` that ends with `Verdict: ready for the Captain` or `Verdict: changes needed`. It swaps the label to `review-passed` or `changes-requested`.
+5. On `changes-requested`, Grok fixes and adds `needs-review` again. After a second `changes-requested`, Grok stops, labels the PR `needs-captain` and tells the Captain.
+6. On `review-passed`, Grok tells the Captain the PR is ready. The Captain merges.
+
+To ask Claude a one-off question on any issue or PR, comment `@claude` (`.github/workflows/claude.yml`).
 
 ## How to finish
 

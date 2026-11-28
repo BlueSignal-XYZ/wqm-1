@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from service_window.app import create_app
+from tests.remote import HOME_NETWORK, from_addr
 
 
 @pytest.fixture
@@ -36,7 +37,9 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def config_path(tmp_path):
-    return str(tmp_path / "config.yaml")
+    p = tmp_path / "config.yaml"
+    p.write_text("service_window:\n  setup_completed: true\n")
+    return str(p)
 
 
 @pytest.fixture
@@ -44,7 +47,6 @@ def app(db_path, tmp_path, config_path):
     return create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
             "config_path": config_path,
             "cal_path": str(tmp_path / "calibration.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
@@ -55,10 +57,8 @@ def app(db_path, tmp_path, config_path):
 @pytest.fixture
 def client(app):
     app.config["TESTING"] = True
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return client
+    app.config["TEST_OPEN_WINDOW"] = True
+    return app.test_client()
 
 
 class FakeBus:
@@ -133,6 +133,10 @@ def fake_probe(monkeypatch):
 
 
 def write_config(config_path, **values):
+    values = dict(values)
+    sw = dict(values.get("service_window") or {})
+    sw.setdefault("setup_completed", True)
+    values["service_window"] = sw
     with open(config_path, "w") as f:
         yaml.safe_dump(values, f)
 
@@ -161,9 +165,9 @@ class TestIndexAndScan:
         assert b"Nothing answered" in resp.data
 
     def test_requires_login(self, app):
-        client = app.test_client()
+        client = from_addr(app.test_client(), HOME_NETWORK)
         resp = client.get("/rs485/")
-        assert resp.status_code == 302
+        assert resp.status_code == 403
 
 
 class TestAssign:

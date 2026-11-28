@@ -47,9 +47,9 @@
 <a href="{{ url_for('provision.identity') }}" class="btn">View Identity &amp; QR Code</a>
 <a href="{{ url_for('provision.report') }}" class="btn">Download Identity Report</a>
 
-<h2>Step 4: Cloud over WiFi (optional)</h2>
-<p>Commission this unit over WiFi: paste its device API key to report readings and
-   accept relay commands over HTTP. This coexists with LoRaWAN.
+<h2>Step 4: Cloud over WiFi — bench / dev override</h2>
+<p>Production units register themselves after they have a link. This form is a
+   <strong>bench / dev override</strong> for pasting an HTTP device API key by hand.
    Cloud is currently
    <strong>{{ 'ON' if cloud.enabled else 'OFF' }}</strong>{{ ' (key set)' if cloud.key_set else ' (no key)' }}.</p>
 <form method="post" action="{{ url_for('provision.set_cloud') }}">

@@ -50,6 +50,11 @@ and the power budget are in [raspberry-pi.md](raspberry-pi.md).
 
 ---
 
+A customer card built from this repo's image (GitHub **Actions → Card
+image**) skips this chapter. Write it with
+[flash-a-card.md](flash-a-card.md) (no Imager customisation) and prove
+the install with [flash-and-verify.md](flash-and-verify.md).
+
 ## 1. Flash Raspberry Pi OS Lite
 
 1. Open **Raspberry Pi Imager** on your computer.
@@ -334,6 +339,7 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 
 ## Next Steps
 
+- [WQM-1 bench card process (Mac mini), fw2.4.0](#wqm-1-bench-card-process-mac-mini-fw240)
 - [Sensor Calibration](sensor-calibration.md) — calibrate pH, TDS,
   turbidity, and ORP probes
 - [Firmware Overview](firmware-overview.md) — architecture and data
@@ -350,19 +356,23 @@ defaults. However, you should set `app_key` for LoRaWAN to work.
 
 New units are commissioned entirely from a phone browser — no SSH, no config
 files. Power the unit. If it cannot see a known Wi-Fi network it raises
-`WQM1-xxxx`; join that hotspot and the phone's captive-portal sheet opens
-`http://192.168.4.1/setup/` on its own. `http://192.168.4.1:8080/setup/` is
-the same wizard if the sheet does not appear. Once the unit is on the site
-network, use `http://<unit-ip>:8080`. Until setup is completed the unit
-shows only the guided wizard:
+the open network **BlueSignal Setup** (no password); join it and the
+phone's captive-portal sheet opens the Wi-Fi page at
+`http://192.168.4.1/setup/` on its own. Type that address if the sheet does
+not appear. Port 8080 does not answer on the setup network. After the unit joins the site
+network, owners use BlueSignal Cloud; the local page stays off. Until setup
+is completed the unit shows only the guided wizard, on its own hotspot:
 
-1. **PIN** — replace the factory PIN (1234 is refused).
-2. **Identity** — device ID + DevEUI with a QR code for your install records.
-3. **Cloud** — paste the device API key from cloud.bluesignal.xyz.
+1. **Wi-Fi** — join the site network from this unit's own hotspot. That
+   finishes setup. There is no PIN.
+2. **Identity** — device ID + DevEUI with a QR code for your install records
+   (carded units skip this).
+3. **Cloud** — the unit registers itself; the installer path has no key paste.
 4. **Sensor check** — live traffic-light cards; each problem card says what to
    check in plain language.
 5. **Go / no-go** — a final checklist covering sensors, cloud, LoRa, GPS and
-   storage. Finish restarts monitoring with everything applied.
+   storage. Finish restarts monitoring with everything applied. After setup,
+   owners use BlueSignal Cloud; the local page stays off.
 
 The dashboard home page keeps the same traffic-light language afterwards:
 green = fine, amber = worth a look, red = needs attention — every card carries
@@ -422,3 +432,18 @@ address before you connect the following one.
 Notes for the chlorine probe: activate a new probe in 3M KCL before first
 use, keep sample pH between 5 and 9, and install it in the flow cell —
 immersion installs read unstably and foul quickly.
+
+---
+
+## WQM-1 bench card process (Mac mini), fw2.4.0
+
+Rules: never put home Wi-Fi or any Mac password on a card. No OTA until the bench test passes and the Captain approves. The Pi Zero W needs the 32-bit (armhf) image.
+
+1. **Image:** download `wqm1-pi-zero-<commit>.img.xz` from Actions → Card image. It boots the Pi Zero W and the Zero 2 W. Steps, and what to do when no setup network appears: [`flash-a-card.md`](flash-a-card.md).
+2. **Flash:** Raspberry Pi Imager → Use custom → the `.img.xz`. Say **No** to OS customisation. Imager reads the card back to verify it, then ejects it. The older `~/flash-card.sh` with a hand-built image is retired; it is how a 64-bit or never-checked image ends up on a Zero W.
+3. **Verify:** reinsert the card and wait for `bootfs` to mount. `cat /Volumes/bootfs/wqm1-card.txt` shows the firmware and commit, the boards the card boots and the setup network. The build already checked that no Wi-Fi or password is on the card. The hostname is set from the serial on first boot.
+4. **Burn-in flag:** `touch /Volumes/bootfs/burnin`, then `cd ~` (a shell inside /Volumes/bootfs blocks the eject), then `diskutil eject /Volumes/bootfs`.
+5. **Boot:** put the card in the Pi on the HAT and power it on. Burn-in takes about 10 minutes, and the open **BlueSignal Setup** network comes up. It has no password.
+6. **Phone join (mandatory):** burn-in only checks that the network is up. Join BlueSignal Setup from a real phone and check that the Wi-Fi page opens.
+7. **Read results:** put the card back in the mini and run `read-card-logs.sh`. It passes when `wqm1-status.txt` shows `COMMISSION: READY` and `BURN-IN: PASS`, with no undervoltage.
+8. **Commission:** run `bash ~/commission-card.sh`. It logs to `~/wqm1-commission-log.csv`.

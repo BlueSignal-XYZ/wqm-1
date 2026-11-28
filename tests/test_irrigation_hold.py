@@ -938,20 +938,19 @@ def sw_client(tmp_path):
         """
     )
     conn.close()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("service_window:\n  setup_completed: true\n")
     app = create_app(
         {
             "db_path": db_path,
-            "pin": "9999",
-            "config_path": str(tmp_path / "config.yaml"),
+            "config_path": str(config_path),
             "cal_path": str(tmp_path / "cal.yaml"),
             "cmd_sock": str(tmp_path / "cmd.sock"),
         }
     )
     app.config["TESTING"] = True
-    c = app.test_client()
-    with c.session_transaction() as sess:
-        sess["pin_verified"] = True
-    return c
+    app.config["TEST_OPEN_WINDOW"] = True
+    return app.test_client()
 
 
 HOLDING = {

@@ -17,6 +17,33 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # non-interactive environment on a system without a "pi" user.
 INSTALL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo pi)}"
 
+# Persistent data dir. Firmware (bluesignal-wqm) and the Service Window
+# (bluesignal-service-window) both run as this user — User=pi in the unit
+# files, rewritten to $INSTALL_USER at install. Identity / HTTP / register
+# files are 0600 inside a 0700 directory so other accounts cannot list or
+# read them. OTA and the card consumer run as root and do not need the seed.
+# WQM1_STATE_DIR is for tests; a unit never sets it.
+wqm1_ensure_state_dir() {
+    local user="${1:-pi}"
+    local dir="${WQM1_STATE_DIR:-/var/lib/bluesignal}"
+    sudo mkdir -p "$dir"
+    sudo chown "$user:$user" "$dir"
+    sudo chmod 0700 "$dir"
+}
+
+wqm1_runtime_user() {
+    local unit="${WQM1_WQM_UNIT:-/etc/systemd/system/bluesignal-wqm.service}"
+    local user=""
+    if [ -r "$unit" ]; then
+        user="$(sed -n 's/^User=//p' "$unit" | head -n1 | tr -d '\r')"
+    fi
+    if [ -n "$user" ]; then
+        printf '%s\n' "$user"
+    else
+        printf '%s\n' "$INSTALL_USER"
+    fi
+}
+
 # OTA-managed layout: every install lands in /opt/bluesignal/releases/<version>/
 # and /opt/bluesignal/current is a symlink to the active release. The systemd
 # units run from current/src, so the OTA agent can swap releases atomically by
@@ -34,7 +61,7 @@ echo "=== BlueSignal WQM-1 Setup (firmware v$FW_VERSION) ==="
 # card cut from an image that holds them would upload unit 1's bench samples
 # under its own label the moment its key is consumed), the cached water
 # profile, the OTA/reboot request flags, the first-boot marker and the
-# journal. Config (probes, variant, the factory PIN, setup not finished) and
+# journal. Config (probes, variant, setup not finished) and
 # the Wi-Fi the run checks in over stay. Mirrors ops -> Units -> "Bench a
 # WQM-1 run" -> Capture the master image.
 if [ "${1:-}" = "--golden" ]; then
@@ -53,9 +80,16 @@ if [ "${1:-}" = "--golden" ]; then
     echo "[golden] Stopping the firmware and the service window..."
     sudo systemctl stop bluesignal-wqm.service bluesignal-service-window.service 2>/dev/null || true
     echo "[golden] Removing unit 1's state from the image..."
-    sudo rm -f /var/lib/bluesignal/wqm1.db /var/lib/bluesignal/wqm1.db-wal /var/lib/bluesignal/wqm1.db-shm
-    sudo rm -f /var/lib/bluesignal/water-profile.json /var/lib/bluesignal/ota-check-now /var/lib/bluesignal/reboot-request
+    STATE_DIR="${WQM1_STATE_DIR:-/var/lib/bluesignal}"
+    sudo rm -f "$STATE_DIR/wqm1.db" "$STATE_DIR/wqm1.db-wal" "$STATE_DIR/wqm1.db-shm"
+    sudo rm -f "$STATE_DIR/water-profile.json" "$STATE_DIR/ota-check-now" "$STATE_DIR/reboot-request"
+    sudo rm -f "$STATE_DIR/device-ed25519.key" "$STATE_DIR/device-ed25519.key.tmp" \
+               "$STATE_DIR/device-http.key" "$STATE_DIR/device-http.key.tmp" \
+               "$STATE_DIR/device-register.json" "$STATE_DIR/device-register.json.tmp"
     sudo rm -f /etc/bluesignal/.provisioned
+    # Keep the directory. Clones must find it 0700 and owned by the service
+    # user so first boot can write a new identity (never share unit 1's pk).
+    wqm1_ensure_state_dir "$(wqm1_runtime_user)"
     sudo journalctl --rotate 2>/dev/null || true
     sudo journalctl --vacuum-time=1s 2>/dev/null || true
     echo "[golden] Done. Power off now (sudo poweroff), move the card to the Mac, run: npm run bench -- golden /dev/diskN"
@@ -345,13 +379,20 @@ if [ -d "$INSTALL_DIR/src" ] && [ ! -d "$INSTALL_DIR/releases" ]; then
 fi
 
 sudo mkdir -p "$RELEASE_DIR"/{config,scripts}
-sudo mkdir -p /var/lib/bluesignal
+wqm1_ensure_state_dir "$INSTALL_USER"
 sudo mkdir -p /var/log/bluesignal
 sudo mkdir -p /etc/bluesignal
 
 # --- Install firmware ---
 echo "[5/9] Installing firmware to $RELEASE_DIR..."
 sudo cp -r "$SCRIPT_DIR/src" "$RELEASE_DIR/"
+# Bytecode for THIS python. First boot on a golden Pi Zero W card must not
+# compile the Service Window on one ARM1176 core. The OTA tarball also
+# ships __pycache__ (scripts/build-ota-bundle.sh); this step is what
+# matches Trixie's interpreter inside the image chroot. Hash-based pyc
+# stay valid across cp/tar mtimes. A failure is a warning: import will
+# compile, which is the old first-boot cost, not an install abort.
+sudo python3 -m compileall -q -f --invalidation-mode=checked-hash "$RELEASE_DIR/src" || echo "  WARNING: compileall failed — first import will compile on this python"
 sudo cp "$SCRIPT_DIR/requirements.txt" "$RELEASE_DIR/"
 for extra in requirements-rpi.txt requirements-gpiochip.txt requirements-apple-home.txt requirements-home-assistant.txt; do
     if [ -f "$SCRIPT_DIR/$extra" ]; then
@@ -398,7 +439,7 @@ done
 # files below; this copy is what /opt/bluesignal/current/systemd and an
 # OTA extract share. Without it the setup AP reports the unit missing.
 sudo mkdir -p "$RELEASE_DIR/systemd"
-for unit in wqm1-setup-hostapd.service wqm1-setup-dnsmasq.service bluesignal-captive-portal.service; do
+for unit in wqm1-setup-hostapd.service wqm1-setup-dnsmasq.service bluesignal-captive-portal.service bluesignal-wifi-join.service; do
     sudo cp "$SCRIPT_DIR/systemd/$unit" "$RELEASE_DIR/systemd/"
 done
 if [ -f "$SCRIPT_DIR/scripts/host-pins.py" ]; then
@@ -434,10 +475,11 @@ echo "  current -> $RELEASE_DIR"
 
 # /etc/bluesignal must be writable by the service user, not just readable.
 # The service window provisions the device by rewriting config.yaml (AppKey,
-# cloud_enabled, api_key, PIN). It runs as $INSTALL_USER, so a root-owned
+# cloud_enabled, api_key). It runs as $INSTALL_USER, so a root-owned
 # /etc/bluesignal makes every save fail with a 500 and the provisioning page
 # is read-only in practice — which is the one thing it exists to do.
 sudo chown -R "$INSTALL_USER:$INSTALL_USER" "$INSTALL_DIR" /var/lib/bluesignal /var/log/bluesignal /etc/bluesignal
+sudo chmod 0700 /var/lib/bluesignal
 
 # --- systemd services ---
 echo "[6/9] Installing systemd services..."
@@ -458,6 +500,9 @@ sudo sed -e "s/^User=pi$/User=$INSTALL_USER/" \
 sudo sed -e "s/^User=pi$/User=$INSTALL_USER/" \
     "$SCRIPT_DIR/systemd/bluesignal-captive-portal.service" \
     | sudo tee /etc/systemd/system/bluesignal-captive-portal.service > /dev/null
+# The port-80 page's root half: join and rescan, on a local socket only the
+# install user can open (install plan §4). Root, so installed verbatim.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-join.service" /etc/systemd/system/
 # OTA agent runs as root (symlink flip + systemctl restart) — install verbatim.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ota.service" /etc/systemd/system/
 if [ -f "$SCRIPT_DIR/systemd/bluesignal-provision.service" ]; then
@@ -468,6 +513,14 @@ fi
 # an installer with a phone can reach the Service Window with no site network
 # — commissioning plan, PR 4. Never concurrent with a station link.
 sudo cp "$SCRIPT_DIR/systemd/bluesignal-ap-fallback.service" /etc/systemd/system/
+# While the hotspot is up and idle, retry the saved site network every 5 min
+# (router slower than the Pi after a power cut). Never while a phone is on it.
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-wifi-retry.timer" /etc/systemd/system/
+# Once a minute: a unit on neither its site Wi-Fi nor its own hotspot gets
+# the hotspot back (a restore that failed after a join used to strand it).
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-hotspot-guard.service" /etc/systemd/system/
+sudo cp "$SCRIPT_DIR/systemd/bluesignal-hotspot-guard.timer" /etc/systemd/system/
 # Not enabled. OnFailure= of bluesignal-ap-fallback.service starts it.
 sudo cp "$SCRIPT_DIR/systemd/wqm1-apfail.service" /etc/systemd/system/
 # Setup AP processes. Not enabled: netctl starts and stops them. The distro
@@ -505,8 +558,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable bluesignal-wqm.service
 sudo systemctl enable bluesignal-service-window.service
 sudo systemctl enable bluesignal-captive-portal.service
+sudo systemctl enable bluesignal-wifi-join.service
 sudo systemctl enable bluesignal-ota.service
 sudo systemctl enable bluesignal-ap-fallback.service
+sudo systemctl enable bluesignal-wifi-retry.timer
+sudo systemctl enable bluesignal-hotspot-guard.timer
 sudo systemctl enable bluesignal-burnin.service
 sudo systemctl enable bluesignal-card.service
 
@@ -528,6 +584,8 @@ echo "[7/9] Installing service window and provisioning tools..."
 # that recreates /var/run/bluesignal owned by the install user on every boot.
 sudo tee /etc/tmpfiles.d/bluesignal.conf > /dev/null <<EOF
 d /var/run/bluesignal 0755 $INSTALL_USER $INSTALL_USER -
+d /var/lib/bluesignal 0700 $INSTALL_USER $INSTALL_USER -
+d /run/wqm1 0755 root root -
 EOF
 sudo mkdir -p /var/run/bluesignal
 if [ -f "$SCRIPT_DIR/scripts/provision.py" ]; then
@@ -573,12 +631,13 @@ echo "  6. Start service:    sudo systemctl start bluesignal-wqm"
 echo "  7. View logs:        journalctl -u bluesignal-wqm -f"
 echo ""
 echo "Service Window:"
-echo "  Web UI:              http://$(hostname).local:8080"
-echo "  Default PIN:         1234 (change in /etc/bluesignal/config.yaml)"
+echo "  Bench access:        ssh -L 8080:127.0.0.1:8080 $INSTALL_USER@$(hostname).local"
+echo "                       then open http://localhost:8080"
+echo "  Local page:          hotspot setup only; owners use BlueSignal Cloud. There is no PIN."
 echo ""
 echo "Provisioning:"
 echo "  CLI wizard:          sudo python3 /opt/bluesignal/current/scripts/provision.py"
-echo "  Web wizard:          http://$(hostname).local:8080/provision"
+echo "  Web wizard:          http://localhost:8080/provision (through the bench tunnel)"
 echo ""
 echo "OTA updates:"
 echo "  Layout:              releases in $INSTALL_DIR/releases/, active = $CURRENT_LINK"

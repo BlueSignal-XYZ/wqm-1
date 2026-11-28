@@ -19,10 +19,8 @@ from tests.test_service_window_setup import make_app
 
 @pytest.fixture
 def client(tmp_path, mock_hardware):
-    app = make_app(tmp_path, mock_hardware)
+    app = make_app(tmp_path, mock_hardware, open_window=True)
     with app.test_client() as c:
-        with c.session_transaction() as sess:
-            sess["pin_verified"] = True
         yield c, app
 
 

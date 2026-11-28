@@ -12,8 +12,10 @@ Ranked by what it does to an installer who is standing at the unit with a
 phone. Items under "Fixed in the hotspot pass" landed with the 7.45.98
 radio fix. The captive-portal item is fixed in the port-80 change. The
 address gate is the join that waits for a real lease. The hostapd item
-is the passphrase phones reject on a beacon that is already up. The rest
-are not fixed; each has the smallest change that would close it.
+is the passphrase phones reject on a beacon that is already up. The
+power-loss pass covers a dirty root after a pull, a resumable first
+boot, a card that moved between Pis, and undervoltage during boot. The
+rest are not fixed; each has the smallest change that would close it.
 Nothing below was re-checked on a HAT.
 
 ## Fixed in the hotspot pass
@@ -58,6 +60,19 @@ Nothing below was re-checked on a HAT.
    SSID said `WQM1-4FD8`. Every boot now sets the hostname from the same
    `ap_name()` the SSID uses, and updates it when they differ.
 
+   The card also records the Pi serial it was first commissioned with, in
+   `/var/lib/wqm1/card-binding`. A later boot on a different Pi keeps
+   working — hostname, SSID and passphrase follow the Pi the card is in
+   now — and `wqm1-status.txt` gains
+   `card: moved from <old serial> to <new serial>`. The cloud heartbeat
+   adds `cardMoved`, `cardMovedFrom`, `cardMovedTo`, and `wifiReconfirm`
+   only on that boot. A card that already has a site Wi-Fi profile does
+   not join it: autoconnect is turned off, `reconfirm: required` is
+   written, and `GET /setup/card-status` returns `wifi_reconfirm: true`
+   for the setup page to read. Joining a network from setup, or finishing
+   setup, adopts the current Pi and clears the flag. The setup page
+   itself is unchanged.
+
 6. **A bad Wi-Fi password restored the hotspot only once.** `join_network`
    now uses the same three attempts as boot before it reports the AP gone.
 
@@ -67,6 +82,12 @@ Nothing below was re-checked on a HAT.
    `COMMISSION: READY` or `FAIL`). `scripts/burn-in.sh` runs for ten
    minutes when an empty `burnin` file is on the boot partition and
    writes `wqm1-burnin.txt`. See [burn-in.md](burn-in.md).
+
+   Undervoltage now or since this boot fails the line as
+   `COMMISSION: FAIL: weak power supply or cable`. The power line is
+   `power: undervoltage seen (N)`. The burn-in result uses the same
+   reason and appends `undervoltage seen (N)`. A since-boot frequency
+   cap with no undervoltage does not fail.
 
 ## Fixed in the port-80 change
 
@@ -160,20 +181,71 @@ Nothing below was re-checked on a HAT.
    masks the distro units. No phone handshake was captured. Not
    re-checked on a HAT.
 
+## Fixed in the power-loss pass
+
+A pull during boot left the ext4 root with `Inode bitmap checksum does
+not match bitmap`. Installers pull power, swap cards, and use weak USB
+supplies. This pass is what the golden image does about that. It was
+not booted on a Pi.
+
+1. **Root fsck on every boot.** The image command line gets
+   `fsck.repair=yes` (`tools/golden/rootfs-resilience.sh`, applied by
+   `build-golden.sh` to the image's `cmdline.txt`). After the last
+   `e2fsck`, `tune2fs -c 1 -C 1 -i 0 -e remount-ro` forces a check on
+   the first real boot as well and remounts read-only if a later check
+   finds an error. The root fstab line gains `noatime` and
+   `errors=remount-ro`, and a pass number of 0 is raised to 1 so
+   systemd-fsck does not skip it.
+
+2. **Fewer writes, and the previous boot's log survives.** journald is
+   `Storage=persistent` with `SystemMaxUse=32M`, `SystemMaxFileSize=8M`,
+   and `SyncIntervalSec=30s`. Volatile storage would drop the crash.
+   `/var/log` is tmpfs. `/var/log/journal` is a bind of
+   `/var/lib/wqm1/journal`. `wqm1-journal-preserve` copies the newest
+   `system*.journal` to
+   `/var/lib/wqm1/journal-previous/previous.journal` before journald
+   starts. `/var/tmp` (16M) and `/var/cache` (64M) are tmpfs.
+   Config, identity, calibration, the OTA state file, and the water
+   profile cache are written as a temp file, `fsync`, then rename.
+   The FAT boot partition still cannot rename atomically; the status
+   publisher `fsync`s the copy it places there.
+
+3. **An overlayfs read-only root is not enabled.** The Pi overlay upper
+   layer is tmpfs, which would drop the OTA symlink
+   (`/opt/bluesignal/current` and `releases/`), identity under
+   `/etc/bluesignal` and `/var/lib/bluesignal`, SQLite, and config on
+   the next boot. A persistent upper layer puts the writes back on the
+   card, and `rename` of the OTA symlink fails across the overlay
+   boundary. The golden build leaves the root writable and relies on
+   fsck plus fewer writes.
+
+4. **First boot is resumable.** `wqm1-firstboot` records
+   `started` / `done` for `board`, `radio`, `card`, `hostname`, and
+   `done`. A marker left at `started` is logged as
+   `resuming <step> after power loss` and the step runs again. Completed
+   steps still run, because the radio and the hostname have to follow
+   the Pi the card is in. `wqm1-boot-stage.service` writes
+   `BOOT: stage=boot` to `wqm1-status.txt` as soon as the filesystems
+   are mounted, before NetworkManager and before the hotspot, and it
+   replaces a stale `COMMISSION: READY` so a card that dies early is
+   not still labelled ready. Later stages are `firstboot`, `board`,
+   `radio`, `card`, `hostname`, and `done`.
+
 ## Still open
 
 ### 1. Undervoltage drops the AP and the ADC together
 
 The Zero W log shows `brcmf_cfg80211_set_power_mgmt: power save enabled`
 during probe, and a marginal 5 V rail (HAT + AP) throttles the chip.
-The status file and the burn-in now report `vcgencmd get_throttled`.
-They do not keep the rail up. Current undervoltage fails the
-`COMMISSION` line. A since-boot flag is recorded and does not, by
-itself, fail the line.
+The status file and the burn-in read `vcgencmd get_throttled`, or the
+firmware sysfs node when that command is absent. Current undervoltage
+and a since-boot undervoltage both fail `COMMISSION` as
+`weak power supply or cable`, and the burn-in fails the same way. The
+line is `power: undervoltage seen (N)`. They do not keep the rail up.
 
-**Fix:** bench supply at 5.1 V / 2.5 A, and treat `power: now
-undervoltage` as a failed board before it ships. No firmware change
-holds the AP up through a brownout.
+**Fix:** bench supply at 5.1 V / 2.5 A. The verdict is what stops a
+brownout unit shipping; the supply is still the bench half. No firmware
+change holds the AP up through a brownout.
 
 **Impact:** the SSID appears, the phone connects, then both disappear.
 Looks like the hotspot-security failure in the hotspot pass and is not.
@@ -294,8 +366,8 @@ commissioning because the bench is indoors.
   brings the hotspot and the portal back.
 - The station grace period is 45 s only when a Wi-Fi profile is already
   saved. An unconfigured unit does not wait.
-- The factory PIN is rejected before the radio is touched, so a join
-  cannot finish on the factory PIN and then strand the phone.
+- There is no PIN. A successful join finishes setup; a failed join
+  brings the hotspot back so the phone can try again.
 - Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) is in the
   dedicated dnsmasq bound to `wlan0`. That process is stopped before the
   join, so it does not hijack DNS on the site. The port-80 listener

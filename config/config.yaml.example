@@ -110,7 +110,7 @@ rs485_baud: 9600             # one speed for every device on the bus
 service_window:
   enabled: true
   port: 8080
-  pin: "1234"               # Change on first use
+  # There is no local PIN. Setup is the unit's own hotspot; owners use Cloud.
 
 # --- Automation rules (optional) ---
 # Threshold-based relay automation. Each rule evaluates a sensor value

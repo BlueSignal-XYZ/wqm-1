@@ -1,0 +1,8 @@
+---
+description: Read AGENTS.md before changing anything
+alwaysApply: true
+---
+
+# Agent instructions
+
+Read `AGENTS.md` at the repository root first, before changing anything. Follow the Captain's engineering rules at the top of that file, then the WQM-1 firmware rules below them.

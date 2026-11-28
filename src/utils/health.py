@@ -37,6 +37,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from utils.cardmove import heartbeat_fields
+
 logger = logging.getLogger("wqm1.health")
 
 _PROC_MEMINFO = "/proc/meminfo"
@@ -155,6 +157,10 @@ class HealthReporter:
             from utils.identity import hardware_identity
 
             hb.update(hardware_identity())
+        with contextlib.suppress(Exception):
+            moved = heartbeat_fields()
+            if moved:
+                hb.update(moved)
         # Which host board the unit runs on (profile id, e.g. "rpi-zero-2w",
         # "orangepi-zero-3w"). A hardware attribute like piSerial, never the
         # identity; the cloud stores it under hardware/hostBoard.

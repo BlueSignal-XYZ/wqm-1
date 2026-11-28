@@ -1,0 +1,12 @@
+[Unit]
+Description=Raise the setup hotspot within about a minute of a unit losing both networks
+
+[Timer]
+# After the boot fallback has had its turn (it waits up to 90 s for a saved
+# network, then raises the hotspot itself).
+OnBootSec=4min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -42,9 +42,10 @@ def strip_passphrases(text: str, secrets: Iterable[str]) -> str:
 def known_passphrases() -> list[str]:
     """Passphrases that must not land on the boot partition.
 
-    The identity file and the hostapd config are the two places this
-    process can learn the setup-AP passphrase. A missing file is not a
-    reason to skip the clue.
+    The setup network is open since install plan §5, so normally there is
+    none; a hostapd config written with one (an older release, a bench
+    override) is still read so nothing it holds reaches the card. A missing
+    file is not a reason to skip the clue.
     """
     found: list[str] = []
     try:

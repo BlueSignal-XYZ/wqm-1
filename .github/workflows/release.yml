@@ -56,15 +56,13 @@ jobs:
       # OTA bundle layout: repo files at the TOP LEVEL of the tarball (no
       # wrapping directory) — the device agent extracts straight into
       # /opt/bluesignal/releases/<version>/, so `src/`, `VERSION`, etc. must
-      # sit at the archive root. Keep this in sync with the round-trip job in
-      # ci.yml and with setup.sh's per-release install layout.
+      # sit at the archive root. scripts/build-ota-bundle.sh is the single
+      # packager (compileall + tar, including __pycache__). Keep the caller
+      # in step with the round-trip job in ci.yml and with setup.sh.
       - name: Build OTA firmware bundle
         run: |
           VERSION=$(cat VERSION)
-          tar --exclude='__pycache__' --exclude='*.pyc' \
-            -czf "wqm1-firmware-${VERSION}.tar.gz" \
-            src config scripts systemd requirements.txt requirements-rpi.txt VERSION setup.sh
-          ls -l "wqm1-firmware-${VERSION}.tar.gz"
+          bash scripts/build-ota-bundle.sh "wqm1-firmware-${VERSION}.tar.gz"
 
       - name: Generate and sign OTA manifest
         env:

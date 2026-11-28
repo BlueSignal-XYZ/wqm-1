@@ -1,0 +1,9 @@
+<div class="id-block">
+    <div class="id-label">Probes detected</div>
+    {% for row in probe_rows %}
+    <div class="id-row">
+        <span>{{ row.name }}</span>
+        <code class="id-value">{{ row.word }}</code>
+    </div>
+    {% endfor %}
+</div>

@@ -16,17 +16,15 @@ stays up for a unit already on the site LAN. At a well head with no Wi-Fi,
 or with a card flashed for a network that does not exist here, the hotspot
 is how the phone reaches the unit.
 
-The SSID is ``WQM1-`` + the last four characters of the device id
-(utils.identity.ap_name) and the passphrase comes from the provisioned
-identity file the bench wrote (``ap_passphrase``). A unit with no identity
-file (a Pi-serial unit from before the label) uses a passphrase derived from
-its own Pi serial, which is printed by ``scripts/diagnostics.sh`` so it can be
-written on the enclosure. Never a shared default.
+The setup network is ``BlueSignal Setup`` on every unit, and it is open
+(install plan §5, ``utils.netctl.ap_credentials``). The page on it sets
+only the unit's Wi-Fi; nothing else on the unit answers there.
 """
 
 from __future__ import annotations
 
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -39,15 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger("wqm1.ap_fallback")
 
 
-def derived_passphrase(pi_serial: str) -> str:
-    """See utils.netctl.derived_passphrase — one definition, used by the
-    Service Window's join path and by this boot-time script alike."""
-    from utils.netctl import derived_passphrase as _derived
-
-    return _derived(pi_serial)
-
-
-def resolve_credentials() -> tuple[str, str]:
+def resolve_credentials() -> tuple[str, str | None]:
     from utils.netctl import ap_credentials
 
     return ap_credentials()
@@ -65,7 +55,7 @@ def service_window_port(config_path: str = "/etc/bluesignal/config.yaml") -> int
         return 8080
 
 
-def hotspot_failure_status(detail: object, passphrase: str) -> str:
+def hotspot_failure_status(detail: object, passphrase: str | None) -> str:
     """``failed: <reason>`` for wqm1-status.txt.
 
     The reason is the line hostapd or dnsmasq returned when the AP did not
@@ -104,7 +94,69 @@ def _write_status(
         logger.error("Could not write boot status: %s", e)
 
 
+def retry() -> int:
+    """bluesignal-wifi-retry.timer: try the saved site network again while the
+    hotspot is up and nobody is on it. Always exits 0 — a timer that fails
+    stops being scheduled."""
+    from utils.netctl import retry_saved_station
+
+    def _stop(_signum: int, _frame: object) -> None:
+        # systemd's SIGTERM at TimeoutStartSec would otherwise end the
+        # process mid-retry with the hotspot down. SystemExit runs the
+        # retry's own restore on the way out.
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    ssid, passphrase = resolve_credentials()
+    try:
+        result = retry_saved_station(ssid, passphrase)
+    except Exception as e:  # noqa: BLE001 — never leave the timer failed
+        logger.error("Saved-network retry failed: %s", e)
+        return 0
+    logger.info("Saved-network retry: %s", result)
+    return 0
+
+
+def guard() -> int:
+    """bluesignal-hotspot-guard.timer, about once a minute: a unit on neither
+    its site Wi-Fi nor its own hotspot gets the hotspot back. Always exits 0
+    — a timer that fails stops being scheduled."""
+    from utils.netctl import guard_hotspot
+
+    def _stop(_signum: int, _frame: object) -> None:
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _stop)
+    ssid, passphrase = resolve_credentials()
+    try:
+        result = guard_hotspot(ssid, passphrase)
+    except Exception as e:  # noqa: BLE001 — never leave the timer failed
+        logger.error("Hotspot guard failed: %s", e)
+        return 0
+    if result.get("skipped"):
+        logger.debug("Hotspot guard: %s", result["skipped"])
+        return 0
+    logger.warning("Hotspot guard: %s", result)
+    if result.get("raised"):
+        from utils.captive_portal import ensure_portal_service, wait_until_reachable
+        from utils.join_service import ensure_join_service
+
+        for name, ensure in (
+            ("captive portal", ensure_portal_service),
+            ("join", ensure_join_service),
+        ):
+            started = ensure()
+            if not started.get("ok"):
+                logger.warning("%s service: %s", name, started.get("error"))
+        _write_status(hotspot="up", ssid=ssid, portal=wait_until_reachable())
+    return 0
+
+
 def main() -> int:
+    if "--retry" in sys.argv[1:]:
+        return retry()
+    if "--guard" in sys.argv[1:]:
+        return guard()
     # Before the radio wait. A card pulled while hostapd is still coming
     # up would otherwise show a stale hotspot line, or none.
     _write_status(hotspot="starting", portal="down: starting")
@@ -113,6 +165,7 @@ def main() -> int:
         ensure_portal_service,
         wait_until_reachable,
     )
+    from utils.join_service import ensure_join_service
     from utils.netctl import ensure_reachable, remove_legacy_captive_nat
 
     # Captive DNS (wildcard + DHCP option 114) before the AP comes up, so
@@ -145,6 +198,10 @@ def main() -> int:
         started = ensure_portal_service()
         if not started.get("ok"):
             logger.warning("Captive portal service: %s", started.get("error"))
+        # The page's joins run here as root (install plan §4).
+        joiner = ensure_join_service()
+        if not joiner.get("ok"):
+            logger.warning("Wi-Fi join service: %s", joiner.get("error"))
         portal = wait_until_reachable()
         logger.info("Captive portal: %s", portal)
         station_failure = result.get("station_failure")

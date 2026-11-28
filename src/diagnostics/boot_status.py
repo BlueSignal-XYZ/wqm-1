@@ -9,8 +9,9 @@ state changes. The first line is the commissioning verdict
 the firmware, the board and its revision code, the kernel, the Wi-Fi chip
 and firmware, undervoltage, the I2C buses the kernel enumerated, wlan0,
 the setup hotspot (SSID and the last AP error), the station join
-(``station: ok <ip>`` or ``station: fail: <reason>``), the port-80 captive
-portal, ADC, 1-Wire, GPS, uptime, and the last fatal error.
+(``station: ok <ip>`` or ``station: fail: <reason>``), the station signal
+(``station_rssi``), the port-80 captive portal, ADC, 1-Wire, GPS, uptime,
+and the last fatal error.
 
 No secrets. A line that looks like a key, a passphrase, or a private key
 is replaced before the file is written. The hotspot passphrase is never a
@@ -29,7 +30,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from utils.cardmove import status_values
+from utils.device_keys import registration_status
+
 logger = logging.getLogger("wqm1.boot_status")
+
+# Spoken on COMMISSION and in the burn-in result when the throttled
+# register shows undervoltage now or since this boot.
+WEAK_POWER_REASON = "weak power supply or cable"
+
+# The last JOIN_HISTORY Wi-Fi join attempts, newest first (W7): time, SSID,
+# reason, and for a failure NetworkManager's own words. Never the password.
+JOIN_HISTORY = 5
+_JOIN_KEYS = tuple(f"join_{i}" for i in range(1, JOIN_HISTORY + 1))
 
 _KEYS = (
     "commission",
@@ -44,7 +57,10 @@ _KEYS = (
     "ssid",
     "hotspot",
     "station",
+    "station_rssi",
+    *_JOIN_KEYS,
     "portal",
+    "registration",
     "adc",
     "onewire",
     "gps",
@@ -53,6 +69,9 @@ _KEYS = (
     "fatal",
     "uptime",
     "updated",
+    "boot",
+    "card",
+    "reconfirm",
 )
 
 # The publisher installed by setup.sh. The firmware user may sudo -n it;
@@ -258,8 +277,9 @@ def read_wifi_firmware() -> str:
     return _wifi_cache
 
 
-# Bits of `vcgencmd get_throttled`. Current conditions fail commissioning;
-# the since-boot bits are reported and do not, on their own.
+# Bits of `vcgencmd get_throttled`. Current conditions fail commissioning.
+# Since-boot undervoltage fails too (a weak supply during this boot). Other
+# since-boot bits are reported and do not, on their own.
 _THROTTLE_NOW = (
     (0x1, "undervoltage"),
     (0x2, "freq-capped"),
@@ -274,9 +294,25 @@ _THROTTLE_PAST = (
 )
 
 
+_THROTTLED_RE = re.compile(r"throttled=(0x[0-9a-fA-F]+)", re.IGNORECASE)
+_UNDERVOLTAGE_BITS = 0x1 | 0x10000
+_SEEN_RE = re.compile(r"undervoltage seen \((\d+)\)")
+
+
+def throttled_value(text: str) -> int | None:
+    """Integer from ``throttled=0x…`` or a bare ``0x…``. None when absent."""
+    match = _THROTTLED_RE.search(text or "")
+    if match:
+        return int(match.group(1), 16)
+    bare = re.search(r"\b(0x[0-9a-fA-F]+)\b", text or "")
+    if not bare:
+        return None
+    return int(bare.group(1), 16)
+
+
 def parse_throttled(text: str) -> str:
     """Decode ``throttled=0x…``. ``unknown`` when vcgencmd did not say."""
-    match = re.search(r"throttled=(0x[0-9a-fA-F]+)", text or "")
+    match = _THROTTLED_RE.search(text or "")
     if not match:
         return "unknown"
     value = int(match.group(1), 16)
@@ -293,12 +329,87 @@ def parse_throttled(text: str) -> str:
     return " ".join(parts)
 
 
-def read_power() -> str:
-    """Undervoltage / throttle. ``unknown`` when ``vcgencmd`` is not installed."""
-    rc, text = _run_text(["vcgencmd", "get_throttled"])
-    if rc != 0 and "throttled=" not in text:
+def text_has_undervoltage(power: str) -> bool:
+    """True when the line reports undervoltage now or since this boot."""
+    text = (power or "").strip().lower()
+    if text.startswith("undervoltage seen"):
+        return True
+    if "undervoltage" not in text:
+        return False
+    return text.startswith("now ") or "since-boot" in text
+
+
+def undervoltage_seen_count(power: str) -> int:
+    """How many times the line says undervoltage was seen. 1 for a bit set
+    with no explicit count. 0 when the line is not an undervoltage."""
+    match = _SEEN_RE.search(power or "")
+    if match:
+        return int(match.group(1))
+    if text_has_undervoltage(power):
+        return 1
+    return 0
+
+
+def format_power_line(text: str, count: int | None = None) -> str:
+    """Status ``power`` value. Undervoltage becomes ``undervoltage seen (N)``."""
+    value = throttled_value(text)
+    if value is None:
         return "unknown"
-    return parse_throttled(text)
+    if value & _UNDERVOLTAGE_BITS:
+        seen = 1 if count is None else max(1, count)
+        return f"undervoltage seen ({seen})"
+    if "throttled=" in (text or ""):
+        return parse_throttled(text)
+    return parse_throttled(f"throttled={value:#x}")
+
+
+def read_sysfs_throttled(root: Path | None = None) -> str:
+    """``throttled=0x…`` from the firmware sysfs node or a hwmon alarm.
+
+    ``root`` is the filesystem root (tests pass a tmp tree). ``""`` when
+    neither source is present.
+    """
+    base = root if root is not None else Path("/")
+    firmware = base / "sys/devices/platform/soc/soc:firmware/get_throttled"
+    try:
+        raw = firmware.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        raw = ""
+    if raw:
+        if raw.startswith("throttled=") or raw.startswith("0x"):
+            return raw if raw.startswith("throttled=") else f"throttled={raw}"
+        if raw.isdigit():
+            return f"throttled=0x{int(raw):x}"
+    hwmon = base / "sys/class/hwmon"
+    if hwmon.is_dir():
+        for alarm in sorted(hwmon.glob("hwmon*/in0_lcrit_alarm")):
+            try:
+                if alarm.read_text(encoding="utf-8").strip() == "1":
+                    return "throttled=0x1"
+            except OSError:
+                continue
+    return ""
+
+
+def read_power() -> str:
+    """Undervoltage / throttle. ``unknown`` when nothing reported it.
+
+    ``WQM1_THROTTLED_FILE`` is a test (or bench) stand-in for vcgencmd.
+    The sysfs node is the fallback when ``vcgencmd`` is not installed.
+    """
+    env = os.environ.get("WQM1_THROTTLED_FILE")
+    if env:
+        try:
+            return format_power_line(Path(env).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return "unknown"
+    _rc, text = _run_text(["vcgencmd", "get_throttled"])
+    if "throttled=" in text:
+        return format_power_line(text)
+    sysfs = read_sysfs_throttled()
+    if sysfs:
+        return format_power_line(sysfs)
+    return "unknown"
 
 
 def read_onewire_state() -> str:
@@ -365,9 +476,10 @@ def commission_verdict(fields: dict[str, str]) -> str:
 
     READY means an installer can reach the unit and the board is not in a
     state that will drop the hotspot or hide the sensors: the AP is up, or
-    a station link is up, and there is no current undervoltage and no known
-    ADC fault. A missing GPS fix or an unfitted 1-Wire probe does not fail
-    commissioning — both are optional on the bench.
+    a station link is up, and there is no undervoltage (now or since this
+    boot) and no known ADC fault. Undervoltage fails as
+    ``weak power supply or cable``. A missing GPS fix or an unfitted
+    1-Wire probe does not fail commissioning — both are optional on the bench.
     """
     reasons: list[str] = []
     hotspot = (fields.get("hotspot") or "").strip()
@@ -390,6 +502,9 @@ def commission_verdict(fields: dict[str, str]) -> str:
     # back in. It is not a board failure. A station line that says fail
     # while we claim to be on that station is.
     station = (fields.get("station") or "").strip()
+    registration = (fields.get("registration") or "").strip()
+    if registration == "conflict":
+        reasons.append("identity conflict")
     if hotspot == "station" and station.startswith("fail"):
         detail = station.split(":", 1)[1].strip() if ":" in station else station
         reasons.append(detail or "station failed")
@@ -401,7 +516,9 @@ def commission_verdict(fields: dict[str, str]) -> str:
         if not portal.startswith("up"):
             reasons.append(f"portal {portal}" if portal else "portal down")
     power = (fields.get("power") or "").strip()
-    if power.startswith("now "):
+    if text_has_undervoltage(power):
+        reasons.append(WEAK_POWER_REASON)
+    elif power.startswith("now "):
         reasons.append(power)
     if (fields.get("adc") or "").strip() == "faulted":
         reasons.append("adc faulted")
@@ -413,26 +530,42 @@ def commission_verdict(fields: dict[str, str]) -> str:
     return "FAIL: " + "; ".join(reasons)
 
 
-def render_status(fields: dict[str, str]) -> str:
+def _has_secret(line: str, secrets: tuple[str, ...]) -> bool:
+    return bool(_SECRET.search(line)) or any(s and s in line for s in secrets)
+
+
+def render_status(fields: dict[str, str], secrets: tuple[str, ...] = ()) -> str:
     """One plain-text snapshot. Every key is always present.
 
-    A line that matches a credential pattern is replaced in full. Replacing
-    only the matched token would leave the secret sitting after the colon.
+    A line that matches a credential pattern, or contains one of
+    ``secrets`` (the home Wi-Fi password while a join is being recorded),
+    is replaced in full. Replacing only the matched token would leave the
+    secret sitting after the colon.
     """
     verdict = fields.get("commission") or commission_verdict(fields)
     verdict_line = f"COMMISSION: {verdict}"
-    if _SECRET.search(verdict_line):
+    if _has_secret(verdict_line, secrets):
         verdict_line = "COMMISSION: [redacted]"
-    lines = [verdict_line, "WQM-1 boot status"]
+    lines = [verdict_line, _format_boot(fields.get("boot", "")), "WQM-1 boot status"]
     for key in _KEYS:
-        if key == "commission":
+        if key in ("commission", "boot"):
             continue
         value = fields.get(key, "")
         line = f"{key}: {value}"
-        if _SECRET.search(line):
+        if _has_secret(line, secrets):
             line = f"{key}: [redacted]"
         lines.append(line)
     return "\n".join(lines) + "\n"
+
+
+def _format_boot(value: str) -> str:
+    """``BOOT: stage=<x>``. The early boot script writes the same line."""
+    text = (value or "").strip()
+    if text.startswith("stage="):
+        return f"BOOT: {text}"
+    if text:
+        return f"BOOT: stage={text}"
+    return "BOOT: stage=unknown"
 
 
 def _read_ssid() -> str:
@@ -444,6 +577,18 @@ def _read_ssid() -> str:
     except Exception as e:  # noqa: BLE001 — status must still be writable
         logger.debug("ssid unavailable: %s", e)
         return ""
+
+
+def _registration_line() -> str:
+    """pending / registered / conflict / error. Never a secret."""
+    try:
+        status = registration_status()
+    except Exception as e:  # noqa: BLE001 — status must still be writable
+        logger.debug("registration status unavailable: %s", e)
+        return "unknown"
+    if status in ("pending", "registered", "conflict", "error"):
+        return status
+    return "unknown"
 
 
 def _firmware_version() -> str:
@@ -549,6 +694,7 @@ def write_boot_status(
     wlan0: str | None = None,
     hotspot: str | None = None,
     station: str | None = None,
+    station_rssi: str | None = None,
     ssid: str | None = None,
     adc: str | None = None,
     adc_error: str | None = None,
@@ -562,6 +708,9 @@ def write_boot_status(
     faulted: list[str] | None = None,
     fatal: str | None = None,
     portal: str | None = None,
+    registration: str | None = None,
+    join_attempt: str | None = None,
+    secrets: tuple[str, ...] = (),
 ) -> str:
     """Refresh the status file and return the text that was written.
 
@@ -593,6 +742,12 @@ def write_boot_status(
         station_text = prev["station"]
     else:
         station_text = ""
+    if station_rssi is not None:
+        rssi_text = station_rssi
+    elif prev.get("station_rssi"):
+        rssi_text = prev["station_rssi"]
+    else:
+        rssi_text = ""
     if portal is not None:
         portal_text = portal
     elif hotspot_text == "up" or str(hotspot_text).startswith("up "):
@@ -601,6 +756,9 @@ def write_boot_status(
         portal_text = prev["portal"]
     else:
         portal_text = _portal_line(hotspot_text)
+    # Always re-read unless the caller overrode it: this lives on the
+    # persistent data path and must not stay "pending" after register.
+    registration_text = registration if registration is not None else _registration_line()
     fields = {
         "firmware": _firmware_version(),
         "board": board or prev.get("board") or read_board_model(),
@@ -613,7 +771,9 @@ def write_boot_status(
         "ssid": ssid_text,
         "hotspot": hotspot_text,
         "station": station_text,
+        "station_rssi": rssi_text,
         "portal": portal_text,
+        "registration": registration_text,
         "adc": adc if adc is not None else prev.get("adc", "unknown"),
         "onewire": _kept(onewire, prev.get("onewire", ""), read_onewire_state()),
         "gps": _kept(gps, prev.get("gps", ""), read_gps_state()),
@@ -622,9 +782,24 @@ def write_boot_status(
         "fatal": fatal if fatal is not None else prev.get("fatal", "none"),
         "uptime": uptime if uptime is not None else read_uptime(),
         "updated": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "boot": prev.get("boot") or "stage=status",
     }
+    try:
+        card_line, reconfirm_line = status_values()
+    except Exception as e:  # noqa: BLE001 — the status file is still written
+        logger.debug("card binding unreadable: %s", e)
+        card_line, reconfirm_line = prev.get("card", ""), prev.get("reconfirm", "")
+    if not card_line and not reconfirm_line:
+        card_line, reconfirm_line = prev.get("card", ""), prev.get("reconfirm", "")
+    fields["card"] = card_line
+    fields["reconfirm"] = reconfirm_line
+    joins = [prev.get(key, "") for key in _JOIN_KEYS]
+    if join_attempt:
+        joins = [join_attempt, *joins][:JOIN_HISTORY]
+    for key, value in zip(_JOIN_KEYS, joins, strict=True):
+        fields[key] = value
     fields["commission"] = commission_verdict(fields)
-    text = render_status(fields)
+    text = render_status(fields, secrets=tuple(s for s in secrets if s))
     wrote_state = False
     wrote_boot = False
     env = os.environ.get("WQM1_STATUS_FILE")
@@ -640,3 +815,45 @@ def write_boot_status(
     if not wrote_state and not wrote_boot:
         logger.debug("boot status not written (no writable status path)")
     return text
+
+
+# NetworkManager's own words after the reason, cut to this many characters.
+JOIN_DETAIL_MAX = 80
+
+
+def join_detail(detail: str | None, secret: str | None = None) -> str:
+    """One short line of NetworkManager's text for the join history, or "".
+
+    The typed password is removed, and a line that still looks like a secret
+    is dropped rather than written.
+    """
+    text = " ".join(str(detail or "").split())
+    if secret and len(secret) >= 4:
+        text = text.replace(secret, "[redacted]")
+    if not text or _SECRET.search(text):
+        return ""
+    if len(text) > JOIN_DETAIL_MAX:
+        text = text[: JOIN_DETAIL_MAX - 3].rstrip() + "..."
+    return text
+
+
+def record_join_attempt(
+    ssid: str, reason: str, *, secret: str | None = None, detail: str | None = None
+) -> str:
+    """Add one join attempt to the card's status file, newest first.
+
+    ``reason`` is ``joined`` or a failure kind. ``detail`` is NetworkManager's
+    text for a failure (Jacques, 2026-11-17: ``no_association`` alone could
+    not say why a Pi 4 never got onto the router). ``secret`` is the password
+    that was typed: it is removed from the detail, and any line containing it
+    is redacted for this write (I2).
+    """
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"{stamp} {ssid} {reason}"
+    said = join_detail(detail, secret) if reason != "joined" else ""
+    if said:
+        line = f"{line} - {said}"
+    return write_boot_status(
+        join_attempt=line,
+        secrets=(secret,) if secret else (),
+    )

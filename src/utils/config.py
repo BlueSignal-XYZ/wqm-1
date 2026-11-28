@@ -20,6 +20,8 @@ from typing import Any
 
 import yaml
 
+from utils.atomic import atomic_write_text
+
 logger = logging.getLogger("wqm1.config")
 
 # ===========================================================================
@@ -844,11 +846,7 @@ class ConfigManager:
             return False, errors
         doc = {"version": version, "values": accepted}
         try:
-            self._remote_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._remote_path.with_suffix(".tmp")
-            with tmp.open("w") as f:
-                yaml.safe_dump(doc, f)
-            tmp.replace(self._remote_path)
+            atomic_write_text(self._remote_path, yaml.safe_dump(doc))
         except Exception as e:
             return False, [f"persist failed: {e}"]
         self.reload()
@@ -874,16 +872,9 @@ def get_settings(config_path: str | None = None) -> Settings:
 
 
 def atomic_json_write(path: str, data: dict[str, Any]) -> None:
-    """Write JSON file atomically (write to .tmp then rename)."""
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
+    """Write JSON file atomically (temp file, fsync, rename)."""
     try:
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-        tmp.replace(p)
+        atomic_write_text(path, json.dumps(data, indent=2, default=str))
     except Exception as e:
         logger.error("Atomic write to %s failed: %s", path, e)
-        if tmp.exists():
-            tmp.unlink()
         raise

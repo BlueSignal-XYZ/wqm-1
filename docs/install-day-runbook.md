@@ -5,10 +5,19 @@ commission on site, leave with the unit reporting. Reconciled against the code i
 this repo as of 2026-08-18 — where a step differs from the printed installer
 manual, the code is right and the manual defect is named in §6.
 
-Companions: [`getting-started.md`](getting-started.md) (first install from
-scratch), [`ota-runbook.md`](ota-runbook.md) §7 (field bootstrap),
-`marketplace/docs/operations/device-reflash-runbook.md` (taking a unit back to
-zero).
+Companions: [`flash-and-verify.md`](flash-and-verify.md) (customer card
+from this repo's image; do not use Imager customisation on that card),
+[`getting-started.md`](getting-started.md)
+(first install from scratch), [`installer-mistakes.md`](installer-mistakes.md)
+(the things that send an installer back to the truck: 2.4 GHz only, weak
+signal, the phone on mobile data, enterprise / WPA3 / sign-in Wi-Fi, the
+password, and what the page says after Connect), [`ota-runbook.md`](ota-runbook.md) §7 (field
+bootstrap), `marketplace/docs/operations/device-reflash-runbook.md`
+(taking a unit back to zero).
+
+§1 below is the older "flash Raspberry Pi OS and run `setup.sh`" path. A
+card already built by **Actions → Card image** uses
+[`flash-and-verify.md`](flash-and-verify.md) instead.
 
 **Fill in before you go:**
 
@@ -100,12 +109,14 @@ Capture and store all three before closing the page:
 
 ### 1.5 Walk the Service Window wizard as far as the bench allows
 
-Power the unit, join its network, open `http://wqmbench.local:8080`. Until setup
-completes the unit serves only the wizard:
+Power the unit and open an SSH tunnel to it:
+`ssh -L 8080:127.0.0.1:8080 pi@wqmbench.local`, then `http://localhost:8080`.
+The Service Window answers nobody on the network. Until setup completes the
+unit serves only the wizard:
 
-`welcome → pin → identity → network → cloud → sensors → done`
+`welcome → identity → sensors → network → cloud → done`
 
-On the bench do **pin**, **identity** (screenshot the QR for your install
+On the bench do **identity** (screenshot the QR for your install
 records) and **cloud** (paste `api_key`; add `app_key`/`join_eui` if this site
 uses LoRa — the wizard verifies the key against the cloud there and then rather
 than letting a typo surface as a unit that just never appears). Leave
@@ -153,6 +164,9 @@ reboot.** Not `otaStatus: success`; the number.
 
 ## 2. On site
 
+Read [`installer-mistakes.md`](installer-mistakes.md) before the first
+join of the day. The setup page repeats the short version.
+
 1. **Mount and wire first, power second.** 24 V DC to the screw terminal is the
    production source; the USB-C supply is for debug only, powers neither the
    analog chain nor the relays, and must never be connected while the 24 V
@@ -187,7 +201,8 @@ reboot.** Not `otaStatus: success`; the number.
 - [ ] Wi-Fi signal checked **with the enclosure closed**
 - [ ] GPS fix acquired (LED 3), or knowingly accepted as unavailable
 - [ ] LoRa joined — or knowingly accepted as not joining, per T2
-- [ ] Factory PIN replaced (the wizard refuses 1234)
+- [ ] Setup finished: the unit is on the site network (or recorded as LTE /
+      no-network) and Cloud shows a recent reading. There is no PIN to replace.
 - [ ] Relays confirmed inert, or confirmed clicking on the correct channel
 - [ ] Device id, DevEUI and the identity QR recorded for the install record
 - [ ] `journalctl -u bluesignal-ota -f` shows the agent polling, and
@@ -206,7 +221,7 @@ reboot.** Not `otaStatus: success`; the number.
 | GPS permission denied | `sudo usermod -aG dialout $USER` + reboot |
 | Service won't start | `journalctl -u bluesignal-wqm -e` — usually YAML syntax in `/etc/bluesignal/config.yaml` |
 | Cloud key rejected | Re-check on the wizard's Finish step; the probe is read-only and says which of key/network failed |
-| SSH dead but :8080 alive | Known: use Service Window → Settings → Reboot the unit (typed confirmation). Don't drive back for it |
+| SSH dead | The Service Window is reachable only through SSH now, so its Reboot button cannot help. Send **Restart** from BlueSignal Cloud (restarts the firmware, not the host) or power-cycle the unit |
 | Nothing works and light is fading | Swap in the spare SD card, re-run §1.2, re-use the **same** claim secrets — the device id derives from the Pi's CPU serial and does not change on re-flash |
 
 ---
@@ -326,18 +341,19 @@ antenna position, not patience. At the default cadence 100,000 rows is ~69 days,
 so a dark site is safe for two months; it is the *partially* connected site that
 silently falls behind.
 
-**T14 — the unit raises its own Wi-Fi when it cannot find yours.** Since the AP
-fallback shipped, a unit that cannot associate with any known network within 45 s
-of NetworkManager starting raises `WQM1-<last four of the serial>` (WPA2, the
-per-unit passphrase from the bench print-out or the enclosure label) with the
-Service Window opens by itself at `http://192.168.4.1/setup/` (the phone's
-captive-portal sheet; port 80). `http://192.168.4.1:8080/setup/` still works
-if the sheet does not. That is how you reach a unit whose flashed SSID does
-not exist at this site, and how service reaches it next year. After the unit
-joins the site network, use `http://<unit-ip>:8080` — port 80 is only the
-hotspot.
-Joining the site network from that page turns the AP off for the join; a failed
-join brings it straight back — reconnect and try again. Declare on the same page
-what the unit IS (Wi-Fi / LTE / no network; LoRa and GPS fitted or not): the
-finish screen grades only what you declare, and "no network here" is a valid
-answer, not a failure.
+**T14 — the unit raises its own Wi-Fi when it cannot find yours.** A unit with
+no site network saved raises **BlueSignal Setup** (open, no password) as soon as
+its radio is up; one with a site network saved tries it for 90 s first. The
+phone's captive sheet opens the Wi-Fi page at `http://192.168.4.1/setup/` (port
+80). That page sets only Wi-Fi; port 8080 answers nothing on the setup network.
+That is how you reach a unit whose saved network does not exist at this site,
+and how service reaches it next year. Joining from that page turns the setup
+network off for the join; a failed join brings it back within five minutes with
+the reason. A unit that later loses both networks raises it again by itself:
+within about a minute with nothing saved, after five minutes with a site network
+saved (a router reboot gets that long to come back). While no phone is on the
+setup network, the saved network is retried every five minutes. After the unit
+joins the site network, the local pages answer nobody on that network; use
+BlueSignal Cloud, or an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@<unit-ip>`,
+then `http://localhost:8080`) for bench work. Probes are confirmed in Cloud on
+the unit's page.

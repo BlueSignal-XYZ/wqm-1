@@ -19,17 +19,18 @@ def app(tmp_path):
     db = WQM1Database(path=db_path)
     db.close()
 
-    Path(config_path).write_text(yaml.safe_dump({"app_key": "A" * 32}))
+    Path(config_path).write_text(
+        yaml.safe_dump({"app_key": "A" * 32, "service_window": {"setup_completed": True}})
+    )
 
     app = create_app(
         {
             "TESTING": True,
+            "TEST_OPEN_WINDOW": True,
             "DB_PATH": db_path,
             "CONFIG_PATH": config_path,
             "CAL_PATH": cal_path,
             "CMD_SOCK": str(tmp_path / "cmd.sock"),
-            # Non-factory PIN: the setup wizard force-redirects units still on 1234.
-            "PIN": "4321",
             "SECRET_KEY": "test-secret",
         }
     )
@@ -39,8 +40,6 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     with app.test_client() as c:
-        with c.session_transaction() as sess:
-            sess["pin_verified"] = True
         yield c
 
 
@@ -140,7 +139,13 @@ class TestCloudProvisioningRoute:
 
     def test_set_cloud_enables_with_existing_key(self, client, app):
         Path(app.config["CONFIG_PATH"]).write_text(
-            yaml.safe_dump({"app_key": "A" * 32, "api_key": "existingkey12345a"})
+            yaml.safe_dump(
+                {
+                    "app_key": "A" * 32,
+                    "api_key": "existingkey12345a",
+                    "service_window": {"setup_completed": True},
+                }
+            )
         )
         resp = client.post(
             "/provision/cloud",

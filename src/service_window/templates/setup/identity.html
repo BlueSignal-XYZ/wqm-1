@@ -2,8 +2,8 @@
 {% block title %}Setup — Identity{% endblock %}
 {% block content %}
 <h1 class="setup-h1">This unit&rsquo;s identity</h1>
-<p class="lead">Note these for your install records — you&rsquo;ll type both into the
-cloud in the next step. They&rsquo;re printed nowhere else.</p>
+<p class="lead">Scan the QR with BlueSignal Cloud. The unit registers itself once it
+has a link — you never paste a key.</p>
 
 <div class="id-block">
     <div class="id-label">Device ID</div>
@@ -12,6 +12,7 @@ cloud in the next step. They&rsquo;re printed nowhere else.</p>
         <button type="button" class="btn btn-ghost" data-copy="{{ identity.device_id }}">Copy</button>
     </div>
 </div>
+{% if identity.dev_eui %}
 <div class="id-block">
     <div class="id-label">LoRa DevEUI</div>
     <div class="id-row">
@@ -19,14 +20,19 @@ cloud in the next step. They&rsquo;re printed nowhere else.</p>
         <button type="button" class="btn btn-ghost" data-copy="{{ identity.dev_eui }}">Copy</button>
     </div>
 </div>
+{% endif %}
 
-<details class="qr-detail">
-    <summary>Prefer to scan? Show the identity QR</summary>
-    <div class="qr-wrap">
-        <img src="{{ url_for('provision.qr_svg') }}" alt="Device identity QR code" width="220" height="220">
-        <p>Scan with your phone to capture both values at once.</p>
-    </div>
-</details>
+<div class="qr-wrap">
+    <img src="{{ url_for('provision.qr_svg') }}" alt="Device identity QR code" width="220" height="220">
+    <p>Identity QR (v2): device id and public key. Compatible with the existing label printer.</p>
+    <pre class="id-json"><code>{{ qr_json | safe }}</code></pre>
+</div>
+
+{% if registration %}
+<div class="flash {{ 'success' if registration.status == 'registered' else ('error' if registration.status in ('conflict', 'error') else 'info') }}">
+    Registration: <b>{{ registration.status }}</b> — {{ registration.message }}
+</div>
+{% endif %}
 
 <div class="setup-actions">
     <a class="btn btn-primary btn-lg" href="{{ next_url }}">Continue</a>

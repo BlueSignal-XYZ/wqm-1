@@ -17,11 +17,17 @@ import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from app.state import StateStore
+from cloud.client import RESULT_POST_DROP
+from cloud.device_commands import HANDLED_COMMANDS_MAX
+from cloud.register import STOP_BACKOFF_S, attempt_register, set_config_path
+from utils.config import FIRMWARE_VERSION
+from utils.device_keys import load_http_key, load_register_state
 
 logger = logging.getLogger("wqm1.workers")
 
@@ -33,6 +39,20 @@ _T = TypeVar("_T")
 # and the supervisor lights the FAULT LED.
 FAULT_STREAK = 5
 _BACKOFF_S = (5, 15, 30, 60)
+
+
+def _cloud_http_ready(cloud: Any, settings: Any) -> bool:
+    """True when heartbeat / ingest / commands should run.
+
+    A CloudClient with an empty key idles until self-registration stores one.
+    Test doubles that have no ``_api_key`` attribute are treated as ready.
+    ``cloud_enabled`` is only enforced when the settings object carries it.
+    """
+    if hasattr(settings, "cloud_enabled") and not settings.cloud_enabled:
+        return False
+    if not hasattr(cloud, "_api_key"):
+        return True
+    return bool(cloud._api_key)
 
 
 class Worker:
@@ -656,6 +676,8 @@ class CloudSyncWorker(Worker):
         return float(self._settings().sync_interval_s)
 
     def step(self) -> None:
+        if not _cloud_http_ready(self._cloud, self._settings()):
+            return
         n = self._cloud.sync_readings(self._db)
         if n:
             logger.info("Cloud sync: uploaded %d reading(s)", n)
@@ -676,6 +698,7 @@ class CommandWorker(Worker):
         apply_command: Callable[[dict[str, Any]], None],
         on_config_version: Callable[[int | None], None] | None = None,
         on_ota_pending: Callable[[], None] | None = None,
+        apply_device_command: Callable[[dict[str, Any]], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__(clock)
@@ -685,11 +708,15 @@ class CommandWorker(Worker):
         self._apply_command = apply_command
         self._on_config_version = on_config_version
         self._on_ota_pending = on_ota_pending
+        self._apply_device_command = apply_device_command
+        self._unposted_device_results: OrderedDict[str, tuple[str, Any, str]] = OrderedDict()
 
     def interval_s(self) -> float:
         return float(self._settings().command_poll_s)
 
     def step(self) -> None:
+        if not _cloud_http_ready(self._cloud, self._settings()):
+            return
         poll = self._cloud.poll()
         for cmd in poll.get("commands", []):
             try:
@@ -707,6 +734,8 @@ class CommandWorker(Worker):
         if poll.get("otaPending") and self._on_ota_pending:
             self._on_ota_pending()
 
+        self._apply_pending_device_commands()
+
         # Ship queued device events (monitor findings, config acks, ...).
         for event in self._state.drain_events():
             self._cloud.send_event(
@@ -714,6 +743,71 @@ class CommandWorker(Worker):
                 message=event.get("message"),
                 sensor=event.get("sensor"),
                 details=event.get("details"),
+            )
+
+    def _apply_pending_device_commands(self) -> None:
+        """GET pending Cloud commands and POST each result. Optional on fakes."""
+        apply = self._apply_device_command
+        if apply is None:
+            return
+        post = getattr(self._cloud, "post_command_result", None)
+        self._retry_unposted_device_results(post)
+        fetch = getattr(self._cloud, "fetch_pending_commands", None)
+        if not callable(fetch):
+            return
+        try:
+            commands = fetch()
+        except Exception as exc:  # noqa: BLE001 — pending must not stall the legacy poll
+            logger.error("Fetch pending commands failed: %s", exc)
+            return
+        if not isinstance(commands, list):
+            return
+        for cmd in commands:
+            if not isinstance(cmd, dict):
+                continue
+            cmd_id = cmd.get("id")
+            try:
+                outcome = apply(cmd)
+                status = getattr(outcome, "status", "rejected")
+                result = getattr(outcome, "result", None)
+                message = getattr(outcome, "message", "")
+            except Exception as exc:  # noqa: BLE001 — one bad command must not stop the rest
+                logger.error("Apply device command %s failed: %s", cmd_id, exc)
+                status, result, message = "rejected", None, str(exc)
+            self._deliver_device_result(post, cmd_id, status, result, str(message))
+
+    def _retry_unposted_device_results(self, post: Any) -> None:
+        if not callable(post) or not self._unposted_device_results:
+            return
+        for cmd_id, (status, result, message) in list(self._unposted_device_results.items()):
+            self._deliver_device_result(post, cmd_id, status, result, message)
+
+    def _deliver_device_result(
+        self,
+        post: Any,
+        cmd_id: Any,
+        status: str,
+        result: Any,
+        message: str,
+    ) -> None:
+        if not callable(post) or not isinstance(cmd_id, str) or not cmd_id:
+            return
+        posted = post(cmd_id, status, result, message[:200])
+        if posted is False:
+            if cmd_id not in self._unposted_device_results:
+                while len(self._unposted_device_results) >= HANDLED_COMMANDS_MAX:
+                    self._unposted_device_results.popitem(last=False)
+            self._unposted_device_results[cmd_id] = (status, result, message[:200])
+            logger.warning(
+                "Result POST for %s failed; will retry the stored result",
+                cmd_id,
+            )
+            return
+        self._unposted_device_results.pop(cmd_id, None)
+        if posted == RESULT_POST_DROP:
+            logger.warning(
+                "Result POST for %s dropped (terminal); will not retry",
+                cmd_id,
             )
 
 
@@ -749,6 +843,8 @@ class HeartbeatWorker(Worker):
 
     def send_now(self) -> bool:
         """Build and send one heartbeat (also used by the `diagnostics` command)."""
+        if not _cloud_http_ready(self._cloud, self._settings()):
+            return False
         sensor_health = None
         if self._sensor_health is not None:
             try:
@@ -766,3 +862,59 @@ class HeartbeatWorker(Worker):
 
     def step(self) -> None:
         self.send_now()
+
+
+class DeviceRegisterWorker(Worker):
+    """POSTs /v2/devices/register once the unit has a link; persists pending state."""
+
+    name = "register"
+    error_bucket = "cloud"
+
+    def __init__(
+        self,
+        settings_provider: Callable[[], Any],
+        config_path: str,
+        on_api_key: Callable[[str], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        super().__init__(clock)
+        self._settings = settings_provider
+        self._config_path = config_path
+        self._on_api_key = on_api_key
+        set_config_path(config_path)
+
+    def interval_s(self) -> float:
+        state = load_register_state()
+        if state.get("status") == "conflict":
+            return float(STOP_BACKOFF_S)
+        # A revoked key is written as pending by CloudClient. Do not sleep the
+        # 1h registered cadence or we would miss it until the next hour.
+        if state.get("status") == "registered" and load_http_key():
+            return 30.0
+        delay = float(state.get("backoff_s") or 5)
+        due = float(state.get("next_attempt_unix") or 0)
+        wait = due - time.time()
+        if wait > 0:
+            return min(wait, float(STOP_BACKOFF_S))
+        return max(1.0, min(delay, float(STOP_BACKOFF_S)))
+
+    def step(self) -> None:
+        state = load_register_state()
+        status = str(state.get("status") or "pending")
+        if status == "conflict":
+            return
+        if status == "registered" and load_http_key():
+            return
+        due = float(state.get("next_attempt_unix") or 0)
+        if due and time.time() < due:
+            return
+        settings = self._settings()
+        result = attempt_register(
+            api_base=getattr(settings, "cloud_api_base", "") or None,
+            config_path=self._config_path,
+            fw=FIRMWARE_VERSION,
+        )
+        if result.get("status") == "registered" and self._on_api_key:
+            key = load_http_key()
+            if key:
+                self._on_api_key(key)

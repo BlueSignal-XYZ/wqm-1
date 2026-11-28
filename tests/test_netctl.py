@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import pytest
 
+# What `nmcli connection up` prints when the SSID is not in range (NM 1.52).
+NOT_FOUND_UP = "Error: Connection activation failed: The Wi-Fi network could not be found."
+
 
 class FakeNm:
     """Records every nmcli argv; scripted answers per subcommand."""
@@ -39,9 +42,57 @@ class FakeNm:
         self.hostapd = False
         self.dnsmasq = False
         self.managed = "yes"
+        # Realistic scan model (off by default so the older tests keep their
+        # always-visible list). On: NetworkManager's list is EMPTY after the
+        # radio was unmanaged for hostapd, fills only on a rescan, and a
+        # connect to an SSID not in it answers "No network with SSID found"
+        # — what WQM-10001 hit in the field on 2026-10-21.
+        self.realistic_scan = False
+        self.visible = ["PondHouse", "Barn"]
+        self.cache: set[str] = set()
+        self.rescans_before_seen = 0
+        self.hidden_join_ok = True
+        # Bringing a SAVED profile up (boot path). Fails by default, as a
+        # network that is out of range does.
+        self.station_up_rc = 4
+        self.station_up_err = (
+            "Error: Connection activation failed: The Wi-Fi network could not be found."
+        )
+        # NetworkManager not answering the saved-profile listing yet (boot).
+        self.list_fails = 0
+        # `iw dev wlan0 station dump` while the hotspot is up.
+        self.ap_station_dump = ""
+        # Join profiles built by `connection add` (name -> its settings).
+        self.try_profiles: dict[str, dict] = {}
+
+    def _wifi_list(self):
+        rows = ["PondHouse:72:WPA2", "PondHouse:40:WPA2", "Barn:55:--", ":10:WPA2"]
+        if not self.realistic_scan:
+            return "\n".join(rows)
+        keep = [r for r in rows if r.split(":")[0] in self.cache]
+        return "\n".join(keep)
 
     def run(self, argv, timeout=15.0):
         self.calls.append(argv)
+        a0 = argv[1:] if argv and argv[0] == "nmcli" else argv
+        if self.realistic_scan:
+            if a0[:5] == ["device", "set", "wlan0", "managed", "no"]:
+                self.cache = set()
+            if a0[:3] == ["device", "wifi", "rescan"]:
+                if self.rescans_before_seen > 0:
+                    self.rescans_before_seen -= 1
+                else:
+                    self.cache = set(self.visible)
+                return 0, "", ""
+            if a0[:3] == ["device", "wifi", "connect"]:
+                ssid = a0[3]
+                hidden = "hidden" in a0
+                if ssid not in self.cache and not (hidden and self.hidden_join_ok):
+                    return 10, "", f"Error: No network with SSID '{ssid}' found."
+            if a0[:2] == ["connection", "up"] and len(a0) > 2 and a0[2] in self.try_profiles:
+                prof = self.try_profiles[a0[2]]
+                if prof["ssid"] not in self.cache and not (prof["hidden"] and self.hidden_join_ok):
+                    return 10, "", NOT_FOUND_UP
         if argv and argv[0] == "systemctl":
             action = argv[1] if len(argv) > 1 else ""
             unit = argv[2] if len(argv) > 2 else ""
@@ -75,6 +126,10 @@ class FakeNm:
             return 0, f"country {self.regdom}: DFS-FCC", ""
         if argv[:4] == ["iw", "dev", "wlan0", "scan"]:
             return 0, self.iw_scan, ""
+        if argv[:5] == ["iw", "dev", "wlan0", "station", "dump"]:
+            return 0, (self.ap_station_dump if self.ap else ""), ""
+        if argv[:4] == ["iw", "dev", "wlan0", "link"]:
+            return 0, getattr(self, "iw_link", "") or "", ""
         a = argv[1:] if argv and argv[0] == "nmcli" else argv
         if a[:4] == ["device", "set", "wlan0", "managed"]:
             self.managed = a[4]
@@ -82,7 +137,29 @@ class FakeNm:
         if a[:2] == ["connection", "add"]:
             if self.add_rc != 0:
                 return self.add_rc, "", "Error: a connection with this name already exists"
+            if "con-name" in a and "ssid" in a:
+                self.try_profiles[a[a.index("con-name") + 1]] = {
+                    "ssid": a[a.index("ssid") + 1],
+                    "hidden": "802-11-wireless.hidden" in a,
+                    "argv": list(a),
+                }
             return 0, "", ""
+        if a[:2] == ["connection", "up"] and len(a) > 2 and a[2] in self.try_profiles:
+            if self.join_rc == 0:
+                self.station = True
+                return 0, "Connection successfully activated", ""
+            return (
+                self.join_rc,
+                "",
+                "Error: Connection activation failed: Secrets were required, but not provided.",
+            )
+        if a[:2] == ["connection", "up"] and len(a) > 2 and a[2] in self.saved:
+            if self.realistic_scan and a[2] not in self.cache:
+                return 10, "", f"Error: No network with SSID '{a[2]}' found."
+            if self.station_up_rc == 0:
+                self.station = True
+                return 0, "Connection successfully activated", ""
+            return self.station_up_rc, "", self.station_up_err
         if a[:2] == ["connection", "up"]:
             if self.hotspot_rc != 0:
                 return self.hotspot_rc, "", self.hotspot_err
@@ -92,6 +169,9 @@ class FakeNm:
             self.ap = True
             return 0, "", ""
         if a[:4] == ["-t", "-f", "NAME,TYPE", "connection"] and "--active" not in a:
+            if self.list_fails > 0:
+                self.list_fails -= 1
+                return 8, "", "Error: NetworkManager is not running."
             lines = [f"{name}:802-11-wireless" for name in self.saved]
             return 0, "\n".join(lines), ""
         if a[:2] == ["-g", "802-11-wireless.ssid"]:
@@ -100,6 +180,7 @@ class FakeNm:
             self.ap = False
             return 0, "", ""
         if a[:2] == ["connection", "delete"]:
+            self.try_profiles.pop(a[2] if len(a) > 2 else "", None)
             return 0, "", ""
         if a[:2] == ["connection", "modify"]:
             return 0, "", ""
@@ -122,8 +203,8 @@ class FakeNm:
             return 0, ("wqm1-setup-ap:wlan0" if self.ap else ""), ""
         if a[:3] == ["device", "wifi", "rescan"]:
             return 0, "", ""
-        if a[:4] == ["-t", "-f", "SSID,SIGNAL,SECURITY", "device"]:
-            return 0, "PondHouse:72:WPA2\nPondHouse:40:WPA2\nBarn:55:--\n:10:WPA2", ""
+        if a[:2] == ["-t", "-f"] and str(a[2]).startswith("SSID,SIGNAL,SECURITY") and "device" in a:
+            return 0, self._wifi_list(), ""
         if a[:2] == ["device", "disconnect"]:
             self.station = False
             self.ap = False
@@ -200,6 +281,11 @@ def _conf(text: str) -> dict[str, str]:
     return found
 
 
+def _join_up(call: list[str]) -> bool:
+    """The join's own activation: `nmcli connection up bs-try-…`."""
+    return call[1:3] == ["connection", "up"] and len(call) > 3 and call[3].startswith("bs-try-")
+
+
 def _at(calls: list[list[str]], pred) -> int:
     for index, call in enumerate(calls):
         if pred(call):
@@ -236,6 +322,67 @@ class TestAccessPoint:
         assert "SHA256" not in text
         assert "SAE" not in text
         assert "sae" not in text.lower()
+
+    def test_no_passphrase_is_an_open_network(self):
+        """Install plan §5: the setup network is open."""
+        from utils.netctl import hostapd_config
+
+        text = hostapd_config("BlueSignal Setup", None, country="US", channel=6)
+        conf = _conf(text)
+        assert conf["ssid"] == "BlueSignal Setup"
+        assert conf["auth_algs"] == "1"
+        assert conf["ieee80211w"] == "0"
+        for key in ("wpa", "wpa_key_mgmt", "wpa_passphrase", "rsn_pairwise"):
+            assert key not in conf, key
+        assert "wpa" not in text.replace("ctrl_interface", "")
+        assert hostapd_config("BlueSignal Setup", "", country="US") == text
+
+    def test_an_eight_character_passphrase_is_unchanged(self):
+        from utils.netctl import HOSTAPD_CTRL, hostapd_config
+
+        text = hostapd_config("WQM1-4FD8", "12345678", country="US", channel=6)
+        assert text.splitlines() == [
+            "interface=wlan0",
+            "driver=nl80211",
+            "ssid=WQM1-4FD8",
+            "hw_mode=g",
+            "channel=6",
+            "country_code=US",
+            "ieee80211d=1",
+            "auth_algs=1",
+            "wpa=2",
+            "wpa_key_mgmt=WPA-PSK",
+            "wpa_passphrase=12345678",
+            "rsn_pairwise=CCMP",
+            "ieee80211w=0",
+            f"ctrl_interface={HOSTAPD_CTRL}",
+            "ctrl_interface_group=0",
+        ]
+
+    def test_start_ap_raises_the_open_setup_network(self, nm):
+        import os
+        from pathlib import Path
+
+        from utils.netctl import ap_credentials, start_ap
+
+        ssid, passphrase = ap_credentials()
+        assert (ssid, passphrase) == ("BlueSignal Setup", None)
+        assert start_ap(ssid, passphrase)["ok"] is True
+        conf = _conf(Path(os.environ["WQM1_HOSTAPD_CONF"]).read_text())
+        assert conf["ssid"] == "BlueSignal Setup"
+        assert "wpa" not in conf and "wpa_passphrase" not in conf
+
+    def test_a_failed_join_brings_the_open_network_back(self, nm):
+        from utils.netctl import join_network, start_ap
+
+        assert start_ap("BlueSignal Setup")["ok"] is True
+        nm.join_rc = 4
+        result = join_network(
+            "PondHouse", "wrong-pass", ap_ssid="BlueSignal Setup", sleep=lambda _s: None
+        )
+        assert result["connected"] is False
+        assert result["ap_restored"] is True
+        assert nm.ap is True
 
     def test_country_follows_the_regulatory_domain(self, nm):
         from utils.netctl import hostapd_config, wifi_country
@@ -306,7 +453,7 @@ class TestAccessPoint:
 
         monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "mode"))
         assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
-        portal = make_server("127.0.0.1", 0, backend=9)
+        portal = make_server("127.0.0.1", 0)
         thread = threading.Thread(target=portal.serve_forever, daemon=True)
         thread.start()
         try:
@@ -340,13 +487,65 @@ class TestAccessPoint:
             "\tSSID: Barn\n"
         )
         assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        # start_ap scans once with nmcli before it unmanages wlan0 (§4's
+        # cached list); from here on the AP holds the radio.
+        after_ap = len(nm.calls)
         nets = scan_networks()
         assert [n["ssid"] for n in nets] == ["PondHouse", "Barn"]
         assert nets[0]["secured"] is True
         assert nets[0]["signal"] == 100
         assert nets[1]["secured"] is False
-        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in nm.calls)
-        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in nm.calls)
+        calls = nm.calls[after_ap:]
+        assert any(c[:4] == ["iw", "dev", "wlan0", "scan"] for c in calls)
+        assert not any(c[1:4] == ["device", "wifi", "rescan"] for c in calls)
+
+    def test_start_ap_caches_the_scan_before_it_takes_the_radio(self, nm):
+        from utils.netctl import read_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        cached = read_scan_cache()
+        assert cached["at"]
+        visible = [n["ssid"] for n in cached["networks"] if not n["hidden"]]
+        assert visible == ["PondHouse", "Barn"]
+        assert any(n["hidden"] for n in cached["networks"]), "kept so the page asks for the name"
+        listed = next(i for i, c in enumerate(nm.calls) if c[1:3] == ["-t", "-f"] and "list" in c)
+        unmanaged = next(
+            i
+            for i, c in enumerate(nm.calls)
+            if c[1:6] == ["device", "set", "wlan0", "managed", "no"]
+        )
+        assert listed < unmanaged
+
+    def test_a_failed_rescan_keeps_the_cached_list(self, nm):
+        from utils.netctl import read_scan_cache, refresh_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        before = read_scan_cache()["networks"]
+        real = nm.run
+
+        def failing(argv, timeout=15.0):
+            if argv[:5] == ["iw", "dev", "wlan0", "scan", "ap-force"]:
+                nm.calls.append(argv)
+                return 240, "", "command failed: Operation not supported (-95)"
+            return real(argv, timeout)
+
+        from utils import netctl
+
+        netctl._run = failing  # restored by the nm fixture's monkeypatch
+        assert refresh_scan_cache() == {"ok": False, "count": 0}
+        assert read_scan_cache()["networks"] == before
+        assert any(c[:5] == ["iw", "dev", "wlan0", "scan", "ap-force"] for c in nm.calls)
+        assert not any(c[1:5] == ["device", "set", "wlan0", "managed"] for c in nm.calls[-3:])
+
+    def test_a_rescan_with_the_ap_up_uses_ap_force(self, nm):
+        from utils.netctl import read_scan_cache, refresh_scan_cache, start_ap
+
+        assert start_ap("WQM1-4FD8", "river-cedar-42")["ok"] is True
+        nm.iw_scan = "BSS aa:bb:cc:dd:ee:09(on wlan0)\n\tsignal: -50.00 dBm\n\tSSID: Loft\n"
+        assert refresh_scan_cache() == {"ok": True, "count": 1}
+        assert [n["ssid"] for n in read_scan_cache()["networks"]] == ["Loft"]
+        assert nm.calls[-1][:5] == ["iw", "dev", "wlan0", "scan", "ap-force"]
+        assert nm.ap is True, "the setup network stayed up"
 
     def test_stop_orders_dnsmasq_then_hostapd_then_nm(self, nm):
         from utils.netctl import start_ap, stop_ap
@@ -431,6 +630,46 @@ class TestAccessPoint:
         assert any(c[:3] == ["ip", "link", "set"] for c in nm.calls)
         assert ["iw", "dev", "wlan0", "set", "power_save", "off"] in nm.calls
 
+    def test_moved_card_does_not_join_the_old_site_wifi(self, nm, tmp_path, monkeypatch):
+        """A commissioned card in a new Pi must not stay on the old site network."""
+        from utils.cardmove import CardBinding, load, save
+        from utils.netctl import ensure_reachable
+
+        path = tmp_path / "card-binding"
+        save(
+            CardBinding(
+                commissioned_serial="00000000aabbccdd",
+                moved_from="00000000aabbccdd",
+                moved_to="1000000086544fd8",
+                wifi_reconfirm=True,
+            ),
+            path,
+        )
+        monkeypatch.setenv("WQM1_CARD_STATE", str(path))
+        nm.station = True
+        nm.saved = ["PondHouse"]
+        t = [0.0]
+
+        def clock():
+            return t[0]
+
+        def sleep(s):
+            t[0] += s
+
+        r = ensure_reachable("WQM1-4FD8", "river-cedar-42", grace_s=45, sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert t[0] < 45
+        assert [
+            "nmcli",
+            "connection",
+            "modify",
+            "PondHouse",
+            "connection.autoconnect",
+            "no",
+        ] in nm.calls
+        assert ["nmcli", "device", "disconnect", "wlan0"] in nm.calls
+        assert load(path).wifi_reconfirm is True
+
     def test_hotspot_is_retried_when_the_interface_is_not_ready(self, nm):
         from utils.netctl import ensure_reachable
 
@@ -464,9 +703,11 @@ class TestJoin:
         from utils.netctl import scan_networks
 
         nets = scan_networks()
-        assert [n["ssid"] for n in nets] == ["PondHouse", "Barn"]
+        visible = [n["ssid"] for n in nets if n["ssid"]]
+        assert visible == ["PondHouse", "Barn"]
         assert nets[0]["signal"] == 72 and nets[0]["secured"] is True
         assert nets[1]["secured"] is False
+        assert any(n.get("hidden") for n in nets)
 
     def test_good_join_tears_down_the_ap_and_stays_joined(self, nm):
         from utils.netctl import join_network
@@ -484,6 +725,32 @@ class TestJoin:
         assert any(c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls)
         assert nm.ap is False
         assert nm.managed == "yes"
+
+    def test_a_successful_join_confirms_the_moved_card(self, nm, tmp_path, monkeypatch):
+        from utils.cardmove import CardBinding, load, save
+        from utils.netctl import join_network
+
+        path = tmp_path / "card-binding"
+        save(
+            CardBinding(
+                commissioned_serial="00000000aabbccdd",
+                moved_from="00000000aabbccdd",
+                moved_to="1000000086544fd8",
+                wifi_reconfirm=True,
+            ),
+            path,
+        )
+        monkeypatch.setenv("WQM1_CARD_STATE", str(path))
+        monkeypatch.setattr("utils.cardmove.get_pi_serial", lambda: "1000000086544fd8")
+        nm.ap = True
+        r = join_network(
+            "PondHouse", "hunter22", ap_ssid="WQM1-4FD8", ap_passphrase="river-cedar-42"
+        )
+        assert r["ok"] is True
+        binding = load(path)
+        assert binding.commissioned_serial == "1000000086544fd8"
+        assert binding.wifi_reconfirm is False
+        assert binding.moved_from == ""
 
     def test_wrong_password_reraises_the_ap(self, nm):
         """The load-bearing case: an installer locked out by a typo is worse
@@ -504,11 +771,16 @@ class TestJoin:
         assert r["ap_restored"] is True
         assert "Secrets were required" in r["error"]
         assert nm.ap is True
-        # The failed profile is dropped so NM does not keep retrying it.
-        assert any(c[1:3] == ["connection", "delete"] and c[3] == "PondHouse" for c in nm.calls)
+        # The failed attempt's temporary profile is dropped so NM does not keep
+        # retrying it. The SSID's own profile is never deleted by a failure (I3).
+        deleted = [
+            c[3] for c in nm.calls if c[1:3] == ["connection", "delete"] and c[3] != "wqm1-setup-ap"
+        ]
+        assert deleted and all(name.startswith("bs-try-") for name in deleted)
+        assert "PondHouse" not in deleted
         # Stop (managed yes) happens before the join; the restore sets managed no
         # and starts hostapd again.
-        connect = _at(nm.calls, lambda c: c[1:4] == ["device", "wifi", "connect"])
+        connect = _at(nm.calls, _join_up)
         managed_yes = _at(
             nm.calls, lambda c: c[:6] == ["nmcli", "device", "set", "wlan0", "managed", "yes"]
         )
@@ -753,29 +1025,22 @@ class TestJoinWaitsForAnAddress:
 
 
 class TestApFallbackScript:
-    def test_passphrase_is_never_a_shared_default(self):
+    def test_no_passphrase_is_derived_any_more(self):
+        """Install plan §5 deleted derived_passphrase with its callers."""
         import importlib.util
         from pathlib import Path
+
+        from utils import netctl
 
         spec = importlib.util.spec_from_file_location(
             "ap_fallback", Path(__file__).parent.parent / "scripts" / "wqm1-ap-fallback.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        a = mod.derived_passphrase("10000000abcdef01")
-        b = mod.derived_passphrase("10000000abcdef02")
-        assert a != b and len(a) == 12 and len(b) == 12
+        assert not hasattr(mod, "derived_passphrase")
+        assert not hasattr(netctl, "derived_passphrase")
 
-    def test_derived_passphrase_is_the_sha256_prefix(self):
-        import hashlib
-
-        from utils.netctl import derived_passphrase
-
-        serial = "1000000086544fd8"
-        expected = hashlib.sha256(f"wqm1-ap:{serial}".encode()).hexdigest()[:12]
-        assert derived_passphrase(serial) == expected
-
-    def test_credentials_come_from_the_identity_file_when_present(self, tmp_path, monkeypatch):
+    def test_the_setup_network_is_open_whatever_the_card_says(self, tmp_path, monkeypatch):
         import importlib.util
         import json
         from pathlib import Path
@@ -790,7 +1055,8 @@ class TestApFallbackScript:
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        assert mod.resolve_credentials() == ("WQM1-0001", "river-cedar-42")
+        # A bench card that still carries ap_passphrase does not close it.
+        assert mod.resolve_credentials() == ("BlueSignal Setup", None)
 
     def test_unit_file_runs_after_networkmanager_as_a_oneshot(self):
         from pathlib import Path
@@ -920,3 +1186,604 @@ class TestApFallbackScript:
         )
         assert line == "failed: psk [redacted] rejected"
         assert "river-cedar-42" not in line
+
+
+class TestJoinAfterTheHotspotLetsGo:
+    """Field, 2026-10-21 (WQM-10001): the router was in the same room and the
+    join still failed "not found". The hotspot had held wlan0, so
+    NetworkManager's scan list was empty, and the join connected before any
+    rescan. These tests use the realistic scan model."""
+
+    def _join(self, nm, **kw):
+        from utils.netctl import join_network
+
+        t, clock, sleep = _clock()
+        nm.ap = True
+        nm.realistic_scan = True
+        r = join_network(
+            kw.pop("ssid", "PondHouse"),
+            "hunter22",
+            ap_ssid="WQM1-0001",
+            ap_passphrase="river-cedar-42",
+            sleep=sleep,
+            clock=clock,
+        )
+        return r, t
+
+    def test_the_join_rescans_before_it_connects(self, nm):
+        r, _ = self._join(nm)
+        assert r["ok"] is True, r
+        rescan = _at(nm.calls, lambda c: c[1:4] == ["device", "wifi", "rescan"])
+        connect = _at(nm.calls, _join_up)
+        assert rescan < connect
+
+    def test_a_scan_that_takes_a_few_tries_still_joins(self, nm):
+        nm.rescans_before_seen = 3
+        r, t = self._join(nm)
+        assert r["ok"] is True, r
+        assert t[0] < 20  # waited for the scan, did not burn the whole budget
+
+    def test_a_network_missing_from_every_scan_is_tried_as_hidden(self, nm):
+        nm.visible = []  # never in a scan: a hidden SSID, or a scan that keeps missing it
+        r, _ = self._join(nm)
+        assert r["ok"] is True, r
+        hidden_adds = [
+            c for c in nm.calls if c[1:3] == ["connection", "add"] and "802-11-wireless.hidden" in c
+        ]
+        assert (
+            hidden_adds
+            and hidden_adds[-1][hidden_adds[-1].index("802-11-wireless.hidden") + 1] == "yes"
+        )
+
+    def test_a_network_that_really_is_not_there_fails_and_restores_the_hotspot(self, nm):
+        nm.visible = []
+        nm.hidden_join_ok = False
+        r, t = self._join(nm, ssid="Batcave")
+        assert r["ok"] is False
+        assert r["reason"] == "not_found"
+        assert r["ap_restored"] is True
+        assert nm.ap is True
+        connects = [c for c in nm.calls if _join_up(c)]
+        assert len(connects) == 3  # scan, rescan, hidden — then it gives up
+        # Bounded by the one join budget: the installer gets the hotspot back.
+        from utils.netctl import JOIN_BUDGET_S
+
+        assert t[0] <= JOIN_BUDGET_S + 10
+
+
+class TestBootUsesTheSavedNetwork:
+    """Field, 2026-10-21: a saved network written to WQM-10001's card was
+    never used. Boot now asks again when NetworkManager is slow to answer,
+    and brings the saved profile up itself."""
+
+    def _boot(self, nm, tmp_path, monkeypatch, **kw):
+        from utils.netctl import ensure_reachable
+
+        t, clock, sleep = _clock()
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.realistic_scan = True
+        r = ensure_reachable("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock, **kw)
+        return r, t
+
+    def test_a_saved_network_in_range_is_joined_not_the_hotspot(self, nm, tmp_path, monkeypatch):
+        nm.station_up_rc = 0
+        r, _ = self._boot(nm, tmp_path, monkeypatch)
+        assert r["mode"] == "station", r
+        assert not any(
+            c[:3] == ["systemctl", "start", "wqm1-setup-hostapd.service"] for c in nm.calls
+        )
+        rescan = _at(nm.calls, lambda c: c[1:4] == ["device", "wifi", "rescan"])
+        up = _at(nm.calls, lambda c: c[1:4] == ["connection", "up", "Batcave"])
+        assert rescan < up
+
+    def test_networkmanager_slow_to_answer_still_gets_the_grace(self, nm, tmp_path, monkeypatch):
+        nm.list_fails = 3  # the first three listings fail, as at a slow boot
+        nm.station_up_rc = 0
+        r, _ = self._boot(nm, tmp_path, monkeypatch)
+        assert r["mode"] == "station", r
+
+    def test_a_saved_network_that_fails_falls_back_to_the_hotspot_with_a_reason(
+        self, nm, tmp_path, monkeypatch
+    ):
+        nm.visible = []  # out of range
+        from utils.netctl import ensure_reachable
+
+        t, clock, sleep = _clock()
+        nm.saved = ["Batcave"]
+        nm.realistic_scan = True
+        r = ensure_reachable("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert r["station_failure"] == "network not found"
+        assert t[0] < 170  # inside the oneshot's TimeoutStartSec=180
+
+    def test_no_attempt_runs_past_the_grace_deadline(self, nm, tmp_path, monkeypatch):
+        """Bugbot on #153 (110f345): an attempt started late in the grace
+        could block JOIN_TIMEOUT_S past it, against TimeoutStartSec=180."""
+        from utils import netctl
+        from utils.netctl import ensure_reachable
+
+        t, clock, sleep = _clock()
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.station_up_rc = 4  # every attempt fails, slowly
+        starts: list[float] = []
+        real_run = nm.run
+
+        def slow_run(argv, timeout=15.0):
+            if argv[1:4] == ["connection", "up", "Batcave"]:
+                starts.append(t[0])
+                t[0] += netctl.JOIN_TIMEOUT_S
+            return real_run(argv, timeout)
+
+        monkeypatch.setattr(netctl, "_run", slow_run)
+        r = ensure_reachable("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert starts
+        assert max(starts) - min(starts) + netctl.JOIN_TIMEOUT_S <= netctl.AP_GRACE_S
+
+
+class TestRetryTheSavedNetwork:
+    """bluesignal-wifi-retry.timer: the router came back after the Pi did.
+    The retry may only act when the hotspot is idle."""
+
+    def _retry(self, nm, monkeypatch, tmp_path):
+        from utils.netctl import retry_saved_station
+
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "portal-mode"))
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(tmp_path / "wqm1-status.txt"))
+        t, clock, sleep = _clock()
+        return retry_saved_station("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock), t
+
+    def test_an_idle_hotspot_gives_way_to_the_saved_network(self, nm, monkeypatch, tmp_path):
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.realistic_scan = True
+        nm.station_up_rc = 0
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r["mode"] == "station", r
+        assert nm.ap is False
+
+    def test_never_while_a_phone_is_on_the_hotspot(self, nm, monkeypatch, tmp_path):
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.ap_station_dump = "Station 3a:1f:00:11:22:33 (on wlan0)\n\tinactive time: 10 ms\n"
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r == {"skipped": "a phone is on the hotspot"}
+        assert nm.ap is True
+        assert not any(
+            c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls
+        )
+
+    def test_nothing_saved_means_nothing_happens(self, nm, monkeypatch, tmp_path):
+        nm.ap = True
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r == {"skipped": "no saved network"}
+        assert nm.ap is True
+
+    def test_a_network_still_away_brings_the_hotspot_back(self, nm, monkeypatch, tmp_path):
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.visible = []
+        nm.realistic_scan = True
+        r, t = self._retry(nm, monkeypatch, tmp_path)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert r["station_failure"] == "network not found"
+        assert nm.ap is True
+        assert t[0] < 150  # inside the unit's TimeoutStartSec
+        assert "station: fail: network not found" in (tmp_path / "wqm1-status.txt").read_text()
+
+    def test_a_phone_that_joins_during_the_checks_is_not_cut_off(self, nm, monkeypatch, tmp_path):
+        """Claude review on #153 (1baf59c): a phone that joined between the
+        client count and stop_ap lost the hotspot."""
+        from utils import netctl
+
+        counts = iter([0, 1])
+        monkeypatch.setattr(netctl, "ap_clients", lambda iface="wlan0": next(counts))
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.station_up_rc = 0
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r == {"skipped": "a phone is on the hotspot"}
+        assert nm.ap is True
+        assert not any(
+            c[:3] == ["systemctl", "stop", "wqm1-setup-hostapd.service"] for c in nm.calls
+        )
+
+    def test_an_error_right_after_stop_ap_still_restores(self, nm, monkeypatch, tmp_path):
+        """Claude review on #153 (209d29a): stop_ap ran before the try, so a
+        SIGTERM or error just after it skipped the restore."""
+        from utils import netctl
+
+        def broken_disarm(*_a, **_k):
+            raise SystemExit(0)  # what the script's SIGTERM handler raises
+
+        monkeypatch.setattr(netctl, "_disarm_portal", broken_disarm)
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        with pytest.raises(SystemExit):
+            self._retry(nm, monkeypatch, tmp_path)
+        assert nm.ap is True
+
+    def test_a_moved_card_does_not_take_the_old_sites_wifi(self, nm, monkeypatch, tmp_path):
+        """Bugbot on #153 (110f345): boot held the old site's profile on a
+        moved card, and the retry timer joined it anyway."""
+        from utils import netctl
+
+        monkeypatch.setattr(netctl, "wifi_reconfirm_required", lambda: True)
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        nm.visible = ["Batcave"]
+        nm.station_up_rc = 0
+        r, _ = self._retry(nm, monkeypatch, tmp_path)
+        assert r == {"skipped": "card moved; setup must confirm the site network"}
+        assert nm.ap is True
+        assert not any(c[1:3] == ["connection", "up"] for c in nm.calls)
+
+    def test_the_retry_stays_inside_its_unit_timeout(self, nm, monkeypatch, tmp_path):
+        """Bugbot on #153 (110f345): two saved networks that associate and
+        never get an address ran past TimeoutStartSec=150, and systemd killed
+        the retry with the hotspot down."""
+        from utils import netctl
+        from utils.netctl import retry_saved_station
+
+        monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "portal-mode"))
+        monkeypatch.setenv("WQM1_STATUS_FILE", str(tmp_path / "wqm1-status.txt"))
+        t, clock, sleep = _clock()
+        nm.ap = True
+        nm.saved = ["Batcave", "Batcave-5G"]
+        nm.visible = ["Batcave", "Batcave-5G"]
+        nm.station_up_rc = 0
+        nm.ipv4 = "169.254.7.7"  # associated, no lease
+        ups = []
+        real_run = nm.run
+
+        def slow_run(argv, timeout=15.0):
+            if argv[1:3] == ["connection", "up"] and argv[3] in nm.saved:
+                ups.append(argv[3])
+                t[0] += netctl.JOIN_TIMEOUT_S
+            return real_run(argv, timeout)
+
+        monkeypatch.setattr(netctl, "_run", slow_run)
+        r = retry_saved_station("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+        assert r["mode"] == "ap" and r["ap"] is True
+        assert ups == ["Batcave"]
+        assert t[0] < 150
+        assert nm.ap is True
+
+    def test_an_error_mid_retry_still_brings_the_hotspot_back(self, nm, monkeypatch, tmp_path):
+        """Bugbot on #153 (110f345): an exception after stop_ap left the unit
+        with no hotspot until a reboot."""
+        from utils import netctl
+
+        def broken_wait(*_a, **_k):
+            raise RuntimeError("iw went away")
+
+        monkeypatch.setattr(netctl, "wait_for_ssid", broken_wait)
+        nm.ap = True
+        nm.saved = ["Batcave"]
+        with pytest.raises(RuntimeError):
+            self._retry(nm, monkeypatch, tmp_path)
+        assert nm.ap is True
+
+
+def test_systemds_sigterm_lets_the_retry_bring_the_hotspot_back(monkeypatch):
+    """Bugbot on #153 (110f345): systemd's SIGTERM at TimeoutStartSec ended
+    the retry with no cleanup. The script turns it into SystemExit, which
+    runs the retry's own restore."""
+    import importlib.util
+    import os
+    import signal
+    from pathlib import Path
+
+    from utils import netctl
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "wqm1-ap-fallback.py"
+    spec = importlib.util.spec_from_file_location("wqm1_ap_fallback_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    cleaned = []
+
+    def killed_mid_retry(*_a, **_k):
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        finally:
+            cleaned.append(True)
+
+    monkeypatch.setattr(module, "resolve_credentials", lambda: ("WQM1-0001", "rain-delta-29"))
+    monkeypatch.setattr(netctl, "retry_saved_station", killed_mid_retry)
+    previous = signal.getsignal(signal.SIGTERM)
+    # Without the script's handler this one gets the signal and nothing is
+    # raised, so the test fails instead of killing the test run.
+    signal.signal(signal.SIGTERM, lambda *_: None)
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            module.retry()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert stopped.value.code == 0
+    assert cleaned == [True]
+
+
+def test_a_sigterm_during_the_restore_waits_for_the_hotspot(nm, monkeypatch, tmp_path):
+    """Claude review on #153 (2910740): a SIGTERM that lands while the retry
+    is already restoring the hotspot must not cut the restore short."""
+    import os
+    import signal
+
+    from utils import netctl
+    from utils.netctl import retry_saved_station
+
+    monkeypatch.setenv("WQM1_PORTAL_MODE_FILE", str(tmp_path / "portal-mode"))
+    monkeypatch.setenv("WQM1_STATUS_FILE", str(tmp_path / "wqm1-status.txt"))
+    nm.ap = True
+    nm.saved = ["Batcave"]
+    nm.visible = []
+    nm.realistic_scan = True
+    finished = []
+    real_restore = netctl._restore_ap
+
+    def restore_then_finish(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)  # systemd's stop, mid-restore
+        result = real_restore(*args, **kwargs)
+        finished.append(result)
+        return result
+
+    def stop(_signum, _frame):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(netctl, "_restore_ap", restore_then_finish)
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        t, clock, sleep = _clock()
+        with pytest.raises(SystemExit):
+            retry_saved_station("WQM1-0001", "rain-delta-29", sleep=sleep, clock=clock)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert finished == [True]
+    assert nm.ap is True
+    assert "hotspot: up" in (tmp_path / "wqm1-status.txt").read_text()
+
+
+def test_the_sigterm_hold_leaves_a_c_handler_alone(monkeypatch):
+    """Claude review on #153 (5e946a4): getsignal returns None for a handler
+    installed from C, and signal.signal(SIGTERM, None) raises TypeError."""
+    import signal
+
+    from utils import netctl
+
+    set_calls = []
+    monkeypatch.setattr(signal, "getsignal", lambda _signum: None)
+    monkeypatch.setattr(signal, "signal", lambda *a: set_calls.append(a))
+    ran = []
+    with netctl._sigterm_held():
+        ran.append(True)
+    assert ran == [True]
+    assert set_calls == []
+
+
+def test_the_retry_timer_is_installed_and_enabled():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    setup = (root / "setup.sh").read_text()
+    assert 'systemd/bluesignal-wifi-retry.timer" /etc/systemd/system/' in setup
+    assert 'systemd/bluesignal-wifi-retry.service" /etc/systemd/system/' in setup
+    assert "systemctl enable bluesignal-wifi-retry.timer" in setup
+    unit = (root / "systemd" / "bluesignal-wifi-retry.service").read_text()
+    assert "wqm1-ap-fallback.py --retry" in unit
+
+
+class TestTheProfileThatJoinsIsTheOneWeBuilt:
+    """Bugbot on #181 (high), confirmed against nmcli 1.52 devices.c: the join
+    made a bare `bs-try-` profile (SSID and band lock, no security), then ran
+    `device wifi connect … name bs-try-…`. nmcli only reuses a same-named
+    profile that fits the access point, and a profile with no security never
+    fits a WPA2 router, so it built a SECOND profile with that name, the
+    password and no band lock. The lock never reached the profile that
+    associated, on any board."""
+
+    def _join(self, nm, monkeypatch, bands, **kw):
+        from utils import wifi_radio
+        from utils.netctl import join_network
+
+        monkeypatch.setattr(wifi_radio, "_CACHED_BANDS", frozenset(bands))
+        nm.ap = True
+        return join_network(
+            kw.pop("ssid", "PondHouse"),
+            kw.pop("password", "hunter22"),
+            ap_ssid="WQM1-0001",
+            ap_passphrase="river-cedar-42",
+            sleep=kw.pop("sleep", lambda _s: None),
+            **kw,
+        )
+
+    @staticmethod
+    def _add_and_up(nm):
+        adds = [c for c in nm.calls if c[1:3] == ["connection", "add"] and "con-name" in c]
+        ups = [c for c in nm.calls if _join_up(c)]
+        return adds, ups
+
+    def test_a_2_4_only_board_activates_one_complete_locked_profile(self, nm, monkeypatch):
+        r = self._join(nm, monkeypatch, {"2.4"})
+        assert r["ok"] is True, r
+        adds, ups = self._add_and_up(nm)
+        assert len(adds) == 1 and len(ups) == 1
+        add, up = adds[0], ups[0]
+        name = add[add.index("con-name") + 1]
+        # The profile that is brought up is the one we built, by its name.
+        assert up[3] == name and up[4:6] == ["ifname", "wlan0"]
+        assert add[add.index("ssid") + 1] == "PondHouse"
+        assert add[add.index("802-11-wireless.band") + 1] == "bg"
+        assert add[add.index("wifi-sec.key-mgmt") + 1] == "wpa-psk"
+        assert add[add.index("wifi-sec.psk") + 1] == "hunter22"
+        # nmcli never gets the chance to make a second, unlocked profile.
+        assert not any(c[1:4] == ["device", "wifi", "connect"] for c in nm.calls)
+
+    def test_a_dual_band_board_gets_no_band_lock(self, nm, monkeypatch):
+        r = self._join(nm, monkeypatch, {"2.4", "5"})
+        assert r["ok"] is True, r
+        adds, ups = self._add_and_up(nm)
+        assert len(adds) == 1 and len(ups) == 1
+        assert "802-11-wireless.band" not in adds[0]
+        assert adds[0][adds[0].index("wifi-sec.psk") + 1] == "hunter22"
+
+    def test_an_open_network_profile_carries_no_security(self, nm, monkeypatch):
+        # The fake reports PondHouse as the joined network, so the open join
+        # uses that name; only the profile's argv is under test here.
+        r = self._join(nm, monkeypatch, {"2.4"}, password=None)
+        assert r["ok"] is True, r
+        adds, _ = self._add_and_up(nm)
+        assert "wifi-sec.key-mgmt" not in adds[0] and "wifi-sec.psk" not in adds[0]
+
+    def test_a_profile_nmcli_refuses_is_the_answer_and_the_hotspot_returns(self, nm, monkeypatch):
+        """Bugbot on #182: a refused profile must not wait out the address budget."""
+        nm.add_rc = 2
+        now = [0.0]
+
+        def sleep(s):
+            now[0] += s
+
+        r = self._join(nm, monkeypatch, {"2.4"}, sleep=sleep, clock=lambda: now[0])
+        assert r["ok"] is False
+        assert r["ap_restored"] is True
+        assert not [c for c in nm.calls if _join_up(c)]
+        # Only the scan wait; no address wait after the refusal.
+        from utils.netctl import ADDRESS_POLL_S, SCAN_WAIT_S
+
+        assert now[0] <= SCAN_WAIT_S + 3 * ADDRESS_POLL_S, now[0]
+
+
+class TestTheHotspotComesBackInAboutAMinute:
+    """Jacques, 2026-11-15 (Pi 4, b2d4dc0): after a join that could not get
+    onto the router the hotspot never came back. Scan waits, three 40 s
+    connect attempts and the 55 s address wait could add up to about four
+    minutes with the hotspot down."""
+
+    def test_a_join_that_never_associates_gives_the_hotspot_back_within_the_budget(
+        self, nm, monkeypatch
+    ):
+        from utils import netctl
+        from utils.netctl import JOIN_BUDGET_S, join_network
+
+        now = [0.0]
+        real = nm.run
+
+        def slow(argv, timeout=15.0):
+            a = argv[1:] if argv and argv[0] == "nmcli" else argv
+            if a[:2] == ["connection", "up"] and len(a) > 2 and a[2].startswith("bs-try-"):
+                now[0] += timeout  # nmcli waits its full timeout, then gives up
+                return 4, "", "Error: Connection activation failed: (7) Timeout was reached."
+            return real(argv, timeout=timeout)
+
+        monkeypatch.setattr(netctl, "_run", slow)
+        nm.ap = True
+        restored_at = []
+        real_start = netctl.start_ap
+
+        def start_ap(*a, **k):
+            restored_at.append(now[0])
+            return real_start(*a, **k)
+
+        monkeypatch.setattr(netctl, "start_ap", start_ap)
+
+        def sleep(s):
+            now[0] += s
+
+        r = join_network(
+            "PondHouse",
+            "hunter22",
+            ap_ssid="WQM1-0001",
+            ap_passphrase="river-cedar-42",
+            sleep=sleep,
+            clock=lambda: now[0],
+        )
+        assert r["ok"] is False and r["ap_restored"] is True
+        assert restored_at and restored_at[0] <= JOIN_BUDGET_S + 1, restored_at
+
+    def test_a_connect_cut_off_by_the_budget_while_associated_still_gets_its_lease(
+        self, nm, monkeypatch
+    ):
+        """nmcli is cut off at the budget while the radio is already on the
+        router and DHCP is still running. NetworkManager keeps activating, so
+        the lease that lands a few seconds later is a join, not "no address".
+        """
+        from utils import netctl
+        from utils.netctl import ADDRESS_GRACE_S, JOIN_BUDGET_S, join_network
+
+        monkeypatch.setattr(netctl, "_radio_allows_5ghz", lambda: False)
+        now = [0.0]
+        real = nm.run
+        nm.ipv4_script = ["", "", "192.168.1.50"]
+        # A slow first scan (a radio just handed back from the hotspot), so
+        # the connect runs to the end of the budget.
+        nm.realistic_scan = True
+        nm.rescans_before_seen = 7
+
+        def cut_off(argv, timeout=15.0):
+            a = argv[1:] if argv and argv[0] == "nmcli" else argv
+            if a[:2] == ["connection", "up"] and len(a) > 2 and a[2].startswith("bs-try-"):
+                now[0] += timeout  # nmcli waits out the rest of the budget
+                nm.station = True  # associated; the lease has not arrived yet
+                return 124, "", "nmcli connection up timed out after 40 s"
+            return real(argv, timeout=timeout)
+
+        monkeypatch.setattr(netctl, "_run", cut_off)
+
+        def sleep(s):
+            now[0] += s
+
+        r = join_network(
+            "PondHouse",
+            "hunter22",
+            sleep=sleep,
+            clock=lambda: now[0],
+            reach=lambda *a, **k: {"ok": True},
+        )
+        assert r["ok"] is True, r
+        assert r["ip"] == "192.168.1.50"
+        assert now[0] > JOIN_BUDGET_S, "the scenario must outrun the budget"
+        assert now[0] <= JOIN_BUDGET_S + ADDRESS_GRACE_S + 1, now[0]
+
+    def test_a_connect_cut_off_with_no_association_gets_no_grace(self, nm, monkeypatch):
+        """The grace is for a radio already on the network. One that never
+        associated still gives the hotspot back inside the budget."""
+        from utils import netctl
+        from utils.netctl import JOIN_BUDGET_S, join_network
+
+        monkeypatch.setattr(netctl, "_radio_allows_5ghz", lambda: False)
+        now = [0.0]
+        real = nm.run
+
+        def cut_off(argv, timeout=15.0):
+            a = argv[1:] if argv and argv[0] == "nmcli" else argv
+            if a[:2] == ["connection", "up"] and len(a) > 2 and a[2].startswith("bs-try-"):
+                now[0] += timeout
+                return 124, "", "nmcli connection up timed out after 40 s"
+            return real(argv, timeout=timeout)
+
+        monkeypatch.setattr(netctl, "_run", cut_off)
+        nm.ap = True
+        restored_at = []
+        real_start = netctl.start_ap
+
+        def start_ap(*a, **k):
+            restored_at.append(now[0])
+            return real_start(*a, **k)
+
+        monkeypatch.setattr(netctl, "start_ap", start_ap)
+
+        def sleep(s):
+            now[0] += s
+
+        r = join_network(
+            "PondHouse",
+            "hunter22",
+            ap_ssid="WQM1-0001",
+            sleep=sleep,
+            clock=lambda: now[0],
+        )
+        assert r["ok"] is False and r["ap_restored"] is True
+        assert restored_at and restored_at[0] <= JOIN_BUDGET_S + 1, restored_at

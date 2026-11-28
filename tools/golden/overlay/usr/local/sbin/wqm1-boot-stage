@@ -1,0 +1,11 @@
+#!/bin/bash
+# Earliest userspace note on the FAT boot partition.
+# Runs once the root and boot filesystems are mounted, before first-boot
+# and before the setup hotspot. A card pulled before hostapd still has
+# BOOT: stage=boot (or a later stage first-boot managed to write).
+set -u
+_lib="$(cd "$(dirname "$0")/../lib" && pwd)/wqm1-boot.sh"
+# shellcheck disable=SC1091
+. "$_lib"
+replace_status_with_stage boot
+exit 0

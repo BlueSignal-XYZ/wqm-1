@@ -23,10 +23,14 @@ Every function returns the same shapes ``netctl`` returns and never raises.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
 from typing import Any
+
+from utils.atomic import atomic_write_text
+from utils.wifi_setup import CAPTIVE_JOIN_MESSAGE
 
 ENV_VAR = "WQM1_VIRTUAL_NET"
 
@@ -83,13 +87,17 @@ def _write(state: dict[str, Any]) -> None:
     path = state_path()
     if path is None:
         return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, indent=2))
-        tmp.replace(path)
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        atomic_write_text(path, json.dumps(state, indent=2))
+
+
+def release_station() -> None:
+    """Drop the station link and leave saved profiles in place."""
+    st = read_state()
+    if not st.get("station"):
+        return
+    st["station"] = None
+    _write(st)
 
 
 def station_connected() -> bool:
@@ -117,8 +125,8 @@ def ap_active() -> bool:
     return bool(read_state().get("ap"))
 
 
-def start_ap(ssid: str, passphrase: str) -> dict[str, Any]:
-    if not passphrase or len(passphrase) < 8:
+def start_ap(ssid: str, passphrase: str | None = None) -> dict[str, Any]:
+    if passphrase and len(passphrase) < 8:
         return {"ok": False, "error": "passphrase must be at least 8 characters"}
     st = read_state()
     already = bool(st["ap"])
@@ -141,10 +149,17 @@ def stop_ap() -> dict[str, Any]:
 
 def scan_networks() -> list[dict[str, Any]]:
     st = read_state()
-    nets = [
-        {"ssid": n["ssid"], "signal": int(n.get("signal", 0)), "secured": bool(n.get("secured"))}
-        for n in st["networks"]
-    ]
+    nets = []
+    for n in st["networks"]:
+        row: dict[str, Any] = {
+            "ssid": n["ssid"],
+            "signal": int(n.get("signal", 0)),
+            "secured": bool(n.get("secured")),
+        }
+        for key in ("security", "freq_mhz", "hidden", "rssi_dbm", "band"):
+            if key in n and n[key] is not None:
+                row[key] = n[key]
+        nets.append(row)
     return sorted(nets, key=lambda n: -n["signal"])
 
 
@@ -162,6 +177,24 @@ def join_network(
         not target.get("secured") or (password or "") == target.get("password")
     )
     st["joins"] = (st.get("joins") or [])[-19:] + [{"ssid": ssid, "ok": ok}]
+    if ok and target is not None and target.get("captive"):
+        # The password was accepted and an address was handed out, but a
+        # sign-in page is blocking the internet. Put the hotspot back.
+        restored = False
+        if had_ap and ap_ssid:
+            st["ap"] = True
+            st["ap_ssid"] = ap_ssid
+            restored = True
+        _write(st)
+        return {
+            "ok": False,
+            "connected": False,
+            "ap_restored": restored,
+            "error": "sign-in page",
+            "message": CAPTIVE_JOIN_MESSAGE,
+            "reason": "captive_sign_in",
+            "ip": "192.168.1.57",
+        }
     if ok:
         st["station"] = ssid
         if ssid not in st["saved"]:
@@ -187,7 +220,7 @@ def join_network(
         )
         kind = "wrong_password"
     restored = False
-    if had_ap and ap_ssid and ap_passphrase:
+    if had_ap and ap_ssid:
         st["ap"] = True
         st["ap_ssid"] = ap_ssid
         restored = True

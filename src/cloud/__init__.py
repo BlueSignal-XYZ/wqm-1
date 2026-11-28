@@ -8,5 +8,6 @@ device has an API key — see CloudClient.
 """
 
 from cloud.client import CloudClient
+from cloud.register import attempt_register, kick_register
 
-__all__ = ["CloudClient"]
+__all__ = ["CloudClient", "attempt_register", "kick_register"]

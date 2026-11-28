@@ -48,6 +48,14 @@ class TestDefaultsProtectExistingUnits:
         cards = sensor_cards([], orp_enabled=False, config={})
         assert cards["ph"]["status"] != "disabled"
 
+    def test_awaiting_firmware_is_not_a_missing_probe(self):
+        cards = sensor_cards([], orp_enabled=False, config={}, awaiting=True)
+        assert cards["ph"]["status"] == "attention"
+        assert "still starting" in cards["ph"]["message"].lower()
+        assert "no data" not in cards["ph"]["message"].lower()
+        disabled = sensor_cards([], orp_enabled=False, config={"ph_enabled": False}, awaiting=True)
+        assert disabled["ph"]["status"] == "disabled"
+
 
 class TestAnUndeclaredProbeIsReportedAsNotInstalled:
     """The wizard must say 'not installed', not 'reading normally'."""

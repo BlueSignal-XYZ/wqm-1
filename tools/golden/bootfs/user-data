@@ -2,7 +2,7 @@
 # WQM-1 golden image (offline build). Nothing per-unit lives here.
 # - No users are created here; the firmware's "pi" account is password-locked.
 # - No Wi-Fi: cloud-init networking is disabled (/etc/cloud/cloud.cfg.d/99_wqm1.cfg).
-#   Wi-Fi is set only in the installer flow on the unit's WQM1-XXXX setup hotspot.
+#   Wi-Fi is set only in the installer flow on the unit's open BlueSignal Setup network.
 # - SSH stays off. If ever turned on (/boot/firmware/ssh), it is key-only.
 # - Hostname wqm1-xxxx is set from the board serial by wqm1-firstboot.service.
 ssh_pwauth: false

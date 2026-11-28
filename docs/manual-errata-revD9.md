@@ -68,9 +68,9 @@ probes from the unit rail, USB is data-only — NOT built-in channels) ===
    - Drift/stuck/spike detection — flags a dead or drifting probe, suspends
      that channel's relay rules, nags "recalibrate soon" instead of acting on
      bad data.
-   - Guided Service Window (phone browser) — first-boot wizard (set a real PIN,
-     claim QR, sensor auto-detect, live first-reading check, go/no-go) + guided
-     calibration wizards.
+   - Guided setup (phone on the unit's own Wi-Fi, no PIN; then BlueSignal
+     Cloud) — claim, sensor auto-detect, live first-reading check, go/no-go
+     + guided calibration wizards.
 8. HOST BOARDS (Section 03 Compute; Appendix) — "Runs on Raspberry Pi Zero 2W
    (full analog + LoRa + relay I/O) or, digital-first, on Arduino UNO Q /
    VENTUNO Q (RS485 probes + USB GPS + Wi-Fi; analog/LoRa/relay need the Pi)."

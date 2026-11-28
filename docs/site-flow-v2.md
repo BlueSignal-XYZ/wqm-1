@@ -8,11 +8,15 @@ the firmware half and what still has to be proved on a real Pi.
 
 ## What the installer does
 
-1. Scan the **Wi-Fi QR on the setup card** in the box with the iPhone camera,
-   then tap "Join WQM1-xxxx".
-2. The setup page **opens by itself** (captive portal). No address, and no
-   factory PIN on the hotspot during first setup.
-3. Set a PIN, then watch the probes. A carded unit skips the identity and
+1. Join the open network **BlueSignal Setup** (install plan §5: the same
+   name on every unit, no password). A setup card printed before §5 has a
+   QR for the old per-unit network and passphrase; it no longer joins
+   anything. Reprint it from the marketplace bench script once that script
+   writes `WIFI:T:nopass;S:BlueSignal Setup;;`.
+2. The Wi-Fi page **opens by itself** (captive portal). No address, no
+   password, no PIN. The page sets only the unit's Wi-Fi; nothing else on
+   the unit answers on the setup network.
+3. Watch the probes if you need to. A carded unit skips the identity and
    cloud-key steps because the bench card supplied both.
 4. **Network, last:** the owner picks their Wi-Fi and types the password.
    *Join and finish* completes setup on the unit only after the checks
@@ -27,13 +31,18 @@ is raised again, so it is already there when the phone rejoins.
 
 ## When the join counts as success
 
-`join_network` polls for about 55 seconds. Success is all three:
+`join_network` polls for about 55 seconds. Success is all four
+(`src/utils/netctl.py`, `join_network`):
 
 1. `wlan0` is associated to the SSID the installer chose (not the setup hotspot).
 2. `wlan0` has a usable IPv4 address from the router. A link-local address
    (`169.254.x`) is not one.
 3. The unit can reach that network's gateway (TCP/443 or TCP/80, including
    a refusal, which means the host answered) or a DNS server (a UDP query).
+4. BlueSignal answers over HTTPS (`reach_bluesignal`). Gateway/DNS is
+   checked first, so `no_internet` stays distinct from `no_bluesignal`.
+
+The Saturday bench script is [bench-flash-go-no-go.md](bench-flash-go-no-go.md).
 
 Otherwise the setup page says, in plain words, which of these failed:
 
@@ -43,6 +52,7 @@ Otherwise the setup page says, in plain words, which of these failed:
 | Network not in range | `station: fail: network not found` | That network was not found |
 | Associated, no DHCP lease, or only `169.254.x` | `station: fail: no address` | The router did not give the unit an address |
 | Address, but no gateway and no DNS | `station: fail: no internet` | The unit cannot reach the router or DNS |
+| Address and gateway, BlueSignal not reached | `station: fail: no BlueSignal` | The unit cannot reach BlueSignal |
 
 On every one of those, the hotspot and the port-80 portal come back (the
 same re-arm as a wrong password, including the three AP attempts). Setup is
@@ -60,10 +70,12 @@ and raise the setup hotspot instead. The setup join is stricter.
 | Piece | File |
 |---|---|
 | Captive DNS (`address=/#/192.168.4.1`, DHCP option 114) and DHCP `192.168.4.10-254` | `utils/captive_portal.dnsmasq_ap_config`, written at AP start to `/run/wqm1/dnsmasq-ap.conf` and served by `wqm1-setup-dnsmasq.service` bound to `wlan0`. Stopped before a station join. |
-| Port 80 captive listener, hotspot only | `utils/captive_portal`, `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Closes when the station joins. |
-| Service Window, including setup, still on 8080 | `service_window` — the port-80 process proxies the setup UI here so the phone never sees `:8080` |
+| Port 80 Wi-Fi page, hotspot only | `utils/captive_portal` serves the page and `/api/*` itself; every sentence is in `utils/setup_copy` (English, Spanish). `systemd/bluesignal-captive-portal.service` (install user + `CAP_NET_BIND_SERVICE`). Nothing is proxied to 8080 (install plan §4). Closes when the station joins. |
+| The page's join and rescan, as root | `utils/join_service`, `systemd/bluesignal-wifi-join.service`: a local socket at `/run/bluesignal/wifi-join.sock` (0600, install user). The join is `utils/join` (one at a time, result in `join-state.json`). |
+| Scan list for the page | `utils/netctl.write_scan_cache`, taken before the setup network comes up, at `/run/bluesignal/scan.json`; a rescan is `iw dev wlan0 scan ap-force` and keeps the old list if that fails |
+| Service Window, still on 8080 | `service_window` — closed to the setup network since install plan §3 |
 | Probe paths + foreign-host redirect | `utils/captive_portal` on port 80, and `service_window/captive.py` on 8080 (same target: `http://192.168.4.1/setup/`) |
-| No factory PIN on the hotspot during first setup | `service_window/auth._first_setup_on_hotspot` |
+| Setup pages open on the hotspot; no PIN | `service_window/auth.login_required` + `captive.from_hotspot` |
 | Network-last wizard; join finishes setup | `service_window/routes/setup.py` |
 | Forget every other saved Wi-Fi | `utils/netctl.forget_saved_wifi` |
 | Virtual radio for simulated units | `utils/netsim.py` (`WQM1_VIRTUAL_NET`) |
@@ -87,7 +99,7 @@ networks.
 
 ## Not yet proved on hardware: the bench checklist for unit #1
 
-- [ ] **iPhone opens the page by itself** after joining `WQM1-xxxx`, and one
+- [ ] **iPhone opens the page by itself** after joining **BlueSignal Setup**, and one
       Android phone does the same. The sheet should load
       `http://192.168.4.1/setup/` with no `:8080`. If it does not, confirm
       `wqm1-status.txt` says `portal: up (80)`, that

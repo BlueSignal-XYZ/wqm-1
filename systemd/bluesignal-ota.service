@@ -11,6 +11,10 @@ User=root
 WorkingDirectory=/opt/bluesignal/current/src
 ExecStart=/usr/bin/python3 -m ota
 Environment=PYTHONPATH=/opt/bluesignal/current/src
+# First-boot polling is not the setup page. Stay out of Flask's way on
+# a single-core host; the agent is idle until network-online anyway.
+Nice=10
+CPUWeight=20
 Restart=always
 RestartSec=30
 KillSignal=SIGTERM

@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep the previous boot journal for diagnosis after a power cut
+DefaultDependencies=no
+After=local-fs.target
+Before=systemd-journald.service
+ConditionPathIsDirectory=/var/lib/wqm1/journal
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wqm1-journal-preserve
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

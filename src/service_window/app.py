@@ -4,6 +4,7 @@ Service Window — Flask application factory.
 Lightweight local web UI for WQM-1 commissioning, calibration, and diagnostics.
 """
 
+import ipaddress
 import logging
 import os
 import secrets
@@ -30,7 +31,6 @@ from service_window.config_editor import ConfigWriteError
 # live config. Accept both spellings rather than picking a winner.
 _SETTING_ALIASES = {
     "SERVICE_PORT": "port",
-    "PIN": "pin",
     # nosec B105 - a setting-name mapping, not a credential. The value is the
     # YAML key to read; the secret itself comes from SW_SECRET_KEY or a fresh
     # token_hex(32) below.
@@ -43,6 +43,27 @@ _SETTING_ALIASES = {
     # (integrations.smart_breaker.secrets). Tests point it at tmp_path.
     "SECRETS_DIR": "secrets_dir",
 }
+
+
+# Install plan §3 (I1). The Service Window binds 0.0.0.0:8080 until §10 binds
+# loopback, so without this a phone on the setup network could open
+# http://192.168.4.1:8080 directly. A direct connection carries the phone's
+# real address. The port-80 relay connects from 127.0.0.1, so it is not
+# stopped here; §4 removes it.
+SETUP_NETWORK_CLOSED = "This page isn't available on the setup network."
+
+
+def _closed_to_setup_network() -> Response | None:
+    """404 for every Service Window path asked from the setup network."""
+    from utils.netctl import AP_NETWORK
+
+    try:
+        addr = ipaddress.ip_address(request.remote_addr or "")
+    except ValueError:
+        return None
+    if addr in ipaddress.ip_network(AP_NETWORK):
+        return Response(SETUP_NETWORK_CLOSED, status=404, mimetype="text/plain")
+    return None
 
 
 def create_app(config: dict | None = None, config_path: str | None = None) -> Flask:
@@ -74,11 +95,10 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
             passthrough[key] = value
 
     app.config["SERVICE_PORT"] = sw_config.get("port", 8080)
-    app.config["PIN"] = str(sw_config.get("pin", "1234"))
     app.config["SECRET_KEY"] = sw_config.get(
         "secret_key", os.environ.get("SW_SECRET_KEY", secrets.token_hex(32))
     )
-    # Every state-changing route (relays, AWG circuit, reboot, PIN, keys) is
+    # Every state-changing route (relays, AWG circuit, reboot, keys) is
     # a plain form/JSON POST with no CSRF token, so the session cookie must
     # never be sent on a cross-site request: a page on any other origin the
     # installer's phone visits could otherwise POST /relays/set. SameSite=Lax
@@ -104,6 +124,9 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
     # variant would re-apply keys the loop already handled. One mechanism, not
     # two: passthrough wins.
     app.config.update(passthrough)
+
+    # First of every request hook: nothing on 8080 answers the setup network.
+    app.before_request(_closed_to_setup_network)
 
     # Register blueprints
     app.register_blueprint(auth_bp)
@@ -153,9 +176,9 @@ def create_app(config: dict | None = None, config_path: str | None = None) -> Fl
         vendor = read_config(app.config["CONFIG_PATH"]).get("smart_breaker_vendor")
         return {"awg_bound": bool(vendor) and vendor != "none"}
 
-    # Until the factory PIN is replaced and the setup wizard finished, every
-    # page funnels into /setup — a unit can't be left half-commissioned by
-    # accident, and the shipped PIN can't quietly stay in service.
+    # Until the setup wizard finished, every page funnels into /setup — a
+    # unit can't be left half-commissioned by accident. There is no PIN to
+    # replace; unfinished setup is the only gate.
     @app.before_request
     def _force_setup():  # type: ignore[reportUnusedFunction]
         from flask import redirect, request

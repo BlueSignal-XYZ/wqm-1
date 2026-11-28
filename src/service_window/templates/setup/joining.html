@@ -1,0 +1,63 @@
+{% extends "setup_base.html" %}
+{% block title %}Setup — Joining{% endblock %}
+{% block content %}
+<h1 class="setup-h1">Joining {{ ssid }}…</h1>
+<p class="lead">The setup network turns off when the join starts, so your phone
+usually drops. If the password is wrong, the router gives no address, or the
+unit cannot reach the router, this page comes back and says which one happened.
+A join can take a couple of minutes.</p>
+<p class="skip-note">This page does not hold one request open. It asks
+<code>/setup/join-status</code> until the unit has an answer.</p>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='joining-poll.js') }}"></script>
+<script>
+(function () {
+  var poll = window.WQM1JoiningPoll;
+  var tries = 0;
+  function showReconnect() {
+    var lead = document.querySelector('.lead');
+    if (lead) lead.textContent = poll.RECONNECT;
+  }
+  function tick() {
+    fetch('/setup/join-status', {headers: {Accept: 'application/json'}})
+      .then(function (r) {
+        if (poll.droppedHotspot(r)) {
+          showReconnect();
+          return null;
+        }
+        return r.json().then(function (j) { return j; }, function () {
+          showReconnect();
+          return null;
+        });
+      })
+      .then(function (j) {
+        var next = poll.afterPoll(j, tries);
+        if (next === 'ok') {
+          document.querySelector('.setup-h1').textContent = 'Joined ' + (j.ssid || '') + '. You\u2019re done here.';
+          return;
+        }
+        if (next === 'fail') {
+          window.location = '/setup/network';
+          return;
+        }
+        if (next === 'reconnect') {
+          showReconnect();
+          return;
+        }
+        tries += 1;
+        setTimeout(tick, 2000);
+      })
+      .catch(function () {
+        var next = poll.afterPoll(null, tries);
+        if (next === 'reconnect') showReconnect();
+        else {
+          tries += 1;
+          setTimeout(tick, 2000);
+        }
+      });
+  }
+  setTimeout(tick, 400);
+})();
+</script>
+{% endblock %}

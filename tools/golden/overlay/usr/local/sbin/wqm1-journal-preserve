@@ -1,0 +1,31 @@
+#!/bin/bash
+# Copy the journal that was already on disk before this boot's journald
+# opens it. Storage=persistent plus SyncIntervalSec flushes during the
+# previous boot; this file is the copy a vacuum will not delete.
+# WQM1_JOURNAL_SRC / WQM1_JOURNAL_PREVIOUS override the paths in tests.
+set -u
+src="${WQM1_JOURNAL_SRC:-/var/lib/wqm1/journal}"
+dest="${WQM1_JOURNAL_PREVIOUS:-/var/lib/wqm1/journal-previous}"
+if [ ! -d "$src" ]; then
+  exit 0
+fi
+newest=""
+newest_m=-1
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  m="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+  if [ "$m" -gt "$newest_m" ]; then
+    newest="$f"
+    newest_m="$m"
+  fi
+done < <(find "$src" -type f -name 'system*.journal' 2>/dev/null)
+if [ -z "$newest" ]; then
+  exit 0
+fi
+mkdir -p "$dest" || exit 0
+tmp="$dest/previous.journal.tmp"
+cp -f "$newest" "$tmp" || exit 0
+sync -f "$tmp" 2>/dev/null || true
+mv -f "$tmp" "$dest/previous.journal"
+sync -f "$dest" 2>/dev/null || true
+exit 0

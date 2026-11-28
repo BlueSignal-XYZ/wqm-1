@@ -18,10 +18,12 @@ from flask import (
 )
 from flask.typing import ResponseReturnValue
 
+from cloud.register import registration_view
 from service_window import read_firmware_version
 from service_window.auth import login_required
 from service_window.config_editor import read_config, update_config
 from service_window.health import board_fault_banner, hardware_report
+from utils.device_keys import identity_qr_payload
 
 provision_bp = Blueprint("provision", __name__, url_prefix="/provision")
 
@@ -55,7 +57,7 @@ def _get_identity() -> dict[str, str]:
         dev_eui = "0000000000000000"
         ble_name = "BlueSignal-0000"
         hardware = {"identitySource": "derived"}
-        ap_ssid = "WQM1-0000"
+        ap_ssid = "BlueSignal Setup"
     return {
         "device_id": device_id,
         "dev_eui": dev_eui,
@@ -94,7 +96,12 @@ def index() -> str:
 @login_required
 def identity() -> str:
     identity = _get_identity()
-    return render_template("provision/identity.html", identity=identity)
+    return render_template(
+        "provision/identity.html",
+        identity=identity,
+        qr_json=json.dumps(identity_qr_payload(), separators=(",", ":")),
+        registration=registration_view(),
+    )
 
 
 @provision_bp.route("/appkey", methods=["POST"])
@@ -219,9 +226,8 @@ def report() -> Response:
 @provision_bp.route("/qr.svg")
 @login_required
 def qr_svg() -> Response:
-    """Generate QR code SVG for device identity."""
-    identity = _get_identity()
-    qr_data = json.dumps(identity)
+    """Generate QR code SVG for the v2 identity payload (contract §1)."""
+    qr_data = json.dumps(identity_qr_payload(), separators=(",", ":"))
 
     try:
         import qrcode

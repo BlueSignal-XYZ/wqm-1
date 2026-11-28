@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from utils.atomic import atomic_write_text
+
 logger = logging.getLogger("wqm1.calibration")
 
 _DEFAULT_CAL_PATH = "/etc/bluesignal/calibration.yaml"
@@ -80,18 +82,15 @@ class CalibrationManager:
             logger.warning("Failed to load calibration: %s", e)
 
     def _save(self) -> None:
-        """Save calibration to YAML file (atomic write)."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
+        """Save calibration to YAML file (temp file, fsync, rename)."""
         try:
-            with tmp.open("w") as f:
-                yaml.safe_dump(asdict(self._data), f, default_flow_style=False)
-            tmp.replace(self._path)
+            atomic_write_text(
+                self._path,
+                yaml.safe_dump(asdict(self._data), default_flow_style=False),
+            )
             logger.info("Calibration saved to %s", self._path)
         except Exception as e:
             logger.error("Failed to save calibration: %s", e)
-            if tmp.exists():
-                tmp.unlink()
 
     @property
     def data(self) -> CalibrationData:
